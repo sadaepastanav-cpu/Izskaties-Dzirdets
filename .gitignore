@@ -1,0 +1,13 @@
+# Rīku mapes (ļoti smagas, tās neiet uz GitHub)
+node_modules/
+dist/
+
+# Slepenie dati (paroles un DB adreses)
+.env
+
+# Windows sistēmas faili
+.DS_Store
+Thumbs.db
+
+# Žurnālfaili
+*.log
