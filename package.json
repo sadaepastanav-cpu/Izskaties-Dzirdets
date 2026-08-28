@@ -1,0 +1,17 @@
+{
+  "name": "izskaties-dzirdets",
+  "private": true,
+  "scripts": {
+    "db:up": "docker-compose up -d",
+    "db:studio": "npx prisma studio"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.20",
+    "prisma": "^5.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0"
+  }
+}

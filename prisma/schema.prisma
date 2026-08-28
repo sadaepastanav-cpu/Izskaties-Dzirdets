@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(HOST)
+  shows        Show[]
+  createdAt    DateTime @default(now())
+}
+
+enum Role {
+  SUPERADMIN
+  HOST
+}
+
+model Show {
+  id          String        @id @default(cuid())
+  title       String
+  ownerId     String
+  owner       User          @relation(fields: [ownerId], references: [id])
+  versions    ShowVersion[]
+  sessions    Session[]
+  createdAt   DateTime      @default(now())
+}
+
+model ShowVersion {
+  id        String    @id @default(cuid())
+  showId    String
+  show      Show      @relation(fields: [showId], references: [id])
+  scenes    Json      
+  version   Int       @default(1)
+  sessions  Session[]
+  createdAt DateTime  @default(now())
+}
+
+model Session {
+  id            String       @id @default(cuid())
+  pin           String       @unique 
+  status        SessionStatus @default(READY)
+  showId        String
+  show          Show         @relation(fields: [showId], references: [id])
+  versionId     String
+  version       ShowVersion  @relation(fields: [versionId], references: [id])
+  
+  currentSceneId String?     
+  participants  Participant[]
+  eventLogs     EventLog[]
+  
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+enum SessionStatus {
+  READY
+  LIVE
+  PAUSED
+  FINISHED
+}
+
+model Participant {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id])
+  name      String
+  token     String   @unique 
+  isOnline  Boolean  @default(true)
+  score     Int      @default(0)
+  
+  votes     Vote[]
+  answers   Answer[]
+  
+  joinedAt  DateTime @default(now())
+}
+
+model Vote {
+  id            String      @id @default(cuid())
+  sessionId     String
+  sceneId       String
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id])
+  optionId      String      
+  createdAt     DateTime    @default(now())
+}
+
+model Answer {
+  id            String      @id @default(cuid())
+  sessionId     String
+  sceneId       String
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id])
+  answerBody    String
+  isCorrect     Boolean
+  pointsEarned  Int
+  responseTimeMs Int
+  createdAt     DateTime    @default(now())
+}
+
+model EventLog {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id])
+  type      String   
+  payload   Json
+  createdAt DateTime @default(now())
+}
