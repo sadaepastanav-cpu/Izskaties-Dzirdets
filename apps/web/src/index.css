@@ -1,0 +1,25 @@
+body, html, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100vh; /* Mainīts no height uz min-height */
+  overflow-x: hidden; /* Neļaujam šūpoties pa labi/kreisi */
+  overflow-y: auto;   /* Atļaujam ritināt uz leju, ja saturs ir par garu */
+  background-color: #000;
+  color: white;
+}
+
+/* Padarām ritjoslu (scrollpad) smuku un neuzkrītošu */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #000;
+}
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
