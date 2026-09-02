@@ -137,20 +137,9 @@ io.on('connection', (socket) => {
     io.to(pin).emit('video-command', 'play');
   });
 
-  // 6. Atklāt rezultātus
-  socket.on('host:reveal-results', (pin: string) => {
-    const state = sessionsState.get(pin);
-    if (state) {
-      state.isResultsVisible = true;
-      io.to(pin).emit('results-revealed');
-      emitLeaderboard(pin);
-    }
-  });
-
-  // 7. Atbilde no dalībnieka (atbalsts gan vienai, gan vairākām atbildēm)
+  // 6. Atbilde no dalībnieka (atbildes saglabāšana bez tūlītējas punktu piešķiršanas)
   socket.on('participant:submit-answer', (data: { pin: string, answer?: string, answers?: string[], playerId: string }) => {
     const state = sessionsState.get(data.pin);
-    const players = sessionScores.get(data.pin);
 
     if (state && state.currentScene?.endTime && Date.now() < state.currentScene.endTime) {
       // Pārbaudām, vai šis spēlētājs jau nav iesniedzis atbildi šajā ainā
@@ -160,44 +149,55 @@ io.on('connection', (socket) => {
         // Normalizējam atbildes uz masīvu
         const userAnswers: string[] = data.answers || (data.answer ? [data.answer] : []);
 
-        if (state.currentScene.type === 'QUIZ') {
-          const config = state.currentScene.config || {};
-          const correctOnes: string[] = config.correctAnswers || (config.correctAnswer ? [config.correctAnswer] : []);
-          const totalPossible = correctOnes.length;
-
-          if (totalPossible > 0) {
-            // Saskaitām, cik spēlētājs atminēja pareizi
-            const userCorrectCount = userAnswers.filter(a => correctOnes.includes(a)).length;
-
-            // Aprēķinām punktus (daļēji vai pilni)
-            const maxPoints = config.points || 100;
-            const pointsToAward = Math.round((userCorrectCount / totalPossible) * maxPoints);
-
-            const playerData = players?.get(data.playerId);
-            if (playerData && pointsToAward > 0) {
-              playerData.score += pointsToAward;
-            }
-          }
-        }
-
-        // Pievienojam katru izvēlēto opciju balsojumu masīvam
-        userAnswers.forEach(ans => {
-          state.votes.push({ optionId: ans, playerId: data.playerId });
-        });
+        // Saglabājam izvēles (masīvu), bet punktus vēl neskaitām
+        state.votes.push({ optionIds: userAnswers, playerId: data.playerId });
 
         socket.emit('answer-received');
 
-        // Pārrēķinām un izsūtām kopējo balsu kopsavilkumu
-        const summary = state.votes.reduce((acc: Record<string, number>, curr: any) => { 
-          acc[curr.optionId] = (acc[curr.optionId] || 0) + 1; 
-          return acc; 
-        }, {});
+        // Pārrēķinām un izsūtām stabiņu kopsavilkumu (katru izvēlēto variantu skaitām atsevišķi)
+        const summary: Record<string, number> = {};
+        state.votes.forEach((v: any) => {
+          v.optionIds.forEach((opt: string) => {
+            summary[opt] = (summary[opt] || 0) + 1;
+          });
+        });
 
         io.to(data.pin).emit('votes-updated', summary);
-
-        // Atjaunojam kopējos punktus reāllaikā un nosūtām uz ekrānu
-        emitLeaderboard(data.pin);
       }
+    }
+  });
+
+  // 7. Atklāt rezultātus un piešķirt punktus
+  socket.on('host:reveal-results', (pin: string) => {
+    const state = sessionsState.get(pin);
+    const players = sessionScores.get(pin);
+
+    if (state && players) {
+      state.isResultsVisible = true;
+      const config = state.currentScene?.config || {};
+      
+      // Iegūstam pareizās atbildes (atbalsta gan massīvu 'correctAnswers', gan vienu 'correctAnswer')
+      const correctAnswers: string[] = config.correctAnswers || (config.correctAnswer ? [config.correctAnswer] : []);
+      const maxPoints = config.points || 100;
+
+      if (state.currentScene?.type === 'QUIZ' && correctAnswers.length > 0) {
+        // Aprēķinām punktus katram, kurš balsoja šajā ainā
+        state.votes.forEach((v: any) => {
+          const userCorrectCount = v.optionIds.filter((id: string) => correctAnswers.includes(id)).length;
+          
+          if (userCorrectCount > 0) {
+            const pointsToAward = Math.round((userCorrectCount / correctAnswers.length) * maxPoints);
+            const playerData = players.get(v.playerId);
+            if (playerData) {
+              playerData.score += pointsToAward;
+            }
+          }
+        });
+      }
+
+      // Paziņojam klientiem par rezultātu atklāšanu un nosūtām atjaunoto līderu sarakstu
+      io.to(pin).emit('results-revealed', { correctAnswers, correctAnswer: config.correctAnswer });
+      emitLeaderboard(pin);
     }
   });
 

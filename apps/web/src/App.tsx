@@ -1,12 +1,12 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { socket } from './socket';
-import Host from './Host'; // Vadītāja pults
-import Presentation from './Presentation'; // Prezentācijas skats
-import Timer from './Timer'; // Taimera komponents
-import Studio from './Studio'; // Importē jauno failu
+import Host from './Host';
+import Presentation from './Presentation';
+import Timer from './Timer';
+import Studio from './Studio';
 
-const btnStyle = { 
+const btnStyle: React.CSSProperties = { 
   display: 'block', 
   width: '100%', 
   padding: '15px', 
@@ -17,15 +17,15 @@ const btnStyle = {
   border: '1px solid #ccc'
 };
 
-const inputStyle = { 
+const inputStyle: React.CSSProperties = { 
   display: 'block', 
   width: '100%', 
   padding: '15px', 
   fontSize: '18px', 
   borderRadius: '8px', 
   border: '1px solid #ccc', 
-  textAlign: 'center' as const,
-  boxSizing: 'border-box' as const
+  textAlign: 'center',
+  boxSizing: 'border-box'
 };
 
 // --- SPĒLĒTĀJA SKATS ---
@@ -87,13 +87,14 @@ function Player() {
     socket.emit('join-session', { pin, name, playerId });
   };
 
+  // Aptaujas vienas atbildes iesniegšana
   const handleVoteSubmit = (option: string) => {
     setMyChoice(option);
-    socket.emit('participant:submit-vote', { pin, sceneId: scene?.id, optionId: option, playerId });
+    socket.emit('participant:submit-answer', { pin, answer: option, playerId });
   };
 
+  // Izvēles pārslēgšana vairāku atbilžu režīmā
   const toggleOption = (opt: string) => {
-    // Noteicam maksimālo atļauto izvēļu skaitu (balstoties uz pareizo atbilžu skaistu vai noklusējumu 2)
     const maxAllowed = scene?.config?.correctAnswers?.length || 2;
 
     if (selectedOptions.includes(opt)) {
@@ -105,6 +106,7 @@ function Player() {
     }
   };
 
+  // Vairāku atbilžu iesniegšana (QUIZ)
   const submitMultiAnswer = () => {
     if (selectedOptions.length === 0) return;
     socket.emit('participant:submit-answer', { pin, answers: selectedOptions, playerId });
@@ -118,9 +120,9 @@ function Player() {
     window.location.reload();
   };
 
-  const renderPlayerMedia = (scene: any) => {
-    if (!scene?.config?.mediaUrl) return null;
-    const { mediaUrl, mediaType } = scene.config;
+  const renderPlayerMedia = (s: any) => {
+    if (!s?.config?.mediaUrl) return null;
+    const { mediaUrl, mediaType } = s.config;
 
     const style: React.CSSProperties = {
       width: '100%',
@@ -135,12 +137,10 @@ function Player() {
     return null;
   };
 
-  // Pareizo atbilžu saraksts (no ainas konfigurācijas vai servera notikuma)
   const activeCorrectAnswers: string[] = correctAnswers.length > 0 
     ? correctAnswers 
     : (scene?.config?.correctAnswers || (scene?.config?.correctAnswer ? [scene.config.correctAnswer] : []));
 
-  // Pārbaudām, cik daudz no spēlētāja izvēlētajām atbildēm ir pareizas
   const guessedCorrectCount = selectedOptions.filter(opt => activeCorrectAnswers.includes(opt)).length;
   const isFullyCorrect = guessedCorrectCount === activeCorrectAnswers.length && selectedOptions.length === activeCorrectAnswers.length;
   const isPartiallyCorrect = guessedCorrectCount > 0 && !isFullyCorrect;
@@ -178,7 +178,6 @@ function Player() {
   return (
     <div style={{ padding: '20px', textAlign: 'center', fontFamily: 'sans-serif', maxWidth: '500px', margin: '0 auto' }}>
       
-      {/* Dalībnieka informācijas josla */}
       <div style={{ background: '#f8f9fa', padding: '10px 15px', borderRadius: '10px', marginBottom: '15px', border: '1px solid #e9ecef', fontSize: '0.95rem' }}>
         Sveiks, <strong>{name}</strong>! | PIN: <strong>{pin}</strong>
       </div>
@@ -190,7 +189,6 @@ function Player() {
             <Timer endTime={scene?.endTime} />
           </div>
 
-          {/* Mediju attēlošanas bloks mobilajā skatā */}
           {renderPlayerMedia(scene)}
 
           <h2 style={{ marginTop: 0 }}>{scene.title}</h2>
