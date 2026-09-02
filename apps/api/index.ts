@@ -16,52 +16,15 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-
-// Mediju failu statiskā mape
 const uploadsPath = path.resolve(process.cwd(), '../../public/uploads');
 app.use('/uploads', express.static(uploadsPath));
 
-console.log("📂 Mediju mape tiek meklēta šeit:", uploadsPath);
-
-// --- REST API MARŠRUTI ---
-
-// Iegūt visas spēles ar to versijām
-app.get('/api/shows', async (req, res) => {
-  try {
-    const shows = await prisma.show.findMany({ 
-      include: { versions: true } 
-    });
-    res.json(shows);
-  } catch (err) {
-    console.error("DB Kļūda:", err);
-    res.status(500).json({ error: 'Kļūda datubāzē' });
-  }
-});
-
-// Iegūt konkrētu spēli pēc ID
-app.get('/api/shows/:id', async (req, res) => {
-  try {
-    const show = await prisma.show.findUnique({
-      where: { id: req.params.id },
-      include: { versions: true }
-    });
-    if (!show) {
-      return res.status(404).json({ error: 'Spēle nav atrasta' });
-    }
-    res.json(show);
-  } catch (err) {
-    console.error("DB Kļūda:", err);
-    res.status(500).json({ error: 'Kļūda datubāzē' });
-  }
-});
-
-// --- SOCKET.IO REALTIME LOĢIKA ---
-
-const sessionsState = new Map<string, { currentScene: any, votes: any[], showId: string, scenes: any[], isResultsVisible: boolean }>();
-const sessionScores = new Map<string, Map<string, { name: string, score: number }>>();
+// Datu struktūras
+const sessionsState = new Map<string, any>();
+const sessionScores = new Map<string, Map<string, any>>();
 const participants = new Map<string, Set<string>>();
 
-// Palīgfunkcija līderu saraksta ieguvei un nosūtīšanai
+// Funkcija Līderu saraksta nosūtīšanai
 const emitLeaderboard = (pin: string) => {
   const players = sessionScores.get(pin);
   if (players) {
@@ -73,18 +36,32 @@ const emitLeaderboard = (pin: string) => {
 };
 
 io.on('connection', (socket) => {
-  // 1. Sesijas izveide/atjaunošana
+
+  // 1. SESIJAS IZVEIDE (Host)
   socket.on('host:create-session', async (data: { showId: string, existingPin?: string }) => {
     let pin = data.existingPin || Math.floor(1000 + Math.random() * 9000).toString();
+    
     if (!sessionsState.has(pin)) {
       const v = await prisma.showVersion.findFirst({ where: { showId: data.showId } });
-      sessionsState.set(pin, { currentScene: null, votes: [], showId: data.showId, scenes: v?.scenes as any[] || [], isResultsVisible: false });
+      const scenes = v?.scenes || [];
+
+      sessionsState.set(pin, {
+        showId: data.showId,
+        scenes: scenes,
+        currentSceneIndex: 0,
+        currentScene: scenes.length > 0 ? scenes[0] : null,
+        subState: 'IDLE', // Sākotnējais stāvoklis: IDLE | ACTIVE | STATS | REVEAL
+        votes: []
+      });
+      
+      sessionScores.set(pin, new Map());
     }
+    
     socket.join(pin);
     socket.emit('session-info', { pin, state: sessionsState.get(pin) });
   });
 
-  // 2. Pievienošanās spēlei
+  // 2. DALĪBNIEKU PIEVIENOŠANĀS
   socket.on('join-session', (data: { pin: string, name: string, playerId: string }) => {
     const { pin, name, playerId } = data;
     if (sessionsState.has(pin)) {
@@ -97,125 +74,124 @@ io.on('connection', (socket) => {
         if (!players.has(playerId)) players.set(playerId, { name, score: 0 });
         participants.get(pin)!.add(socket.id);
       }
+      
+      const state = sessionsState.get(pin);
       io.to(pin).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
-      socket.emit('join-success', { pin, currentScene: sessionsState.get(pin)!.currentScene });
-
-      // Pieslēdzoties nosūtām arī aktuālo līderu sarakstu
+      socket.emit('join-success', { pin, currentScene: state.currentScene, subState: state.subState });
       emitLeaderboard(pin);
     }
   });
 
-  // 3. Pārslēgt ainu (Sagatavošana)
-  socket.on('host:next-scene', (data: { pin: string, scene: any }) => {
-    const state = sessionsState.get(data.pin);
-    if (state) {
-      state.currentScene = { ...data.scene, endTime: null }; // Taimeris vēl nesākas
-      state.votes = [];
-      state.isResultsVisible = false;
-      io.to(data.pin).emit('state-update', state.currentScene);
+  // 3. VIENOTĀ SKATU PĀRVALDĪBAS POGA (Space/Advance loģika)
+  socket.on('host:advance', (pin: string) => {
+    const state = sessionsState.get(pin);
+    if (!state || !state.currentScene) return;
+
+    switch (state.subState) {
       
-      // Ja jaunā aina ir LEADERBOARD, uzreiz nosūtām visjaunākos datus
-      if (data.scene.type === 'LEADERBOARD') {
-        emitLeaderboard(data.pin);
+      // STEP 1: No IDLE uz ACTIVE (Taimera un spēles sākums)
+      case 'IDLE': {
+        state.subState = 'ACTIVE';
+        const duration = state.currentScene.config?.duration || 30;
+        state.currentScene.endTime = Date.now() + (duration * 1000);
+        
+        io.to(pin).emit('state-update', { 
+          ...state.currentScene, 
+          subState: 'ACTIVE',
+          endTime: state.currentScene.endTime 
+        });
+        break;
+      }
+
+      // STEP 2: No ACTIVE uz STATS (Statistikas un stabiņu atvēršana)
+      case 'ACTIVE': {
+        state.subState = 'STATS';
+        io.to(pin).emit('stats-revealed', { subState: 'STATS' });
+        break;
+      }
+
+      // STEP 3: No STATS uz REVEAL (Pareizo atbilžu un punktu parādīšana)
+      case 'STATS': {
+        state.subState = 'REVEAL';
+        const players = sessionScores.get(pin);
+        const correctAnswers = state.currentScene.config?.correctAnswers || [];
+        const maxPoints = state.currentScene.config?.points || 10;
+
+        if (players && state.type === 'QUIZ') {
+          // Aprēķinām punktus visiem, kas nobalsoja
+          state.votes.forEach((v: any) => {
+            const userAnswers = Array.isArray(v.optionIds) ? v.optionIds : [v.optionIds];
+            
+            // Pārbaudām cik pareizas atbildes iesniegtas
+            const correctCount = userAnswers.filter((a: string) => correctAnswers.includes(a)).length;
+            const isFullyCorrect = correctCount === correctAnswers.length && userAnswers.length === correctAnswers.length;
+
+            if (isFullyCorrect) {
+              const p = players.get(v.playerId);
+              if (p) p.score += maxPoints;
+            }
+          });
+        }
+
+        io.to(pin).emit('results-revealed', { 
+          correctAnswers, 
+          subState: 'REVEAL' 
+        });
+        emitLeaderboard(pin);
+        break;
+      }
+
+      // STEP 4: Pāreja uz nākošo slaidu
+      case 'REVEAL': {
+        if (state.currentSceneIndex < state.scenes.length - 1) {
+          state.currentSceneIndex += 1;
+          state.currentScene = state.scenes[state.currentSceneIndex];
+          state.subState = 'IDLE';
+          state.votes = [];
+
+          io.to(pin).emit('state-update', { 
+            ...state.currentScene, 
+            subState: 'IDLE',
+            currentSceneIndex: state.currentSceneIndex
+          });
+        } else {
+          // Ja šis bija pēdējais slaids
+          io.to(pin).emit('show-ended');
+        }
+        break;
       }
     }
   });
 
-  // 4. Palaist taimeri (Darbība)
-  socket.on('host:start-timer', (pin: string) => {
-    const state = sessionsState.get(pin);
-    if (state && state.currentScene) {
-      const duration = state.currentScene.config?.duration || 15;
-      state.currentScene.endTime = Date.now() + (duration * 1000);
-      io.to(pin).emit('state-update', state.currentScene);
+  // 4. DALĪBNIEKU ATBILŽU IESNIEGŠANA
+  socket.on('participant:submit-answer', (data: { pin: string, answers: string[], playerId: string }) => {
+    const state = sessionsState.get(data.pin);
+
+    // Pieņem atbildes tikai tad, ja slaids ir aktīvs un taimeris vēl nav beidzies
+    if (state?.subState === 'ACTIVE' && state?.currentScene?.endTime && Date.now() < state.currentScene.endTime) {
+      
+      // Dzēšam iepriekšējo atbildi, ja spēlētājs to maina
+      state.votes = state.votes.filter((v: any) => v.playerId !== data.playerId);
+      state.votes.push({ optionIds: data.answers, playerId: data.playerId });
+
+      // Saskaitām balsošanas rezultātus
+      const summary: Record<string, number> = {};
+      state.votes.forEach((v: any) => { 
+        v.optionIds.forEach((opt: string) => { 
+          summary[opt] = (summary[opt] || 0) + 1; 
+        }); 
+      });
+
+      io.to(data.pin).emit('votes-updated', summary);
+      socket.emit('answer-received');
     }
   });
 
-  // 5. Vadītājs nospiež "Palaist Video"
+  // Manuālas papildiespējas vadītāja pultij
   socket.on('host:trigger-video', (pin: string) => {
-    console.log(`🎬 Saņemta komanda spēlēt video telpā: ${pin}`);
     io.to(pin).emit('video-command', 'play');
   });
 
-  // 6. Atbilde no dalībnieka (atbildes saglabāšana bez tūlītējas punktu piešķiršanas)
-  socket.on('participant:submit-answer', (data: { pin: string, answer?: string, answers?: string[], playerId: string }) => {
-    const state = sessionsState.get(data.pin);
-
-    if (state && state.currentScene?.endTime && Date.now() < state.currentScene.endTime) {
-      // Pārbaudām, vai šis spēlētājs jau nav iesniedzis atbildi šajā ainā
-      const alreadyVoted = state.votes.some((v: any) => v.playerId === data.playerId);
-
-      if (!alreadyVoted) {
-        // Normalizējam atbildes uz masīvu
-        const userAnswers: string[] = data.answers || (data.answer ? [data.answer] : []);
-
-        // Saglabājam izvēles (masīvu), bet punktus vēl neskaitām
-        state.votes.push({ optionIds: userAnswers, playerId: data.playerId });
-
-        socket.emit('answer-received');
-
-        // Pārrēķinām un izsūtām stabiņu kopsavilkumu (katru izvēlēto variantu skaitām atsevišķi)
-        const summary: Record<string, number> = {};
-        state.votes.forEach((v: any) => {
-          v.optionIds.forEach((opt: string) => {
-            summary[opt] = (summary[opt] || 0) + 1;
-          });
-        });
-
-        io.to(data.pin).emit('votes-updated', summary);
-      }
-    }
-  });
-
-  // 7. Atklāt rezultātus un piešķirt punktus
-  socket.on('host:reveal-results', (pin: string) => {
-    const state = sessionsState.get(pin);
-    const players = sessionScores.get(pin);
-
-    if (state && players) {
-      state.isResultsVisible = true;
-      const config = state.currentScene?.config || {};
-      
-      // Iegūstam pareizās atbildes (atbalsta gan massīvu 'correctAnswers', gan vienu 'correctAnswer')
-      const correctAnswers: string[] = config.correctAnswers || (config.correctAnswer ? [config.correctAnswer] : []);
-      const maxPoints = config.points || 100;
-
-      if (state.currentScene?.type === 'QUIZ' && correctAnswers.length > 0) {
-        // Aprēķinām punktus katram, kurš balsoja šajā ainā
-        state.votes.forEach((v: any) => {
-          const userCorrectCount = v.optionIds.filter((id: string) => correctAnswers.includes(id)).length;
-          
-          if (userCorrectCount > 0) {
-            const pointsToAward = Math.round((userCorrectCount / correctAnswers.length) * maxPoints);
-            const playerData = players.get(v.playerId);
-            if (playerData) {
-              playerData.score += pointsToAward;
-            }
-          }
-        });
-      }
-
-      // Paziņojam klientiem par rezultātu atklāšanu un nosūtām atjaunoto līderu sarakstu
-      io.to(pin).emit('results-revealed', { correctAnswers, correctAnswer: config.correctAnswer });
-      emitLeaderboard(pin);
-    }
-  });
-
-  // 8. Atvienošanās
-  socket.on('disconnect', () => {
-    participants.forEach((socketsSet, pin) => {
-      if (socketsSet.has(socket.id)) {
-        socketsSet.delete(socket.id);
-        const players = sessionScores.get(pin);
-        if (players) {
-          io.to(pin).emit('presence-update', { 
-            count: players.size, 
-            players: Array.from(players.values()) 
-          });
-        }
-      }
-    });
-  });
 });
 
-httpServer.listen(PORT, () => console.log(`🚀 API un Socket serveris darbojas: http://localhost:${PORT}`));
+httpServer.listen(PORT, () => console.log(`🚀 Serveris strādā uz portu ${PORT}!`));

@@ -6,10 +6,11 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 const prisma = new PrismaClient();
 
 async function main() {
-  const email = 'janis@zacs.lv'; // PĀRBAUDI EPASTU
+  const email = 'janis@zacs.lv'; // Pārliecinies, ka šis ir tavs admin epasts
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) return console.log("❌ Lietotājs nav atrasts!");
+  if (!user) return console.log("❌ Lietotājs nav atrasts! Vispirms palaid seed-admin skriptu.");
 
+  // Iztīrām vecos datus, lai sāktu no tīras lapas
   console.log("🧹 Tīru vecos datus...");
   await prisma.vote.deleteMany({});
   await prisma.session.deleteMany({});
@@ -18,66 +19,42 @@ async function main() {
 
   const demoScenes = [
     { 
-      id: 's1', 
+      id: 'intro', 
       type: 'TEXT', 
-      title: 'Sveiciens!', 
+      title: 'Laipni lūdzam!', 
       config: { 
-        text: 'Laipni lūdzam šovā!',
-        mediaUrl: 'https://images.unsplash.com/photo-1516280440614-37939bbdd4f1?w=800', // Bilžu tests
+        text: 'Šovs tūlīt sāksies!',
+        mediaUrl: 'https://placehold.co/800x450/000/fff?text=Sagatavojieties', 
         mediaType: 'image'
       } 
     },
     { 
-      id: 's2', 
+      id: 'q1', 
       type: 'QUIZ', 
-      title: 'Attēla jautājums', 
+      title: 'Mūzikas Izaicinājums 🎧', 
       config: { 
-        question: 'Kas redzams šajā attēlā?', 
-        options: ['Mikrofons', 'Ģitāra', 'Bungas'],
-        correctAnswer: 'Mikrofons',
-        duration: 15,
-        mediaUrl: 'https://images.unsplash.com/photo-1590602847861-f357a9332bbc?w=800', // Bilde
-        mediaType: 'image'
-      } 
-    },
-    { 
-      id: 's3', 
-      type: 'QUIZ', 
-      title: 'Video jautājums', 
-      config: { 
-        question: 'Kāds dzīvnieks tas ir?', 
-        options: ['Zilonis', 'Lācis', 'Lauva'],
-        correctAnswer: 'Zilonis',
-        duration: 20,
-        mediaUrl: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4', // Video tests
+        question: 'Izvēlies pareizo izpildītāju UN pareizo dziesmas nosaukumu!', 
+        // 3 Izpildītāji (Instrumenti, Prāta Vētra, Musiqq) 
+        // 3 Dziesmas (Nākamā pietura, Ziemu apēst, Debesis iekrita Tevī)
+        options: ['Instrumenti', 'Prāta Vētra', 'Musiqq', 'Nākamā pietura', 'Ziemu apēst', 'Debesis iekrita Tevī'],
+        correctAnswers: ['Instrumenti', 'Nākamā pietura'], // Divas pareizās atbildes
+        duration: 20, // Taimeris uz 20 sekundēm
+        mediaUrl: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4', // Testa video
         mediaType: 'video'
       } 
     },
-    { 
-      id: 'scene_music', 
-      type: 'QUIZ', 
-      title: 'Mūzikas izaicinājums 🎧', 
-      config: { 
-        question: 'Kas izpilda šo dziesmu un kāds ir tās nosaukums?', 
-        options: ['Instrumenti', 'Prāta Vētra', 'Musiqq', 'Nākamā pietura', 'Ziemu apēst', 'Debesis iekrita Tevī'], 
-        correctAnswers: ['Instrumenti', 'Nākamā pietura'], // Masīvs ar pareizajām atbildēm
-        points: 100,
-        duration: 30,
-        mediaUrl: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4', 
-        mediaType: 'video'
-      } 
-    }
+    { id: 'results', type: 'LEADERBOARD', title: 'Rezultātu tops', config: {} }
   ];
 
   await prisma.show.create({
     data: {
-      title: 'MEDIJU ŠOVS',
+      title: 'QuizXpress Stila Šovs',
       ownerId: user.id,
       versions: { create: { scenes: demoScenes, version: 1 } }
     }
   });
 
-  console.log('✅ IZVEIDOTA JAUNA SPĒLE AR ATTĒLIEM, VIDEO UN MŪZIKAS IZAICINĀJUMU!');
+  console.log('✅ Spēle sagatavota! Tagad vari slēgt iekšā serveri.');
 }
 
 main().finally(() => prisma.$disconnect());

@@ -38,14 +38,20 @@ export default function Host() {
 
   const startShow = async () => {
     try {
+      console.log("Mēģinu ielādēt šovus...");
       const res = await fetch('http://localhost:3000/api/shows');
       const shows = await res.json();
-      if (shows.length > 0) {
+      
+      if (shows && shows.length > 0) {
+        console.log("Šovs atrasts, sūtu komandu serverim...");
         localStorage.setItem('active_showId', shows[0].id);
         socket.emit('host:create-session', { showId: shows[0].id });
+      } else {
+        alert("Datubāze ir tukša! Tev ir jāpalaiž datubāzes aizpildīšanas skripts.");
       }
     } catch (err) {
-      console.error("Kļūda saņemot spēļu sarakstu:", err);
+      console.error("Kļūda:", err);
+      alert("Nevar pieslēgties serverim! Pārbaudi vai apps/api terminālis griežas.");
     }
   };
 
@@ -58,7 +64,6 @@ export default function Host() {
     if (!pin) return;
     socket.emit('host:trigger-video', pin);
     
-    // Vizuāls apstiprinājums vadītājam
     setVideoBtnText('✅ SIGNĀLS NOSŪTĪTS');
     setTimeout(() => setVideoBtnText('🎬 ATSKAŅOT VIDEO / AUDIO'), 2000);
   };
@@ -104,7 +109,7 @@ export default function Host() {
         <h3>Taimeris: <Timer endTime={currentScene?.endTime} /></h3>
       </div>
 
-      {/* Vadības pogas */}
+      {/* Vadības pogas (4 pakāpju secība vadītājam) */}
       <div style={{ display: 'grid', gap: '10px', marginBottom: '20px' }}>
         <button 
           onClick={handleTriggerVideo} 
@@ -126,14 +131,48 @@ export default function Host() {
         <button 
           onClick={() => socket.emit('host:start-timer', pin)} 
           disabled={!!currentScene?.endTime} 
-          style={{ padding: '15px', background: currentScene?.endTime ? '#555' : '#007bff', color: 'white', fontWeight: 'bold', border: 'none', borderRadius: '8px', cursor: currentScene?.endTime ? 'not-allowed' : 'pointer', fontSize: '16px' }}
+          style={{ 
+            padding: '15px', 
+            background: currentScene?.endTime ? '#555' : '#007bff', 
+            color: 'white', 
+            fontWeight: 'bold', 
+            border: 'none', 
+            borderRadius: '8px', 
+            cursor: currentScene?.endTime ? 'not-allowed' : 'pointer', 
+            fontSize: '16px' 
+          }}
         >
           ▶️ PALAIST TAIMERI UN BALSOŠANU
         </button>
 
         <button 
+          onClick={() => socket.emit('host:show-stats', pin)} 
+          style={{ 
+            padding: '15px', 
+            background: '#6c757d', 
+            color: 'white', 
+            fontWeight: 'bold', 
+            border: 'none', 
+            borderRadius: '8px', 
+            cursor: 'pointer', 
+            fontSize: '16px' 
+          }}
+        >
+          📊 RĀDĪT STATISTIKU (STABIŅUS)
+        </button>
+
+        <button 
           onClick={() => socket.emit('host:reveal-results', pin)} 
-          style={{ padding: '15px', background: 'gold', color: 'black', fontWeight: 'bold', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '16px' }}
+          style={{ 
+            padding: '15px', 
+            background: 'gold', 
+            color: 'black', 
+            fontWeight: 'bold', 
+            border: 'none', 
+            borderRadius: '8px', 
+            cursor: 'pointer', 
+            fontSize: '16px' 
+          }}
         >
           🌟 ATKLĀT ATBILDI EKRĀNĀ
         </button>
