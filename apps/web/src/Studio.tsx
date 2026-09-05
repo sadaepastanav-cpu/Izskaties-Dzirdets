@@ -37,6 +37,7 @@ export default function Studio() {
   const [title, setTitle] = useState('Mans_Slovs');
   const [folder, setFolder] = useState('C:/ManiSovi');
   const [availableMedia, setAvailableMedia] = useState<string[]>([]);
+  const [activeIdx, setActiveIdx] = useState<number>(0);
 
   const apiHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   const apiBaseUrl = `http://${apiHost}:3000`;
@@ -70,16 +71,25 @@ export default function Studio() {
     }
   };
 
-  const handleConnectFolder = () => {
-    socket.emit('host:set-project-path', folder);
-    refreshMediaList();
+  const handleConnectFolder = async () => {
+    try {
+      socket.emit('host:set-project-path', folder);
+      await fetch(`${apiBaseUrl}/api/set-path`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: folder })
+      });
+      refreshMediaList();
+    } catch (err) {
+      console.error("Kļūda savienojot mapi:", err);
+    }
   };
 
   const addQuizScene = () => {
     const newScene: Scene = {
       id: 'sc-' + Date.now(),
       type: 'QUIZ',
-      title: 'Jautājums',
+      title: `Slaids ${scenes.length + 1}`,
       config: {
         question: '',
         options: ['', '', '', '', '', ''],
@@ -92,19 +102,26 @@ export default function Studio() {
         layout: []
       }
     };
-    setScenes([...scenes, newScene]);
+    const newScenes = [...scenes, newScene];
+    setScenes(newScenes);
+    setActiveIdx(newScenes.length - 1);
   };
 
-  const addLayoutElementPrompt = (sceneIndex: number, type: 'IMAGE' | 'VIDEO' | 'AUDIO' | 'TEXT') => {
-    const defaultVal = type === 'TEXT' ? 'Ieraksti tekstu' : (availableMedia[0] || '');
-    const userInput = prompt(type === 'TEXT' ? 'Ievadi tekstu:' : 'Ievadi faila nosaukumu:', defaultVal);
-    
-    if (userInput === null) return;
+  const removeScene = (index: number) => {
+    const updated = scenes.filter((_, idx) => idx !== index);
+    setScenes(updated);
+    if (activeIdx >= updated.length) {
+      setActiveIdx(Math.max(0, updated.length - 1));
+    }
+  };
+
+  const addLayoutElement = (type: 'IMAGE' | 'VIDEO' | 'AUDIO' | 'TEXT') => {
+    if (scenes.length === 0) return;
 
     const newElement: LayoutElement = {
       id: Date.now(),
       type,
-      content: userInput,
+      content: type === 'TEXT' ? 'Jauns Teksts' : (availableMedia[0] || ''),
       x: 10,
       y: 10,
       w: 40,
@@ -113,16 +130,16 @@ export default function Studio() {
     };
 
     const updated = [...scenes];
-    if (!updated[sceneIndex].config.layout) {
-      updated[sceneIndex].config.layout = [];
+    if (!updated[activeIdx].config.layout) {
+      updated[activeIdx].config.layout = [];
     }
-    updated[sceneIndex].config.layout.push(newElement);
+    updated[activeIdx].config.layout.push(newElement);
     setScenes(updated);
   };
 
-  const updateLayoutElement = (sceneIndex: number, elementId: number, key: keyof LayoutElement, value: any) => {
+  const updateLayoutElement = (elementId: number, key: keyof LayoutElement, value: any) => {
     const updated = [...scenes];
-    const layout = updated[sceneIndex].config.layout || [];
+    const layout = updated[activeIdx].config.layout || [];
     const elIndex = layout.findIndex(e => e.id === elementId);
     if (elIndex !== -1) {
       layout[elIndex] = { ...layout[elIndex], [key]: value };
@@ -130,25 +147,27 @@ export default function Studio() {
     }
   };
 
-  const removeLayoutElement = (sceneIndex: number, elementId: number) => {
+  const removeLayoutElement = (elementId: number) => {
     const updated = [...scenes];
-    updated[sceneIndex].config.layout = updated[sceneIndex].config.layout.filter(e => e.id !== elementId);
+    updated[activeIdx].config.layout = updated[activeIdx].config.layout.filter(e => e.id !== elementId);
     setScenes(updated);
   };
 
-  const updateSceneConfig = (sceneIndex: number, key: string, value: any) => {
+  const updateSceneConfig = (key: string, value: any) => {
+    if (scenes.length === 0) return;
     const updated = [...scenes];
-    updated[sceneIndex].config = {
-      ...updated[sceneIndex].config,
+    updated[activeIdx].config = {
+      ...updated[activeIdx].config,
       [key]: value
     };
     setScenes(updated);
   };
 
-  const updateSceneMedia = (sceneIndex: number, key: 'url' | 'type', value: string) => {
+  const updateSceneMedia = (key: 'url' | 'type', value: string) => {
+    if (scenes.length === 0) return;
     const updated = [...scenes];
-    const currentMedia = updated[sceneIndex].config.media || { url: '', type: 'image' };
-    updated[sceneIndex].config.media = {
+    const currentMedia = updated[activeIdx].config.media || { url: '', type: 'image' };
+    updated[activeIdx].config.media = {
       ...currentMedia,
       [key]: value
     };
@@ -196,6 +215,8 @@ export default function Studio() {
       alert("❌ Neizdevās savienoties ar serveri.");
     }
   };
+
+  const activeScene = scenes[activeIdx];
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: '#111', color: '#fff', fontFamily: 'Arial, sans-serif' }}>
@@ -254,23 +275,41 @@ export default function Studio() {
 
         <hr style={{ borderColor: '#333', width: '100%', margin: '5px 0' }} />
         
-        <h4 style={{ margin: '0 0 5px 0', color: '#aaa' }}>Slaidu pārskats ({scenes.length}):</h4>
+        <h4 style={{ margin: '0 0 5px 0', color: '#aaa' }}>Slaidu saraksts ({scenes.length}):</h4>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {scenes.map((s, i) => (
-            <div key={s.id} style={{ padding: '8px 12px', background: '#2a2a2a', borderRadius: '4px', fontSize: '0.85rem', borderLeft: '4px solid #007bff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span><strong>#{i + 1}</strong> {s.config?.question || 'Bez nosaukuma'}</span>
-              <div style={{ display: 'flex', gap: '4px' }}>
-                <button onClick={() => addLayoutElementPrompt(i, 'IMAGE')} style={{ background: '#333', color: '#fff', border: '1px solid #555', borderRadius: '3px', cursor: 'pointer', padding: '2px 5px' }}>+🖼️</button>
-                <button onClick={() => addLayoutElementPrompt(i, 'VIDEO')} style={{ background: '#333', color: '#fff', border: '1px solid #555', borderRadius: '3px', cursor: 'pointer', padding: '2px 5px' }}>+🎬</button>
-              </div>
+            <div 
+              key={s.id} 
+              onClick={() => setActiveIdx(i)}
+              style={{ 
+                padding: '10px 12px', 
+                background: activeIdx === i ? '#007bff' : '#2a2a2a', 
+                color: '#fff',
+                borderRadius: '4px', 
+                fontSize: '0.85rem', 
+                cursor: 'pointer',
+                display: 'flex', 
+                justify: 'space-between', 
+                alignItems: 'center' 
+              }}
+            >
+              <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                <strong>#{i + 1}</strong> {s.config?.question || 'Bez nosaukuma'}
+              </span>
+              <button 
+                onClick={(e) => { e.stopPropagation(); removeScene(i); }} 
+                style={{ background: 'transparent', color: '#ff4d4d', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}
+              >
+                ✖
+              </button>
             </div>
           ))}
         </div>
       </div>
 
-      {/* GALVENAIS SATURA REDAKTORS */}
+      {/* GALVENAIS REDAKTORS UN WYSIWYG LAUKUMS */}
       <div style={{ flex: 1, padding: '30px 40px', overflowY: 'auto' }}>
-        <div style={{ marginBottom: '30px' }}>
+        <div style={{ marginBottom: '20px' }}>
           <label style={{ fontSize: '0.9rem', color: '#aaa' }}>Projekta Nosaukums:</label>
           <input 
             value={title} 
@@ -279,24 +318,19 @@ export default function Studio() {
           />
         </div>
 
-        {scenes.map((s, i) => (
-          <div key={s.id} style={{ background: '#1e1e1e', padding: '24px', marginBottom: '30px', borderRadius: '12px', border: '1px solid #333' }}>
+        {activeScene ? (
+          <div style={{ background: '#1e1e1e', padding: '24px', borderRadius: '12px', border: '1px solid #333' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-              <h3 style={{ margin: 0, color: '#007bff' }}>Slaids #{i + 1} ({s.type})</h3>
-              <button 
-                onClick={() => setScenes(scenes.filter((_, idx) => idx !== i))}
-                style={{ background: '#dc3545', color: '#fff', border: 'none', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer' }}
-              >
-                Dzēst Slaidu
-              </button>
+              <h3 style={{ margin: 0, color: '#007bff' }}>Slaids #{activeIdx + 1} rediģēšana</h3>
             </div>
 
+            {/* SLAIDA PARAMETRI */}
             <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', color: '#aaa', fontSize: '0.9rem' }}>Jautājums:</label>
+              <label style={{ display: 'block', marginBottom: '5px', color: '#aaa', fontSize: '0.9rem' }}>Jautājums / Virsraksts:</label>
               <input 
                 style={{ width: '100%', padding: '10px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '6px', boxSizing: 'border-box' }} 
-                value={s.config.question} 
-                onChange={e => updateSceneConfig(i, 'question', e.target.value)} 
+                value={activeScene.config.question} 
+                onChange={e => updateSceneConfig('question', e.target.value)} 
                 placeholder="Ieraksti jautājumu..."
               />
             </div>
@@ -306,8 +340,8 @@ export default function Studio() {
                 <label style={{ display: 'block', color: '#aaa', fontSize: '0.8rem' }}>Fona Bilde:</label>
                 <input 
                   style={{ width: '100%', padding: '6px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '4px', boxSizing: 'border-box' }} 
-                  value={s.config.backgroundUrl || ''} 
-                  onChange={e => updateSceneConfig(i, 'backgroundUrl', e.target.value)}
+                  value={activeScene.config.backgroundUrl || ''} 
+                  onChange={e => updateSceneConfig('backgroundUrl', e.target.value)}
                   placeholder="fons.jpg" 
                 />
               </div>
@@ -317,8 +351,8 @@ export default function Studio() {
                 <input 
                   type="number"
                   style={{ width: '100%', padding: '6px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '4px', boxSizing: 'border-box' }} 
-                  value={s.config.duration ?? 30} 
-                  onChange={e => updateSceneConfig(i, 'duration', parseInt(e.target.value) || 0)} 
+                  value={activeScene.config.duration ?? 30} 
+                  onChange={e => updateSceneConfig('duration', parseInt(e.target.value) || 0)} 
                 />
               </div>
 
@@ -327,8 +361,8 @@ export default function Studio() {
                 <input 
                   type="number"
                   style={{ width: '100%', padding: '6px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '4px', boxSizing: 'border-box' }} 
-                  value={s.config.trimStart ?? 0} 
-                  onChange={e => updateSceneConfig(i, 'trimStart', parseInt(e.target.value) || 0)} 
+                  value={activeScene.config.trimStart ?? 0} 
+                  onChange={e => updateSceneConfig('trimStart', parseInt(e.target.value) || 0)} 
                 />
               </div>
 
@@ -337,103 +371,86 @@ export default function Studio() {
                 <input 
                   type="number"
                   style={{ width: '100%', padding: '6px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '4px', boxSizing: 'border-box' }} 
-                  value={s.config.trimEnd ?? 30} 
-                  onChange={e => updateSceneConfig(i, 'trimEnd', parseInt(e.target.value) || 0)} 
+                  value={activeScene.config.trimEnd ?? 30} 
+                  onChange={e => updateSceneConfig('trimEnd', parseInt(e.target.value) || 0)} 
                 />
               </div>
             </div>
 
-            <div style={{ background: '#141414', padding: '12px', borderRadius: '6px', marginBottom: '15px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', color: '#aaa', fontSize: '0.85rem' }}>🖼️ Galvenais Mediju Fails:</label>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <select 
-                  value={s.config.media?.url || ''} 
-                  onChange={(e) => updateSceneMedia(i, 'url', e.target.value)}
-                  style={{ flex: 2, padding: '8px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '4px' }}
-                >
-                  <option value="">-- Izvēlies failu no mapes --</option>
-                  {availableMedia.map(file => (
-                    <option key={file} value={file}>{file}</option>
-                  ))}
-                </select>
-
-                <select 
-                  value={s.config.media?.type || 'image'} 
-                  onChange={(e) => updateSceneMedia(i, 'type', e.target.value as any)}
-                  style={{ flex: 1, padding: '8px', background: '#000', color: '#fff', border: '1px solid #444', borderRadius: '4px' }}
-                >
-                  <option value="image">Attēls (IMAGE)</option>
-                  <option value="video">Video (VIDEO)</option>
-                  <option value="audio">Audio (AUDIO)</option>
-                </select>
-              </div>
+            {/* POGAS IZKĀRTOJUMA ELEMENTU PIEVIENOŠANAI */}
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+              <button onClick={() => addLayoutElement('IMAGE')} style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer' }}>+ BILDE</button>
+              <button onClick={() => addLayoutElement('VIDEO')} style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer' }}>+ VIDEO</button>
+              <button onClick={() => addLayoutElement('AUDIO')} style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer' }}>+ AUDIO</button>
+              <button onClick={() => addLayoutElement('TEXT')} style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer' }}>+ TEKSTS</button>
             </div>
 
-            <div style={{ background: '#141414', padding: '12px', borderRadius: '6px', marginBottom: '15px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <span style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#aaa' }}>Papildu Izkārtojuma Elementi:</span>
-                <div style={{ display: 'flex', gap: '5px' }}>
-                  <button onClick={() => addLayoutElementPrompt(i, 'IMAGE')} style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>+ Bilde</button>
-                  <button onClick={() => addLayoutElementPrompt(i, 'VIDEO')} style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>+ Video</button>
-                  <button onClick={() => addLayoutElementPrompt(i, 'AUDIO')} style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>+ Audio</button>
-                  <button onClick={() => addLayoutElementPrompt(i, 'TEXT')} style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}>+ Teksts</button>
+            {/* VIZUĀLAIS 16:9 PREZENTĀCIJAS AUDEKLIS (WYSIWYG) */}
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+              <div style={{ 
+                width: '800px', 
+                height: '450px', 
+                background: activeScene.config.backgroundUrl ? `url(${apiBaseUrl}/project-media/${activeScene.config.backgroundUrl}) center/cover` : '#000', 
+                position: 'relative', 
+                border: '2px solid #555',
+                borderRadius: '8px',
+                overflow: 'hidden'
+              }}>
+                <div style={{ position: 'absolute', top: '10px', width: '100%', textAlign: 'center', color: '#fff', textShadow: '0 0 5px black', fontSize: '1.2rem' }}>
+                  {activeScene.config.question || 'Jautājuma vieta'}
                 </div>
-              </div>
 
-              {s.config.layout && s.config.layout.map((el) => (
-                <div key={el.id} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 70px 70px 60px', gap: '8px', alignItems: 'center', background: '#222', padding: '8px', borderRadius: '4px', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>{el.type}</span>
-
-                  {el.type === 'TEXT' ? (
-                    <input 
-                      value={el.content} 
-                      onChange={e => updateLayoutElement(i, el.id, 'content', e.target.value)} 
-                      style={{ background: '#000', color: '#fff', border: '1px solid #444', padding: '4px', borderRadius: '3px' }} 
-                    />
-                  ) : (
-                    <select 
-                      value={el.content} 
-                      onChange={e => updateLayoutElement(i, el.id, 'content', e.target.value)}
-                      style={{ background: '#000', color: '#fff', border: '1px solid #444', padding: '4px', borderRadius: '3px' }}
-                    >
-                      <option value="">-- Fails --</option>
-                      {availableMedia.map(f => <option key={f} value={f}>{f}</option>)}
-                    </select>
-                  )}
-
-                  <input 
-                    type="number" 
-                    placeholder="Sākum. sek" 
-                    title="Trim Sākums"
-                    value={el.trimStart} 
-                    onChange={e => updateLayoutElement(i, el.id, 'trimStart', parseInt(e.target.value) || 0)} 
-                    style={{ background: '#000', color: '#fff', border: '1px solid #444', padding: '4px', borderRadius: '3px' }} 
-                  />
-
-                  <input 
-                    type="number" 
-                    placeholder="Beigu sek" 
-                    title="Trim Beigas"
-                    value={el.trimEnd} 
-                    onChange={e => updateLayoutElement(i, el.id, 'trimEnd', parseInt(e.target.value) || 0)} 
-                    style={{ background: '#000', color: '#fff', border: '1px solid #444', padding: '4px', borderRadius: '3px' }} 
-                  />
-
-                  <button 
-                    onClick={() => removeLayoutElement(i, el.id)} 
-                    style={{ background: '#dc3545', color: '#fff', border: 'none', padding: '4px', borderRadius: '3px', cursor: 'pointer' }}
+                {activeScene.config.layout?.map((el) => (
+                  <div 
+                    key={el.id} 
+                    style={{ 
+                      position: 'absolute', 
+                      left: `${el.x}%`, 
+                      top: `${el.y}%`, 
+                      width: `${el.w}%`, 
+                      border: '1px dashed #007bff', 
+                      background: 'rgba(0,0,0,0.6)',
+                      padding: '4px',
+                      borderRadius: '4px',
+                      boxSizing: 'border-box'
+                    }}
                   >
-                    ✖
-                  </button>
-                </div>
-              ))}
+                    <div style={{ fontSize: '10px', color: '#007bff', fontWeight: 'bold' }}>{el.type}</div>
+                    
+                    {el.type === 'TEXT' ? (
+                      <input 
+                        value={el.content} 
+                        onChange={e => updateLayoutElement(el.id, 'content', e.target.value)} 
+                        style={{ width: '100%', background: '#000', color: '#fff', border: '1px solid #444', fontSize: '12px' }} 
+                      />
+                    ) : (
+                      <select 
+                        value={el.content} 
+                        onChange={e => updateLayoutElement(el.id, 'content', e.target.value)} 
+                        style={{ width: '100%', background: '#000', color: '#fff', border: '1px solid #444', fontSize: '12px' }}
+                      >
+                        <option value="">-- Fails --</option>
+                        {availableMedia.map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    )}
+
+                    <div style={{ fontSize: '10px', marginTop: '4px', display: 'flex', gap: '5px' }}>
+                      X%: <input type="number" value={el.x} onChange={e => updateLayoutElement(el.id, 'x', parseInt(e.target.value) || 0)} style={{ width: '35px', background: '#000', color: '#fff', border: '1px solid #444' }} />
+                      Y%: <input type="number" value={el.y} onChange={e => updateLayoutElement(el.id, 'y', parseInt(e.target.value) || 0)} style={{ width: '35px', background: '#000', color: '#fff', border: '1px solid #444' }} />
+                      W%: <input type="number" value={el.w} onChange={e => updateLayoutElement(el.id, 'w', parseInt(e.target.value) || 0)} style={{ width: '35px', background: '#000', color: '#fff', border: '1px solid #444' }} />
+                      <button onClick={() => removeLayoutElement(el.id)} style={{ background: '#dc3545', color: '#fff', border: 'none', cursor: 'pointer', padding: '0 4px', borderRadius: '2px' }}>✖</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
+            {/* ATBILŽU VARIANTI */}
             <div>
               <p style={{ fontWeight: 'bold', margin: '10px 0 8px 0', fontSize: '0.9rem' }}>Atbilžu varianti (atzīmē pareizos):</p>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                {s.config.options.map((opt: string, oi: number) => {
-                  const isChecked = (s.config.correctAnswers || []).includes(opt);
+                {activeScene.config.options.map((opt: string, oi: number) => {
+                  const isChecked = (activeScene.config.correctAnswers || []).includes(opt);
                   return (
                     <div key={oi} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#141414', padding: '8px', borderRadius: '6px' }}>
                       <input 
@@ -441,31 +458,26 @@ export default function Studio() {
                         checked={isChecked && opt !== ''}
                         onChange={() => {
                           if (!opt) return;
-                          const cur = s.config.correctAnswers || [];
+                          const cur = activeScene.config.correctAnswers || [];
                           const next = cur.includes(opt) ? cur.filter((c: string) => c !== opt) : [...cur, opt];
-                          updateSceneConfig(i, 'correctAnswers', next);
+                          updateSceneConfig('correctAnswers', next);
                         }} 
                       />
                       <input 
                         value={opt} 
                         onChange={e => {
-                          const newOpts = [...s.config.options];
+                          const newOpts = [...activeScene.config.options];
                           const oldVal = newOpts[oi];
                           const newVal = e.target.value;
                           newOpts[oi] = newVal;
 
-                          let newCorrect = s.config.correctAnswers || [];
+                          let newCorrect = activeScene.config.correctAnswers || [];
                           if (newCorrect.includes(oldVal)) {
                             newCorrect = newCorrect.map((c: string) => c === oldVal ? newVal : c);
                           }
 
-                          const updated = [...scenes];
-                          updated[i].config = {
-                            ...updated[i].config,
-                            options: newOpts,
-                            correctAnswers: newCorrect
-                          };
-                          setScenes(updated);
+                          updateSceneConfig('options', newOpts);
+                          updateSceneConfig('correctAnswers', newCorrect);
                         }} 
                         placeholder={`Opcija ${String.fromCharCode(65 + oi)}`}
                         style={{ flex: 1, background: '#000', color: '#fff', border: '1px solid #444', padding: '6px', borderRadius: '4px' }}
@@ -477,7 +489,11 @@ export default function Studio() {
             </div>
 
           </div>
-        ))}
+        ) : (
+          <div style={{ padding: '40px', textAlign: 'center', color: '#777' }}>
+            <h3>Izvēlies slaidu no kreisās puses saraksta vai izveido jaunu!</h3>
+          </div>
+        )}
       </div>
     </div>
   );
