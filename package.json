@@ -6,6 +6,7 @@
     "db:studio": "npx prisma studio"
   },
   "devDependencies": {
+    "@types/multer": "^2.2.0",
     "@types/node": "^20.11.20",
     "prisma": "^5.10.0",
     "ts-node": "^10.9.2",

@@ -1,0 +1,40 @@
+{
+  "scenes": [
+    {
+      "id": "slide-1",
+      "title": "1. Jautājums",
+      "type": "QUESTION",
+      "config": {
+        "duration": 30,
+        "points": 10,
+        "pointsMin": 1,
+        "pointsMax": 10,
+        "scoringMode": "FIXED",
+        "speedBonusEnabled": false,
+        "optionsCount": 4,
+        "options": [
+          "Rīga",
+          "Liepāja",
+          "Daugavpils",
+          "Jelgava"
+        ],
+        "correctAnswers": [
+          "Rīga"
+        ],
+        "optionsLayout": "GRID",
+        "layout": [
+          {
+            "id": "q-box",
+            "type": "QUESTION",
+            "content": "Kura ir Latvijas galvaspilsēta?",
+            "x": 15,
+            "y": 10,
+            "w": 70,
+            "h": 15,
+            "fontSize": 2.2
+          }
+        ]
+      }
+    }
+  ]
+}

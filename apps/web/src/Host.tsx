@@ -1,62 +1,102 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { socket } from './socket';
 
 export default function Host() {
   const [pin, setPin] = useState<string | null>(localStorage.getItem('active_pin'));
   const [scenes, setScenes] = useState<any[]>([]);
   const [currentScene, setCurrentScene] = useState<any>(null);
-  const [folder, setFolder] = useState('C:/ManiSovi');
+  const [folder, setFolder] = useState(
+    localStorage.getItem('event_studio_folder') || 'C:/ManiSovi'
+  );
   const [localProjects, setLocalProjects] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [leaderboardPage, setLeaderboardPage] = useState<number>(0);
+  const [podiumStage, setPodiumStage] = useState<number>(0);
 
-  // 1. Skenēt mapi un atgriezt pieejamos .json projektus
-  const loadProjects = async () => {
+  const loadProjects = async (folderPath?: string) => {
     try {
       setIsLoading(true);
+      const targetFolder = folderPath || folder;
       const res = await fetch(`http://${window.location.hostname}:3000/api/set-path`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: folder })
+        body: JSON.stringify({ path: targetFolder })
       });
       const data = await res.json();
       if (Array.isArray(data.projects)) {
         setLocalProjects(data.projects);
+        setFolder(data.currentPath);
+        localStorage.setItem('event_studio_folder', data.currentPath);
       }
-    } catch (err) {
-      console.error("Neizdevās ielādēt projektus no mapes:", err);
-      alert("❌ Kļūda piekļūstot mapei!");
+    } catch {
+      alert('❌ Kļūda piekļūstot mapei!');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // 2. Ielādēt izvēlēto projektu un sākt sesiju (Atjaunotā un uzlabotā versija)
+  useEffect(() => {
+    fetch(`http://${window.location.hostname}:3000/api/check-recovery`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.canRecover && data.pin) {
+          const shouldRecover = window.confirm(
+            `Atrasta nepabeigta sesija ar PIN: ${data.pin} ("${data.title || 'Aktīvā spēle'}"). Vai atjaunot?`
+          );
+          if (shouldRecover) {
+            fetch(`http://${window.location.hostname}:3000/api/recover-session`, { method: 'POST' })
+              .then((r) => r.json())
+              .then((rec) => {
+                if (rec.success) {
+                  setPin(rec.pin);
+                  setCurrentScene(rec.state?.currentScene);
+                  setScenes(rec.state?.scenes || []);
+                  localStorage.setItem('active_pin', rec.pin);
+                }
+              });
+          }
+        }
+      })
+      .catch(() => {});
+
+    loadProjects();
+  }, []);
+
   const startProject = async (fileName: string) => {
     try {
       setIsLoading(true);
-      const res = await fetch(`http://${window.location.hostname}:3000/api/projects/${fileName}`);
-      if (!res.ok) throw new Error("Neizdevās ielādēt projekta failu");
+      const res = await fetch(`http://${window.location.hostname}:3000/api/load-project/${fileName}`);
+      if (!res.ok) throw new Error();
 
       const projectData = await res.json();
-      console.log("Ielādēts projekts:", projectData);
       socket.emit('host:create-session', { projectData });
-    } catch (err) {
-      console.error("Projekta palaišanas kļūda:", err);
-      alert("❌ Neizdevās ielādēt projektu! Pārbaudi faila saturu.");
+    } catch {
+      alert('❌ Neizdevās palaist projektu!');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // 3. Sesijas beigšana un atiestatīšana
   const handleEndSession = () => {
     setPin(null);
     setCurrentScene(null);
     setScenes([]);
+    setLeaderboardPage(0);
+    setPodiumStage(0);
     localStorage.removeItem('active_pin');
   };
 
-  // Socket un klaviatūras klausītāji
+  const changeLeaderboardPage = (newPage: number) => {
+    if (newPage < 0 || !pin) return;
+    setLeaderboardPage(newPage);
+    socket.emit('host:change-leaderboard-page', { pin, page: newPage });
+  };
+
+  // 3. PUNKTS: STATISTIKAS IESLĒGŠANA AR 'C'
+  const toggleChart = () => {
+    if (pin) socket.emit('host:toggle-chart', { pin });
+  };
+
   useEffect(() => {
     const handleSessionInfo = (data: any) => {
       setPin(data.pin);
@@ -67,17 +107,27 @@ export default function Host() {
 
     const handleStateUpdate = (s: any) => {
       setCurrentScene(s);
+      if (s?.type === 'LEADERBOARD') {
+        setLeaderboardPage(0);
+        setPodiumStage(0);
+      }
     };
+
+    const handlePodiumStage = (stage: number) => setPodiumStage(stage);
 
     socket.on('session-info', handleSessionInfo);
     socket.on('state-update', handleStateUpdate);
+    socket.on('podium-stage-change', handlePodiumStage);
 
-    // Space taustiņa vadība slaidu virzīšanai uz priekšu
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+
       if (e.code === 'Space' && pin) {
-        if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
         e.preventDefault();
         socket.emit('host:advance', pin);
+      } else if ((e.key === 'c' || e.key === 'C') && pin) {
+        e.preventDefault();
+        toggleChart();
       }
     };
 
@@ -86,142 +136,292 @@ export default function Host() {
     return () => {
       socket.off('session-info', handleSessionInfo);
       socket.off('state-update', handleStateUpdate);
+      socket.off('podium-stage-change', handlePodiumStage);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [pin]);
 
-  // --- SKATS 1: JA SESIJA NAV SĀKTA (Projektu izvēle) ---
   if (!pin) {
     return (
-      <div style={{ padding: '50px', background: '#111', color: '#fff', minHeight: '100vh', fontFamily: 'Arial, sans-serif', textAlign: 'center', boxSizing: 'border-box' }}>
-        <h1 style={{ color: '#007bff', marginBottom: '30px' }}>VADĪTĀJA KONTROLES PANELIS</h1>
-        
-        <div style={{ maxWidth: '500px', margin: '0 auto', background: '#222', padding: '30px', borderRadius: '12px', border: '1px solid #444' }}>
-          <h3>📂 ATVĒRT PROJEKTU NO MAPES</h3>
-          
-          <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-            <input 
-              value={folder} 
-              onChange={e => setFolder(e.target.value)} 
+      <div style={panelContainer}>
+        <h1 style={{ color: '#007bff', marginBottom: '25px' }}>EVENT STUDIO — VADĪTĀJA PANELIS</h1>
+        <div style={cardBox}>
+          <h3>📂 AKTUĀLĀ DARBA MAPE</h3>
+
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
+            <input
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
               placeholder="C:/ManiSovi"
-              style={{ flex: 1, padding: '10px', background: '#000', color: '#fff', border: '1px solid #555', borderRadius: '6px' }}
+              style={folderInputHost}
             />
-            <button 
-              onClick={loadProjects} 
-              disabled={isLoading}
-              style={{ padding: '10px 20px', background: '#007bff', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
-            >
-              {isLoading ? 'IELĀDĒ...' : 'SKENĒT'}
+            <button onClick={() => loadProjects(folder)} disabled={isLoading} style={btnScan}>
+              {isLoading ? '...' : 'SKENĒT'}
             </button>
           </div>
 
           <div style={{ marginTop: '20px', textAlign: 'left' }}>
-            <h4 style={{ color: '#aaa', borderBottom: '1px solid #444', paddingBottom: '8px' }}>Pieejamie projekti:</h4>
-            {localProjects.length === 0 && (
-              <p style={{ color: '#666', fontStyle: 'italic' }}>Nav atrasts neviens .json projekta fails. Ievadiet ceļu un uzspiediet "SKENĒT".</p>
+            <h4 style={{ color: '#aaa', borderBottom: '1px solid #444', paddingBottom: '8px' }}>
+              Pieejamie projekti ({localProjects.length}):
+            </h4>
+            {localProjects.length === 0 ? (
+              <p style={{ color: '#666', fontStyle: 'italic' }}>Šajā mapē nav neviena .json faila.</p>
+            ) : (
+              localProjects.map((p) => (
+                <button key={p} onClick={() => startProject(p)} disabled={isLoading} style={projectBtn}>
+                  🚀 Sākt šovu: {p}
+                </button>
+              ))
             )}
-            
-            {localProjects.map(p => (
-              <button 
-                key={p} 
-                onClick={() => startProject(p)} 
-                disabled={isLoading}
-                style={{ 
-                  display: 'block', 
-                  width: '100%', 
-                  padding: '12px', 
-                  margin: '8px 0', 
-                  background: '#333', 
-                  color: '#fff', 
-                  border: '1px solid #555', 
-                  borderRadius: '6px', 
-                  textAlign: 'left', 
-                  cursor: isLoading ? 'not-allowed' : 'pointer', 
-                  fontWeight: 'bold',
-                  opacity: isLoading ? 0.6 : 1
-                }}
-              >
-                📄 {p}
-              </button>
-            ))}
           </div>
         </div>
       </div>
     );
   }
 
-  // --- SKATS 2: AKTĪVĀ SESIJA UN VADĪBA ---
+  const isFinalLb = currentScene?.type === 'LEADERBOARD' && currentScene?.config?.lbType === 'FINAL';
+
   return (
-    <div style={{ padding: '30px', background: '#111', color: '#fff', minHeight: '100vh', fontFamily: 'Arial, sans-serif', boxSizing: 'border-box' }}>
-      {/* Augšējā josla */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#222', padding: '15px 25px', borderRadius: '10px', border: '1px solid #444', marginBottom: '20px' }}>
+    <div style={panelContainer}>
+      <div style={topBar}>
         <div>
-          <span style={{ fontSize: '1.2rem', color: '#aaa' }}>Aktīvā sesija: </span>
-          <span style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#28a745', marginLeft: '10px' }}>PIN: {pin}</span>
+          <span style={{ color: '#aaa', fontSize: '1.2rem' }}>Aktīvā sesija: </span>
+          <span style={{ color: '#28a745', fontSize: '1.8rem', fontWeight: 'bold' }}>PIN: {pin}</span>
         </div>
 
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button 
-            onClick={() => window.open(`/present/${pin}`, '_blank')} 
-            style={{ padding: '10px 20px', background: '#007bff', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
-          >
-            🖥️ ATVĒRT PROJEKTORU
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {/* 3. PUNKTS: STATISTIKAS POGA 'C' */}
+          <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas grafiku ekrānā">
+            📊 Statistika [C]
           </button>
-          
-          <button 
-            onClick={handleEndSession} 
-            style={{ padding: '10px 15px', background: '#dc3545', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
-          >
-            ❌ BEIGT SESIJU
+
+          <button onClick={() => socket.emit('host:simulate-players', { pin, count: 50 })} style={btnGray}>
+            🤖 +50 Boti
+          </button>
+          <button onClick={() => window.open(`/present/${pin}`, '_blank')} style={btnBlue}>
+            🖥️ Projektora ekrāns
+          </button>
+          <button onClick={handleEndSession} style={btnRed}>
+            ❌ Beigt sesiju
           </button>
         </div>
       </div>
 
-      {/* Instrukcija un pašreizējā stāvokļa rādītājs */}
-      <div style={{ background: '#004085', color: '#b8daff', padding: '15px', borderRadius: '8px', textAlign: 'center', marginBottom: '20px', border: '1px solid #b8daff' }}>
-        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', marginBottom: '5px' }}>
-          ⌨️ SPIED [ SPACE ] TAUSTIŅU, LAI VADĪTU ŠOVA NORISI
-        </div>
-        <div style={{ fontSize: '0.95rem', opacity: 0.9 }}>
-          Aktuālā aina: <strong>{currentScene?.title || "Nav sākts"}</strong> | Stāvoklis: <strong>{currentScene?.subState || "IDLE"}</strong>
+      <div style={instructionBox}>
+        <div style={{ fontSize: '1.3rem', fontWeight: 'bold' }}>⌨️ SPIED [ SPACE ] TAUSTIŅU, LAI VADĪTU ŠOVU</div>
+        <div style={{ marginTop: '5px', opacity: 0.9 }}>
+          Slaids: <strong>{currentScene?.title || 'Nav sākts'}</strong> | Fāze:{' '}
+          <span style={{ color: '#ffc107', fontWeight: 'bold' }}>{currentScene?.subState || 'IDLE'}</span>
         </div>
       </div>
 
-      {/* Slaidu saraksts */}
+      {isFinalLb && (
+        <div style={{ background: '#1c3d1c', border: '2px solid #28a745', padding: '15px', borderRadius: '8px', textAlign: 'center', marginBottom: '20px' }}>
+          <h3 style={{ margin: '0 0 8px 0', color: '#00ff00' }}>🥇 FINĀLA APBALVOŠANA NORIT</h3>
+          <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>
+            Pašreizējais solis: {podiumStage === 0 && 'Gatavībā'}
+            {podiumStage === 1 && '🥉 3. vieta parādīta'}
+            {podiumStage === 2 && '🥈 2. vieta parādīta'}
+            {podiumStage === 3 && '👑 1. VIETA PARĀDĪTA (Uzvarētājs)'}
+            {podiumStage >= 4 && '📋 Pilnais saraksts'}
+          </div>
+        </div>
+      )}
+
+      {currentScene?.type === 'LEADERBOARD' && !isFinalLb && (
+        <div style={leaderControlBox}>
+          <h4 style={{ margin: '0 0 10px 0', color: '#ffc107' }}>
+            🏆 LĪDERU TABULA: {currentScene?.config?.lbType || 'TOTAL'}
+          </h4>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '15px', alignItems: 'center' }}>
+            <button onClick={() => changeLeaderboardPage(leaderboardPage - 1)} disabled={leaderboardPage === 0} style={btnNav}>
+              ⬅️ Iepriekšējā lapa
+            </button>
+            <span style={{ fontWeight: 'bold' }}>Lapa: {leaderboardPage + 1}</span>
+            <button onClick={() => changeLeaderboardPage(leaderboardPage + 1)} style={btnNav}>
+              Nākamā lapa ➡️
+            </button>
+          </div>
+        </div>
+      )}
+
       <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-        <h3 style={{ borderBottom: '1px solid #444', paddingBottom: '10px' }}>Slaidu secība:</h3>
+        <h3>Slaidu secība:</h3>
         {scenes.map((s, i) => {
           const isActive = currentScene?.id === s.id;
           return (
-            <button 
-              key={s.id || i} 
-              onClick={() => socket.emit('host:next-scene', { pin, scene: s })} 
-              style={{ 
-                display: 'block', 
-                width: '100%', 
-                padding: '15px', 
-                margin: '10px 0', 
-                background: isActive ? '#28a745' : '#222', 
-                color: '#fff', 
-                border: isActive ? '2px solid #fff' : '1px solid #444', 
-                borderRadius: '8px', 
-                textAlign: 'left', 
-                cursor: 'pointer',
-                fontSize: '1.1rem',
-                fontWeight: isActive ? 'bold' : 'normal',
-                transition: 'all 0.2s'
+            <div
+              key={s.id || i}
+              onClick={() => socket.emit('host:next-scene', { pin, scene: s })}
+              style={{
+                ...slideRow,
+                background: isActive ? '#28a745' : '#222',
+                border: isActive ? '2px solid #fff' : '1px solid #444'
               }}
             >
-              {i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} 
-              {isActive && (
-                <span style={{ float: 'right', background: '#fff', color: '#28a745', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                  AKTĪVS ({currentScene?.subState || 'IDLE'})
-                </span>
-              )}
-            </button>
+              <span>
+                {i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})
+                {s.type === 'LEADERBOARD' && ` [${s.config?.lbType || 'TOTAL'}]`}
+              </span>
+              {isActive && <span style={activeBadge}>{currentScene?.subState || 'IDLE'}</span>}
+            </div>
           );
         })}
       </div>
     </div>
   );
 }
+
+// --- STILI ---
+const panelContainer: React.CSSProperties = {
+  padding: '30px',
+  background: '#111',
+  color: '#fff',
+  minHeight: '100vh',
+  fontFamily: 'Segoe UI, Arial, sans-serif',
+  boxSizing: 'border-box'
+};
+
+const cardBox: React.CSSProperties = {
+  maxWidth: '550px',
+  margin: '0 auto',
+  background: '#1e1e1e',
+  padding: '25px',
+  borderRadius: '12px',
+  border: '1px solid #333'
+};
+
+const folderInputHost: React.CSSProperties = {
+  flex: 1,
+  padding: '10px',
+  background: '#000',
+  color: '#0f0',
+  border: '1px solid #555',
+  borderRadius: '6px',
+  fontSize: '0.95rem'
+};
+
+const btnScan: React.CSSProperties = {
+  padding: '10px 18px',
+  background: '#007bff',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontWeight: 'bold'
+};
+
+const topBar: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  background: '#1e1e1e',
+  padding: '15px 20px',
+  borderRadius: '10px',
+  border: '1px solid #333',
+  marginBottom: '20px'
+};
+
+const instructionBox: React.CSSProperties = {
+  background: '#004085',
+  color: '#b8daff',
+  padding: '15px',
+  borderRadius: '8px',
+  textAlign: 'center',
+  marginBottom: '20px',
+  border: '1px solid #0056b3'
+};
+
+const leaderControlBox: React.CSSProperties = {
+  background: '#332700',
+  border: '1px solid #ffc107',
+  padding: '12px',
+  borderRadius: '8px',
+  textAlign: 'center',
+  marginBottom: '20px'
+};
+
+const projectBtn: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  padding: '14px',
+  margin: '10px 0',
+  background: '#2d2d2d',
+  color: '#fff',
+  border: '1px solid #444',
+  borderRadius: '8px',
+  textAlign: 'left',
+  cursor: 'pointer',
+  fontWeight: 'bold',
+  fontSize: '1rem'
+};
+
+const slideRow: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  padding: '14px 20px',
+  margin: '8px 0',
+  borderRadius: '8px',
+  cursor: 'pointer',
+  fontSize: '1.05rem'
+};
+
+const activeBadge: React.CSSProperties = {
+  background: '#fff',
+  color: '#28a745',
+  padding: '2px 10px',
+  borderRadius: '4px',
+  fontSize: '0.8rem',
+  fontWeight: 'bold'
+};
+
+const btnBlue: React.CSSProperties = {
+  padding: '10px 16px',
+  background: '#007bff',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontWeight: 'bold'
+};
+
+const btnPurple: React.CSSProperties = {
+  padding: '10px 16px',
+  background: '#6f42c1',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontWeight: 'bold'
+};
+
+const btnRed: React.CSSProperties = {
+  padding: '10px 16px',
+  background: '#dc3545',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontWeight: 'bold'
+};
+
+const btnGray: React.CSSProperties = {
+  padding: '10px 14px',
+  background: '#444',
+  color: '#fff',
+  border: '1px solid #666',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontWeight: 'bold'
+};
+
+const btnNav: React.CSSProperties = {
+  padding: '8px 16px',
+  background: '#ffc107',
+  color: '#000',
+  border: 'none',
+  borderRadius: '4px',
+  cursor: 'pointer',
+  fontWeight: 'bold'
+};
