@@ -135,6 +135,7 @@ export default function Presentation() {
   });
   const [participantCount, setParticipantCount] = useState(0);
   const [isRevealed, setIsRevealed] = useState(false);
+  // STATISTIKA PĒC NOKLUSĒJUMA IR IZSLEEGTA UN PARĀDĀS TIKAI AR 'C'
   const [isStatsVisible, setIsStatsVisible] = useState(false);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [leaderboardType, setLeaderboardType] = useState<'ROUND' | 'TOTAL' | 'FINAL'>('TOTAL');
@@ -148,10 +149,9 @@ export default function Presentation() {
   useEffect(() => {
     if (pin) socket.emit('join-session', { pin, name: 'EKRĀNS', playerId: 'scr_' + pin });
 
-    // 4. PUNKTS: LABOJUMS — BALSIS NOTĪRA TIKAI KAD SĀKAS PILNĪGI JAUNS SLAIDS!
     const handleStateUpdate = (newScene: any) => {
       setScene((prevScene: any) => {
-        // Ja sākas jauns slaids (ID atšķiras vai jaunais ir READY stāvoklī) -> notīra balsis
+        // Ja sākas pilnīgi jauns slaids, notīram balsis un aizveram statistiku
         if (!prevScene || prevScene.id !== newScene.id || newScene.subState === 'READY') {
           setVoteData({ summary: {}, votedCount: 0 });
           setIsRevealed(false);
@@ -163,27 +163,15 @@ export default function Presentation() {
     };
 
     socket.on('state-update', handleStateUpdate);
-
     socket.on('votes-updated', (data: any) => {
       setVoteData({ summary: data?.summary || {}, votedCount: data?.votedCount || 0 });
     });
-
     socket.on('presence-update', (data) => setParticipantCount(data?.count || 0));
+    socket.on('results-revealed', () => setIsRevealed(true));
 
-    socket.on('results-revealed', () => {
-      setIsRevealed(true);
-    });
-
-    socket.on('stats-revealed', (data?: any) => {
-      setIsStatsVisible(true);
-      if (data?.summary) {
-        setVoteData({ summary: data.summary, votedCount: data.votedCount || 0 });
-      }
-    });
-
-    // 3. PUNKTS: STATISTIKAS PĀRSLĒGŠANA AR BURTU C VAI SPACE
-    socket.on('toggle-audience-chart', (forceShow?: boolean) => {
-      setIsStatsVisible((prev) => (forceShow !== undefined ? forceShow : !prev));
+    // STATISTIKAS PĀRSLĒGŠANA AR 'C'
+    socket.on('toggle-audience-chart', () => {
+      setIsStatsVisible((prev) => !prev);
     });
 
     socket.on('leaderboard-update', (payload: any) => {
@@ -211,19 +199,28 @@ export default function Presentation() {
       }
     });
 
+    // Tastatūras klausītājs projektora ekrānam (var nospiest 'C' arī šeit)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === 'c' || e.key === 'C') && (scene?.subState === 'STATS' || isRevealed)) {
+        e.preventDefault();
+        setIsStatsVisible((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
     return () => {
       socket.off('state-update', handleStateUpdate);
       socket.off('votes-updated');
       socket.off('presence-update');
       socket.off('results-revealed');
-      socket.off('stats-revealed');
       socket.off('toggle-audience-chart');
       socket.off('leaderboard-update');
       socket.off('podium-stage-change');
       socket.off('leaderboard-page-change');
       socket.off('video-command');
+      window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [pin]);
+  }, [pin, scene?.subState, isRevealed]);
 
   const renderLayoutElements = (s: any) => {
     if (!s?.config?.layout) return null;
@@ -444,7 +441,7 @@ export default function Presentation() {
         {renderLayoutElements(scene)}
 
         {/* ATBILŽU POGAS */}
-        {optionsList.length > 0 && (scene.subState === 'ACTIVE' || isStatsVisible || isRevealed) && (
+        {optionsList.length > 0 && (
           optLayout === 'INDIVIDUAL' ? (
             optionsList.map((opt: string, i: number) => {
               const pos = optPositions[i] || optPositions[opt] || {
@@ -454,7 +451,6 @@ export default function Presentation() {
                 h: 10
               };
               const isCorrect = isRevealed && (scene.config?.correctAnswers || []).includes(opt);
-              // 4. PUNKTS: PĀRBAUDA BALSU SKAITU PĒC TEKSTA VAI BURTA (A, B...)
               const letter = String.fromCharCode(65 + i);
               const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
               const pct = scene.config?.answerCorrectness?.[opt];
@@ -503,8 +499,10 @@ export default function Presentation() {
                     </span>
                   )}
 
-                  {/* 3. & 4. PUNKTS: BALSU SKAITS REDZAMS KAD AKTĪVA STATISTIKA VAI ATKLĀŠANA */}
-                  {(isStatsVisible || isRevealed) && <span style={voteBadge}>{count}</span>}
+                  {/* STATISTIKA PARĀDĀS TIKAI TAD, JA IESLĒGTA AR 'C' */}
+                  {isStatsVisible && (scene.subState === 'STATS' || isRevealed) && (
+                    <span style={voteBadge}>{count}</span>
+                  )}
                 </div>
               );
             })
@@ -563,7 +561,10 @@ export default function Presentation() {
                       </span>
                     )}
 
-                    {(isStatsVisible || isRevealed) && <span style={voteBadge}>{count}</span>}
+                    {/* STATISTIKA PARĀDĀS TIKAI TAD, JA IESLĒGTA AR 'C' */}
+                    {isStatsVisible && (scene.subState === 'STATS' || isRevealed) && (
+                      <span style={voteBadge}>{count}</span>
+                    )}
                   </div>
                 );
               })}
@@ -571,7 +572,7 @@ export default function Presentation() {
           )
         )}
 
-        {/* LĪDERU TABULA: ROUND UN TOTAL */}
+        {/* LĪDERU TABULA */}
         {scene.type === 'LEADERBOARD' && !isFinalLb && (
           <div style={leaderboardOverlay}>
             <h1 style={{ fontSize: '2.6vw', color: '#ffc107', textAlign: 'center', margin: '0 0 20px 0' }}>
@@ -581,10 +582,19 @@ export default function Presentation() {
               {leaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => {
                 const globalIndex = leaderboardPage * 10 + i + 1;
                 const scoreToDisplay = isRoundLb ? (p.roundScore ?? 0) : p.score;
+                const timeToDisplay = isRoundLb ? (p.roundTimeMs || 0) : (p.totalTimeMs || 0);
+
                 return (
                   <div key={p.id || globalIndex} style={leaderRow}>
                     <span>{globalIndex}. {p.name}</span>
-                    <span style={{ fontWeight: 'bold', color: 'gold' }}>{scoreToDisplay} pt</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                      <span style={timeTagStyle}>
+                        ⏱️ {(timeToDisplay / 1000).toFixed(2)}s
+                      </span>
+                      <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
+                        {scoreToDisplay} pt
+                      </span>
+                    </div>
                   </div>
                 );
               })}
@@ -613,11 +623,14 @@ export default function Presentation() {
                         transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
-                      <span style={{ fontSize: '2vw', fontWeight: 'bold', color: '#fff', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '2vw', fontWeight: 'bold', color: '#fff', marginBottom: '4px' }}>
                         {secondPlace.name}
                       </span>
-                      <span style={{ fontSize: '1.4vw', color: '#ffc107', marginBottom: '10px' }}>
+                      <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>
                         {secondPlace.score} pt
+                      </span>
+                      <span style={{ fontSize: '1vw', color: '#00e5ff', marginBottom: '8px' }}>
+                        ⏱️ {((secondPlace.totalTimeMs || 0) / 1000).toFixed(2)}s
                       </span>
                       <div style={{ width: '180px', height: '180px', background: 'linear-gradient(to top, #7f8c8d, #bdc3c7)', borderRadius: '15px 15px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '3px solid #fff' }}>
                         <span style={{ fontSize: '4.5vw', fontWeight: 'bold', color: '#000' }}>🥈 2</span>
@@ -637,11 +650,14 @@ export default function Presentation() {
                       }}
                     >
                       <div style={{ fontSize: '2.5vw', marginBottom: '4px' }}>👑</div>
-                      <span style={{ fontSize: '2.5vw', fontWeight: 'bold', color: '#ffd700', marginBottom: '8px', textShadow: '0 0 15px #ffd700' }}>
+                      <span style={{ fontSize: '2.5vw', fontWeight: 'bold', color: '#ffd700', marginBottom: '4px', textShadow: '0 0 15px #ffd700' }}>
                         {firstPlace.name}
                       </span>
-                      <span style={{ fontSize: '1.6vw', color: '#fff', fontWeight: 'bold', marginBottom: '10px' }}>
+                      <span style={{ fontSize: '1.5vw', color: '#fff', fontWeight: 'bold' }}>
                         {firstPlace.score} pt
+                      </span>
+                      <span style={{ fontSize: '1.1vw', color: '#00e5ff', marginBottom: '8px' }}>
+                        ⏱️ {((firstPlace.totalTimeMs || 0) / 1000).toFixed(2)}s
                       </span>
                       <div style={{ width: '220px', height: '260px', background: 'linear-gradient(to top, #f39c12, #f1c40f)', borderRadius: '20px 20px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '4px solid #fff', boxShadow: '0 0 40px rgba(241,196,15,0.7)' }}>
                         <span style={{ fontSize: '6vw', fontWeight: 'bold', color: '#000' }}>🥇 1</span>
@@ -660,11 +676,14 @@ export default function Presentation() {
                         transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
-                      <span style={{ fontSize: '2vw', fontWeight: 'bold', color: '#fff', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '2vw', fontWeight: 'bold', color: '#fff', marginBottom: '4px' }}>
                         {thirdPlace.name}
                       </span>
-                      <span style={{ fontSize: '1.4vw', color: '#ffc107', marginBottom: '10px' }}>
+                      <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>
                         {thirdPlace.score} pt
+                      </span>
+                      <span style={{ fontSize: '1vw', color: '#00e5ff', marginBottom: '8px' }}>
+                        ⏱️ {((thirdPlace.totalTimeMs || 0) / 1000).toFixed(2)}s
                       </span>
                       <div style={{ width: '180px', height: '130px', background: 'linear-gradient(to top, #8e44ad, #cd7f32)', borderRadius: '15px 15px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '3px solid #fff' }}>
                         <span style={{ fontSize: '4vw', fontWeight: 'bold', color: '#000' }}>🥉 3</span>
@@ -686,7 +705,14 @@ export default function Presentation() {
                     return (
                       <div key={p.id || globalRank} style={leaderRow}>
                         <span>{globalRank}. {p.name}</span>
-                        <span style={{ fontWeight: 'bold', color: 'gold' }}>{p.score} pt</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                          <span style={timeTagStyle}>
+                            ⏱️ {((p.totalTimeMs || 0) / 1000).toFixed(2)}s
+                          </span>
+                          <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
+                            {p.score} pt
+                          </span>
+                        </div>
                       </div>
                     );
                   })}
@@ -810,7 +836,7 @@ const leaderboardOverlay: React.CSSProperties = {
   background: 'rgba(10, 10, 10, 0.95)',
   padding: '35px',
   borderRadius: '20px',
-  width: '60vw',
+  width: '65vw',
   maxHeight: '75vh',
   zIndex: 40,
   border: '2px solid #444',
@@ -825,4 +851,13 @@ const leaderRow: React.CSSProperties = {
   fontSize: '1.8vw',
   borderBottom: '1px solid #333',
   padding: '8px 0'
+};
+
+const timeTagStyle: React.CSSProperties = {
+  fontSize: '1.2vw',
+  color: '#00e5ff',
+  background: 'rgba(0, 229, 255, 0.12)',
+  padding: '2px 8px',
+  borderRadius: '6px',
+  border: '1px solid rgba(0, 229, 255, 0.4)'
 };

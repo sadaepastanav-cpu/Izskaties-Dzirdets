@@ -82,6 +82,7 @@ const clearSnapshot = (pin: string) => {
   }
 };
 
+// BALSOJUMA APSTRĀDE
 const handleVote = (pin: string, answers: string[], playerId: string) => {
   const s = sessions.get(pin);
   const activeParticipantsCount = participants.get(pin)?.size || 0;
@@ -107,17 +108,18 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
 
     io.to(pin).emit('votes-updated', { summary, votedCount: s.votes.length });
 
+    // Kad visi nobalsojuši -> pārejam uz STATS, bet statistiku automātiski neatklājam (gaida 'C')
     if (activeParticipantsCount > 0 && s.votes.length >= activeParticipantsCount) {
       s.subState = 'STATS';
       if (s.currentScene) s.currentScene.endTime = Date.now();
-      io.to(pin).emit('stats-revealed', { summary, votedCount: s.votes.length });
+      io.to(pin).emit('state-update', { ...s.currentScene, subState: 'STATS' });
       io.to(pin).emit('video-command', 'pause');
       saveSnapshot(pin);
     }
   }
 };
 
-// REST API
+// REST MARŠRUTI
 app.get('/api/current-path', (_req, res) => res.json({ currentPath: currentProjectPath }));
 
 app.post('/api/set-path', (req, res) => {
@@ -248,7 +250,6 @@ io.on('connection', (socket) => {
     saveSnapshot(pin);
   });
 
-  // 1. PUNKTS: IESPĒJA NOLASĪT ŠOVA DIZAINU VĒL PIRMS IELOGOŠANĀS
   socket.on('get-branding', (data: { pin: string }) => {
     const cleanPin = String(data?.pin || '').trim();
     const s = sessions.get(cleanPin);
@@ -283,6 +284,7 @@ io.on('connection', (socket) => {
     });
   });
 
+  // STATISTIKAS PĀRSLĒGŠANA AR 'C'
   socket.on('host:toggle-chart', (data: { pin: string }) => {
     io.to(data.pin).emit('toggle-audience-chart');
   });
@@ -370,17 +372,7 @@ io.on('connection', (socket) => {
       }
     }
 
-    // PĀREJA AR SPACE
-    if (s.subState === 'REVEAL') {
-      const shouldShowStats = s.currentScene?.config?.showStatsAfterReveal;
-      if (shouldShowStats && !s.statsShownAfterReveal) {
-        s.statsShownAfterReveal = true;
-        io.to(pin).emit('toggle-audience-chart', true);
-        saveSnapshot(pin);
-        return;
-      }
-    }
-
+    // PĀREJA UZ NĀKAMO SLAIDU
     if (
       s.subState === 'IDLE' ||
       s.subState === 'REVEAL' ||
@@ -395,7 +387,6 @@ io.on('connection', (socket) => {
       s.currentScene = s.scenes[s.currentSceneIdx];
       s.votes = [];
       s.isRevealed = false;
-      s.statsShownAfterReveal = false;
       s.subState = 'READY';
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
@@ -434,12 +425,14 @@ io.on('connection', (socket) => {
       });
       saveSnapshot(pin);
     } else if (s.subState === 'ACTIVE') {
+      // Pārtrauc balsojumu, bet statistiku automātiski neatver — gaida vadītāja 'C'
       s.subState = 'STATS';
       s.currentScene.endTime = Date.now();
-      io.to(pin).emit('stats-revealed');
+      io.to(pin).emit('state-update', { ...s.currentScene, subState: 'STATS' });
       io.to(pin).emit('video-command', 'pause');
       saveSnapshot(pin);
     } else if (s.subState === 'STATS') {
+      // Atklāj pareizo atbildi (REVEAL) — statistika joprojām parādās tikai ar 'C'
       s.subState = 'REVEAL';
       s.isRevealed = true;
       const config = s.currentScene?.config || {};

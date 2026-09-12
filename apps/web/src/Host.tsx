@@ -13,6 +13,9 @@ export default function Host() {
   const [leaderboardPage, setLeaderboardPage] = useState<number>(0);
   const [podiumStage, setPodiumStage] = useState<number>(0);
 
+  const [playersList, setPlayersList] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER'>('SCENES');
+
   const loadProjects = async (folderPath?: string) => {
     try {
       setIsLoading(true);
@@ -83,6 +86,7 @@ export default function Host() {
     setScenes([]);
     setLeaderboardPage(0);
     setPodiumStage(0);
+    setPlayersList([]);
     localStorage.removeItem('active_pin');
   };
 
@@ -92,7 +96,7 @@ export default function Host() {
     socket.emit('host:change-leaderboard-page', { pin, page: newPage });
   };
 
-  // 3. PUNKTS: STATISTIKAS IESLĒGŠANA AR 'C'
+  // Pārslēgt statistiku ekrānā ar 'C'
   const toggleChart = () => {
     if (pin) socket.emit('host:toggle-chart', { pin });
   };
@@ -113,11 +117,22 @@ export default function Host() {
       }
     };
 
-    const handlePodiumStage = (stage: number) => setPodiumStage(stage);
+    const handlePresence = (data: any) => {
+      if (Array.isArray(data?.players)) {
+        setPlayersList(data.players);
+      }
+    };
+
+    const handleLeaderboard = (payload: any) => {
+      const list = Array.isArray(payload) ? payload : (payload?.data || []);
+      setPlayersList(list);
+    };
 
     socket.on('session-info', handleSessionInfo);
     socket.on('state-update', handleStateUpdate);
-    socket.on('podium-stage-change', handlePodiumStage);
+    socket.on('presence-update', handlePresence);
+    socket.on('leaderboard-update', handleLeaderboard);
+    socket.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
@@ -136,7 +151,9 @@ export default function Host() {
     return () => {
       socket.off('session-info', handleSessionInfo);
       socket.off('state-update', handleStateUpdate);
-      socket.off('podium-stage-change', handlePodiumStage);
+      socket.off('presence-update', handlePresence);
+      socket.off('leaderboard-update', handleLeaderboard);
+      socket.off('podium-stage-change');
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [pin]);
@@ -190,13 +207,12 @@ export default function Host() {
         </div>
 
         <div style={{ display: 'flex', gap: '8px' }}>
-          {/* 3. PUNKTS: STATISTIKAS POGA 'C' */}
-          <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas grafiku ekrānā">
+          {/* STATISTIKAS PĀRSLĒGŠANAS POGA */}
+          <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas skaitļus ekrānā">
             📊 Statistika [C]
           </button>
-
-          <button onClick={() => socket.emit('host:simulate-players', { pin, count: 50 })} style={btnGray}>
-            🤖 +50 Boti
+          <button onClick={() => socket.emit('host:simulate-players', { pin, count: 20 })} style={btnGray}>
+            🤖 +20 Boti
           </button>
           <button onClick={() => window.open(`/present/${pin}`, '_blank')} style={btnBlue}>
             🖥️ Projektora ekrāns
@@ -212,6 +228,7 @@ export default function Host() {
         <div style={{ marginTop: '5px', opacity: 0.9 }}>
           Slaids: <strong>{currentScene?.title || 'Nav sākts'}</strong> | Fāze:{' '}
           <span style={{ color: '#ffc107', fontWeight: 'bold' }}>{currentScene?.subState || 'IDLE'}</span>
+          {' '}| <em>Spiediet [ C ], lai parādītu/paslēptu statistiku!</em>
         </div>
       </div>
 
@@ -245,28 +262,95 @@ export default function Host() {
         </div>
       )}
 
-      <div style={{ maxWidth: '800px', margin: '0 auto' }}>
-        <h3>Slaidu secība:</h3>
-        {scenes.map((s, i) => {
-          const isActive = currentScene?.id === s.id;
-          return (
-            <div
-              key={s.id || i}
-              onClick={() => socket.emit('host:next-scene', { pin, scene: s })}
-              style={{
-                ...slideRow,
-                background: isActive ? '#28a745' : '#222',
-                border: isActive ? '2px solid #fff' : '1px solid #444'
-              }}
-            >
-              <span>
-                {i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})
-                {s.type === 'LEADERBOARD' && ` [${s.config?.lbType || 'TOTAL'}]`}
-              </span>
-              {isActive && <span style={activeBadge}>{currentScene?.subState || 'IDLE'}</span>}
-            </div>
-          );
-        })}
+      <div style={{ maxWidth: '850px', margin: '0 auto' }}>
+        <div style={{ display: 'flex', gap: '10px', borderBottom: '2px solid #333', marginBottom: '15px' }}>
+          <button
+            onClick={() => setActiveTab('SCENES')}
+            style={{
+              ...tabButton,
+              borderBottom: activeTab === 'SCENES' ? '3px solid #007bff' : 'none',
+              color: activeTab === 'SCENES' ? '#fff' : '#888'
+            }}
+          >
+            📋 Slaidu secība ({scenes.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('ANALYZER')}
+            style={{
+              ...tabButton,
+              borderBottom: activeTab === 'ANALYZER' ? '3px solid #00e5ff' : 'none',
+              color: activeTab === 'ANALYZER' ? '#00e5ff' : '#888'
+            }}
+          >
+            📈 Analītika & Spēlētāju laiki ({playersList.length})
+          </button>
+        </div>
+
+        {activeTab === 'SCENES' && (
+          <div>
+            {scenes.map((s, i) => {
+              const isActive = currentScene?.id === s.id;
+              return (
+                <div
+                  key={s.id || i}
+                  onClick={() => socket.emit('host:next-scene', { pin, scene: s })}
+                  style={{
+                    ...slideRow,
+                    background: isActive ? '#28a745' : '#222',
+                    border: isActive ? '2px solid #fff' : '1px solid #444'
+                  }}
+                >
+                  <span>
+                    {i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})
+                    {s.type === 'LEADERBOARD' && ` [${s.config?.lbType || 'TOTAL'}]`}
+                  </span>
+                  {isActive && <span style={activeBadge}>{currentScene?.subState || 'IDLE'}</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {activeTab === 'ANALYZER' && (
+          <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
+            <h4 style={{ margin: '0 0 12px 0', color: '#00e5ff' }}>
+              ⏱️ SPĒLĒTĀJU REZULTĀTI UN APDOMAS LAIKI (TIE-BREAKER ANALYZER)
+            </h4>
+
+            {playersList.length === 0 ? (
+              <p style={{ color: '#888', fontStyle: 'italic' }}>Pagaidām nav pieslēdzies neviens spēlētājs.</p>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.95rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid #444', color: '#aaa' }}>
+                    <th style={{ padding: '8px' }}>#</th>
+                    <th style={{ padding: '8px' }}>Vārds</th>
+                    <th style={{ padding: '8px' }}>Pults ID</th>
+                    <th style={{ padding: '8px' }}>Punkti</th>
+                    <th style={{ padding: '8px' }}>Kārtas punkti</th>
+                    <th style={{ padding: '8px' }}>Kopējais laiks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {playersList.map((p, idx) => (
+                    <tr key={p.id || idx} style={{ borderBottom: '1px solid #2a2a2a' }}>
+                      <td style={{ padding: '8px', fontWeight: 'bold', color: idx === 0 ? 'gold' : '#fff' }}>
+                        {idx + 1}.
+                      </td>
+                      <td style={{ padding: '8px' }}>{p.name}</td>
+                      <td style={{ padding: '8px', color: '#ffc107' }}>Pults #{p.deviceNumber || idx + 1}</td>
+                      <td style={{ padding: '8px', fontWeight: 'bold', color: 'gold' }}>{p.score ?? 0} pt</td>
+                      <td style={{ padding: '8px', color: '#28a745' }}>{p.roundScore ?? 0} pt</td>
+                      <td style={{ padding: '8px', color: '#00e5ff', fontWeight: 'bold' }}>
+                        ⏱️ {((p.totalTimeMs || 0) / 1000).toFixed(2)}s
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -424,4 +508,13 @@ const btnNav: React.CSSProperties = {
   borderRadius: '4px',
   cursor: 'pointer',
   fontWeight: 'bold'
+};
+
+const tabButton: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  padding: '10px 15px',
+  fontSize: '1rem',
+  fontWeight: 'bold',
+  cursor: 'pointer'
 };
