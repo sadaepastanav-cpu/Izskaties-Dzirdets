@@ -144,7 +144,7 @@ export default function Presentation() {
   const [podiumStage, setPodiumStage] = useState(0);
   const [isMediaReady, setIsMediaReady] = useState(false);
 
-  // Īstā saite telefonam (LAN vai Tunelis)
+  // Īstā saite telefonam (LAN vai Cloudflare Tunelis)
   const [connectionUrl, setConnectionUrl] = useState<string>('');
   const [testedBuzzerCounts, setTestedBuzzerCounts] = useState<Record<string, number>>({});
 
@@ -152,17 +152,41 @@ export default function Presentation() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    if (pin) socket.emit('join-session', { pin, name: 'EKRĀNS', playerId: 'scr_' + pin });
+    // 1. Pieslēdzamies sesijai
+    if (pin) {
+      socket.emit('join-session', { pin, name: 'EKRĀNS', playerId: 'scr_' + pin });
+    }
 
-    // Iegūstam sesijas datus un saiti
+    // 2. Nolasām tīkla un tuneļa datus caur API
+    fetch(`${BACKEND_URL}/api/network-ip`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.tunnelUrl) setConnectionUrl(d.tunnelUrl);
+      })
+      .catch(() => {});
+
+    // 3. Iegūstam sesijas datus no join-success
+    const handleJoinSuccess = (data: any) => {
+      if (data?.connectionUrl) setConnectionUrl(data.connectionUrl);
+      if (data?.currentScene) setScene(data.currentScene);
+    };
+
     const handleSessionInfo = (data: any) => {
       if (data?.state?.connectionUrl) setConnectionUrl(data.state.connectionUrl);
     };
-    socket.on('session-info', handleSessionInfo);
 
-    socket.on('connection-url-changed', (newUrl: string) => {
-      setConnectionUrl(newUrl);
-    });
+    const handleConnectionUrlChanged = (newUrl: string) => {
+      if (newUrl) setConnectionUrl(newUrl);
+    };
+
+    const handleTunnelReady = (data: { url: string }) => {
+      if (data?.url) setConnectionUrl(data.url);
+    };
+
+    socket.on('join-success', handleJoinSuccess);
+    socket.on('session-info', handleSessionInfo);
+    socket.on('connection-url-changed', handleConnectionUrlChanged);
+    socket.on('tunnel-ready', handleTunnelReady);
 
     const handleStateUpdate = (newScene: any) => {
       setScene((prevScene: any) => {
@@ -233,8 +257,10 @@ export default function Presentation() {
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
+      socket.off('join-success', handleJoinSuccess);
       socket.off('session-info', handleSessionInfo);
-      socket.off('connection-url-changed');
+      socket.off('connection-url-changed', handleConnectionUrlChanged);
+      socket.off('tunnel-ready', handleTunnelReady);
       socket.off('state-update', handleStateUpdate);
       socket.off('votes-updated');
       socket.off('presence-update');
@@ -379,7 +405,7 @@ export default function Presentation() {
     );
   }
 
-  // PILNĪGI DROŠA UN DERĪGA SAITE TELEFONAM (NEKAD NAV TIKAI 'LOCALHOST')
+  // DINAMISKĀ SAITE TELEFONAM (AUTOMĀTISKI IZMANTO CLOUDFLARE TŪNELI)
   const baseHost = connectionUrl && connectionUrl.trim() !== '' ? connectionUrl.trim() : window.location.origin;
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
@@ -397,13 +423,11 @@ export default function Presentation() {
               <span style={{ fontSize: '1.8vw', color: '#888' }}>PIEVIENOJIES SPĒLEI: </span>
               <span style={{ fontSize: '3vw', color: '#00ff00', fontWeight: 'bold' }}>PIN: {pin}</span>
             </div>
+            {/* QR KODS BEZ ADRESES TEKSTA */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 15px', borderRadius: '12px' }}>
               <img src={qrCodeUrl} alt="QR" style={{ width: '90px', height: '90px' }} />
               <div style={{ textAlign: 'left', color: '#000' }}>
                 <div style={{ fontWeight: 'bold', fontSize: '1vw' }}>Skenē kamerā!</div>
-                <div style={{ fontSize: '0.8vw', color: '#555', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {baseHost}
-                </div>
               </div>
             </div>
           </div>
@@ -474,12 +498,10 @@ export default function Presentation() {
             <h1 style={{ fontSize: '8vw', margin: 0, letterSpacing: '0.8vw', lineHeight: 1, color: '#fff' }}>{pin}</h1>
           </div>
 
+          {/* QR KODS BEZ ADRESES TEKSTA */}
           <div style={{ background: '#fff', padding: '12px 16px', borderRadius: '15px', display: 'flex', flexDirection: 'column', alignItems: 'center', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
             <img src={qrCodeUrl} alt="QR" style={{ width: '135px', height: '135px' }} />
             <span style={{ color: '#000', fontSize: '0.9vw', fontWeight: 'bold', marginTop: '6px' }}>Skenē kamerā!</span>
-            <span style={{ color: '#555', fontSize: '0.75vw', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {baseHost}
-            </span>
           </div>
         </div>
 

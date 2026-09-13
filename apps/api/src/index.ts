@@ -8,6 +8,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { PrismaClient } from '@prisma/client';
 import multer from 'multer';
+import { spawn } from 'child_process';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
@@ -16,6 +17,52 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: '*' } });
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3000;
+
+let publicTunnelUrl = '';
+
+function startCloudflareTunnel() {
+  console.log('[Cloudflare] Startējam tuneli...');
+
+  try {
+    const tunnel = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5173'], {
+      shell: true
+    });
+
+    const handleOutput = (data: any) => {
+      const output = data.toString();
+      const match = output.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+      if (match && !publicTunnelUrl) {
+        publicTunnelUrl = match[0];
+        console.log(`\n=========================================`);
+        console.log(`🚀 DINAMISKAIS CLOUDFLARE LINKS: ${publicTunnelUrl}`);
+        console.log(`=========================================\n`);
+
+        // 1. Paziņojam visiem pieslēgtajiem logiem (Host, Presenter u.c.)
+        io.emit('tunnel-ready', { url: publicTunnelUrl });
+
+        // 2. Automātiski atjauninām visas jau aktīvās sesijas uz jauno Cloudflare saiti
+        sessions.forEach((sessionData, sessionPin) => {
+          sessionData.connectionUrl = publicTunnelUrl;
+          io.to(sessionPin).emit('connection-url-changed', publicTunnelUrl);
+          saveSnapshot(sessionPin);
+        });
+      }
+    };
+
+    tunnel.stdout?.on('data', handleOutput);
+    tunnel.stderr?.on('data', handleOutput);
+
+    tunnel.on('error', (err) => {
+      console.error('⚠️ [Cloudflare] Kļūda palaižot cloudflared:', err.message);
+    });
+
+    tunnel.on('close', (code) => {
+      console.log(`[Cloudflare] Tunelis aizvērts (${code})`);
+    });
+  } catch (err: any) {
+    console.error('⚠️ [Cloudflare] Izsaukuma kļūda:', err.message);
+  }
+}
 
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
@@ -136,8 +183,12 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
 };
 
 // REST API
+app.get('/api/tunnel-url', (_req, res) => {
+  res.json({ tunnelUrl: publicTunnelUrl });
+});
+
 app.get('/api/network-ip', (_req, res) => {
-  res.json({ localIp: getLocalIpAddress() });
+  res.json({ localIp: getLocalIpAddress(), tunnelUrl: publicTunnelUrl });
 });
 
 app.get('/api/current-path', (_req, res) => res.json({ currentPath: currentProjectPath }));
@@ -246,13 +297,22 @@ app.post('/api/recover-session', (_req, res) => {
 
 // SOCKET.IO
 io.on('connection', (socket) => {
+  // Ja tunelis jau ir aktīvs, uzreiz paziņojam tikko pieslēgtajam klientam
+  if (publicTunnelUrl) {
+    socket.emit('tunnel-ready', { url: publicTunnelUrl });
+  }
+
   socket.on('host:create-session', (data: any) => {
     const pin = data.existingPin || Math.floor(1000 + Math.random() * 9000).toString();
+
+    // Prioritāte: norādītā saite -> automātiskais Cloudflare tunelis -> lokālais Wi-Fi
+    const finalUrl = data.connectionUrl || publicTunnelUrl || `http://${getLocalIpAddress()}:5173`;
+
     const sessionData = {
       currentSceneIdx: -1,
       scenes: data.projectData?.scenes || [],
       branding: data.projectData?.branding || {},
-      connectionUrl: data.connectionUrl || '', // Saglabājam izvēlēto LAN vai tuneļa adresi
+      connectionUrl: finalUrl,
       subState: 'IDLE',
       votes: [],
       currentScene: null,
@@ -272,7 +332,6 @@ io.on('connection', (socket) => {
     saveSnapshot(pin);
   });
 
-  // Iespēja dinamiski nomainīt saiti sesijas laikā
   socket.on('host:update-connection-url', (data: { pin: string; connectionUrl: string }) => {
     const s = sessions.get(data.pin);
     if (s) {
@@ -629,7 +688,7 @@ io.on('connection', (socket) => {
         playerId: data.playerId,
         deviceNumber: playerObj?.deviceNumber || 1,
         branding: session?.branding || {},
-        connectionUrl: session?.connectionUrl || '',
+        connectionUrl: session?.connectionUrl || publicTunnelUrl || '',
         currentScene: session?.currentScene,
         subState: session?.subState
       });
@@ -658,6 +717,9 @@ io.on('connection', (socket) => {
 });
 
 httpServer.listen(PORT, () => {
-  console.log(`🚀 EVENT STUDIO SERVERIS PALASTS UZ PORTA: ${PORT}`);
+  console.log(`🚀 EVENT STUDIO SERVERIS PALAISTS UZ PORTA: ${PORT}`);
   console.log(`📡 Lokālā tīkla IP adrese: http://${getLocalIpAddress()}:5173`);
+
+  // Palaižam Cloudflare tuneli
+  startCloudflareTunnel();
 });

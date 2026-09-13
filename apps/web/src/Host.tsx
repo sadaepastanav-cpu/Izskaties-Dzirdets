@@ -20,21 +20,56 @@ export default function Host() {
 
   // TĪKLA UN TUNEĻA IZVĒLES IESTATĪJUMI
   const [connectionMode, setConnectionMode] = useState<'LAN' | 'TUNNEL'>(
-    (localStorage.getItem('event_conn_mode') as any) || 'LAN'
+    (localStorage.getItem('event_conn_mode') as any) || 'TUNNEL'
   );
   const [localIp, setLocalIp] = useState<string>('localhost');
   const [customTunnelUrl, setCustomTunnelUrl] = useState<string>(
     localStorage.getItem('event_tunnel_url') || ''
   );
+  const [isTunnelAutoDetected, setIsTunnelAutoDetected] = useState(false);
 
-  // Nolasām datora reālo Wi-Fi IP adresi no servera
+  // 1. Automātiski uztveram Cloudflare tuneli no visiem avotiem (URL parametrs, API, Socket)
   useEffect(() => {
+    // A) Pārbaudām, vai saite nav nodota URL parametrā (?tunnel=https://...)
+    const urlParams = new URLSearchParams(window.location.search);
+    const tunnelParam = urlParams.get('tunnel');
+    if (tunnelParam) {
+      setCustomTunnelUrl(tunnelParam);
+      setConnectionMode('TUNNEL');
+      setIsTunnelAutoDetected(true);
+      localStorage.setItem('event_tunnel_url', tunnelParam);
+    }
+
+    // B) Nolasām IP un iespējamo tuneli caur REST API
     fetch(`${BACKEND_URL}/api/network-ip`)
       .then((r) => r.json())
       .then((d) => {
         if (d?.localIp) setLocalIp(d.localIp);
+        if (d?.tunnelUrl) {
+          setCustomTunnelUrl(d.tunnelUrl);
+          setConnectionMode('TUNNEL');
+          setIsTunnelAutoDetected(true);
+          localStorage.setItem('event_tunnel_url', d.tunnelUrl);
+        }
       })
       .catch(() => {});
+
+    // C) Klausāmies reāllaika Socket paziņojumu, tiklīdz Cloudflare ir gatavs
+    const handleTunnelReady = (data: { url: string }) => {
+      if (data?.url) {
+        console.log('🚀 [Cloudflare] Automātiski saņemta tuneļa saite:', data.url);
+        setCustomTunnelUrl(data.url);
+        setConnectionMode('TUNNEL');
+        setIsTunnelAutoDetected(true);
+        localStorage.setItem('event_tunnel_url', data.url);
+      }
+    };
+
+    socket.on('tunnel-ready', handleTunnelReady);
+
+    return () => {
+      socket.off('tunnel-ready', handleTunnelReady);
+    };
   }, []);
 
   // Aprēķinām aktīvo spēles saiti telefonam
@@ -138,12 +173,6 @@ export default function Host() {
     socket.emit('host:update-player', { pin, playerId, ...updates });
   };
 
-  // Nomainīt saiti jau palaistā sesijā
-  const applyConnectionUrlLive = (newUrl: string) => {
-    if (!pin) return;
-    socket.emit('host:update-connection-url', { pin, connectionUrl: newUrl });
-  };
-
   useEffect(() => {
     const handleSessionInfo = (data: any) => {
       setPin(data.pin);
@@ -215,10 +244,20 @@ export default function Host() {
         <div style={{ ...cardBox, border: '1px solid #007bff', marginBottom: '20px', background: '#182430' }}>
           <h3 style={{ margin: '0 0 10px 0', color: '#00e5ff' }}>📡 KĀ SPĒLĒTĀJI PIESLĒGSIES?</h3>
           <p style={{ fontSize: '0.85rem', color: '#aaa', margin: '0 0 15px 0' }}>
-            Izvēlies, kāda saite tiks iekodēta QR kodā, lai telefoni to uzreiz atvērtu kā interneta vietni:
+            Saite, kas tiks iekodēta QR kodā, lai telefoni to uzreiz atvērtu:
           </p>
 
           <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+            <button
+              onClick={() => setConnectionMode('TUNNEL')}
+              style={{
+                ...btnMode,
+                background: connectionMode === 'TUNNEL' ? '#6f42c1' : '#222',
+                borderColor: connectionMode === 'TUNNEL' ? '#00e5ff' : '#444'
+              }}
+            >
+              🌐 Publiskais tunelis (Cloudflare)
+            </button>
             <button
               onClick={() => setConnectionMode('LAN')}
               style={{
@@ -229,16 +268,6 @@ export default function Host() {
             >
               📶 Lokālais Wi-Fi (LAN)
             </button>
-            <button
-              onClick={() => setConnectionMode('TUNNEL')}
-              style={{
-                ...btnMode,
-                background: connectionMode === 'TUNNEL' ? '#6f42c1' : '#222',
-                borderColor: connectionMode === 'TUNNEL' ? '#d63384' : '#444'
-              }}
-            >
-              🌐 Publiskais tunelis (4G/5G)
-            </button>
           </div>
 
           {connectionMode === 'LAN' ? (
@@ -246,19 +275,32 @@ export default function Host() {
               <span style={{ color: '#00ff00', fontWeight: 'bold' }}>✓ Wi-Fi adrese: </span>
               <code>http://{localIp}:5173</code>
               <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '4px' }}>
-                Telefoniem jābūt pieslēgtiem tam pašam Wi-Fi tīklam. QR kods atvērsies uzreiz!
+                Telefoniem jābūt pieslēgtiem tam pašam Wi-Fi tīklam.
               </div>
             </div>
           ) : (
-            <div style={{ ...noticeBox, background: '#251525', borderColor: '#d63384' }}>
-              <label style={{ display: 'block', fontSize: '0.85rem', color: '#ff79c6', marginBottom: '4px' }}>
-                Ievadi sava tuneļa saiti (Cloudflare vai Localtunnel):
-              </label>
+            <div style={{ ...noticeBox, background: '#1a1025', borderColor: customTunnelUrl ? '#00ff00' : '#d63384' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <span style={{ fontSize: '0.85rem', color: customTunnelUrl ? '#00ff00' : '#ff79c6', fontWeight: 'bold' }}>
+                  {customTunnelUrl ? '✓ Cloudflare tunelis aktīvs (Automātiski savienots):' : '⏳ Gaidām Cloudflare tuneļa saiti...'}
+                </span>
+                {isTunnelAutoDetected && (
+                  <span style={{ fontSize: '0.75rem', background: '#28a745', color: '#fff', padding: '2px 6px', borderRadius: '4px' }}>
+                    AUTO
+                  </span>
+                )}
+              </div>
               <input
                 value={customTunnelUrl}
                 onChange={(e) => setCustomTunnelUrl(e.target.value)}
-                placeholder="piem., https://mana-spele.loca.lt vai Cloudflare saite"
-                style={{ ...folderInputHost, color: '#ff79c6', width: '100%', boxSizing: 'border-box' }}
+                placeholder="Gaidām tuneli vai ievadi manuāli..."
+                style={{
+                  ...folderInputHost,
+                  color: '#00e5ff',
+                  borderColor: customTunnelUrl ? '#00e5ff' : '#555',
+                  width: '100%',
+                  boxSizing: 'border-box'
+                }}
               />
             </div>
           )}
