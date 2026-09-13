@@ -28,7 +28,9 @@ export default function Player() {
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [leaderboardType, setLeaderboardType] = useState<string>('TOTAL');
 
-  // Mobilais brendings
+  // 5. PUNKTS: Pults testa spiedienu skaitītājs telefonā
+  const [buzzerTestPresses, setBuzzerTestPresses] = useState(0);
+
   const [branding, setBranding] = useState<any>(() => {
     try {
       const cached = localStorage.getItem('cached_branding');
@@ -37,7 +39,8 @@ export default function Player() {
         appLogo: '',
         appBgImage: '',
         welcomeImage: '',
-        appBgColor: '#121212'
+        appBgColor: '#121212',
+        lobbyMode: 'CIRCLE'
       };
     } catch {
       return {
@@ -45,12 +48,13 @@ export default function Player() {
         appLogo: '',
         appBgImage: '',
         welcomeImage: '',
-        appBgColor: '#121212'
+        appBgColor: '#121212',
+        lobbyMode: 'CIRCLE'
       };
     }
   });
 
-  // Screen Wake Lock API — novērš telefona ekrāna iemigšanu spēles laikā
+  // Screen Wake Lock API — novērš telefona ekrāna iemigšanu
   useEffect(() => {
     let wakeLock: any = null;
     const requestWakeLock = async () => {
@@ -64,6 +68,16 @@ export default function Player() {
     return () => {
       if (wakeLock) wakeLock.release().catch(() => {});
     };
+  }, []);
+
+  // Automātiski nolasa PIN no URL parametriem (ja noskenēts QR kods)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlPin = params.get('pin');
+    if (urlPin) {
+      setPin(urlPin.trim());
+      localStorage.setItem('player_pin', urlPin.trim());
+    }
   }, []);
 
   // Pieslēgšanās serverim
@@ -135,7 +149,6 @@ export default function Player() {
     };
   }, [playerId]);
 
-  // Nolasām dizainu, kad ievadīts PIN
   useEffect(() => {
     if (socket && pin && pin.trim().length >= 4) {
       socket.emit('get-branding', { pin: pin.trim() });
@@ -165,6 +178,16 @@ export default function Player() {
     socket.emit('participant:submit-answer', { pin, answer: option || letter, answers, playerId });
   };
 
+  // 5. PUNKTS: PULTS TESTA POGA
+  const handleTestBuzzer = () => {
+    if (!socket) return;
+    try {
+      if ('vibrate' in navigator) navigator.vibrate(60);
+    } catch {}
+    setBuzzerTestPresses((prev) => prev + 1);
+    socket.emit('participant:test-buzzer', { pin, playerId });
+  };
+
   const handleLeaveOrNewGame = () => {
     sessionStorage.removeItem('player_active_session');
     localStorage.removeItem('player_pin');
@@ -173,6 +196,7 @@ export default function Player() {
     setHasStartedFirstQuestion(false);
     setMyChoice(null);
     setDeviceNumber(null);
+    setBuzzerTestPresses(0);
     setPin('');
   };
 
@@ -188,7 +212,7 @@ export default function Player() {
     backgroundPosition: 'center'
   };
 
-  // 1. IELOGOŠANĀS SKATS (AR LIELO LOGO UN JAUNO DIZAINU)
+  // 1. IELOGOŠANĀS SKATS
   if (!isJoined) {
     return (
       <div style={appBgStyle}>
@@ -236,10 +260,12 @@ export default function Player() {
     );
   }
 
-  // 2. SĀKUMA GAIDĪŠANAS / REKLĀMAS EKRĀNS (Rādās līdz pirmajam Space)
+  // 2. SĀKUMA GAIDĪŠANAS / REKLĀMAS EKRĀNS (AR 5. PUNKTA PULTS TESTA POGU)
   const isWaitingForFirstQuestion = !hasStartedFirstQuestion && (!scene || subState === 'IDLE' || subState === 'READY');
 
   if (isWaitingForFirstQuestion) {
+    const isInteractiveLobby = branding.lobbyMode === 'INTERACTIVE_DOTS';
+
     return (
       <div
         style={{
@@ -259,24 +285,39 @@ export default function Player() {
           <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
         </div>
 
-        {!branding.welcomeImage ? (
-          <div style={infoCard}>
-            {branding.appLogo && (
-              <img
-                src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
-                alt="Logo"
-                style={{ maxHeight: '110px', maxWidth: '85%', marginBottom: '15px', objectFit: 'contain' }}
-              />
-            )}
-            <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🎧</div>
-            <h2 style={{ color: '#ffc107', margin: '0 0 10px 0' }}>GAIDĀM ŠOVA SĀKUMU!</h2>
-            <p style={{ color: '#ccc', lineHeight: 1.5, margin: 0 }}>
-              Sekojiet līdzi lielajam ekrānam. Tiklīdz vadītājs palaidīs pirmo jautājumu, šeit parādīsies atbilžu pogas!
-            </p>
-          </div>
-        ) : (
-          <div />
-        )}
+        {/* 5. PUNKTS: PULTS TESTA POGA INTERAKTĪVAJĀ REŽĪMĀ */}
+        <div style={{ margin: 'auto', textAlign: 'center', padding: '20px', width: '90%', maxWidth: '360px' }}>
+          {isInteractiveLobby ? (
+            <div style={infoCard}>
+              <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>🎯</div>
+              <h2 style={{ color: '#00e5ff', margin: '0 0 10px 0', fontSize: '1.4rem' }}>PĀRBAUDI PULTI!</h2>
+              <p style={{ color: '#ccc', fontSize: '0.95rem', lineHeight: 1.4, marginBottom: '20px' }}>
+                Nospiediet pogu, lai pārbaudītu pults darbību. Tava bumbiņa lielajā ekrānā pulsēs!
+              </p>
+
+              <button onClick={handleTestBuzzer} style={testBuzzerBtn}>
+                🔴 PĀRBAUDĪT PULTI ({buzzerTestPresses >= 3 ? 'GATAVS! 🎉' : `${buzzerTestPresses}/3`})
+              </button>
+            </div>
+          ) : (
+            !branding.welcomeImage && (
+              <div style={infoCard}>
+                {branding.appLogo && (
+                  <img
+                    src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
+                    alt="Logo"
+                    style={{ maxHeight: '110px', maxWidth: '85%', marginBottom: '15px', objectFit: 'contain' }}
+                  />
+                )}
+                <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🎧</div>
+                <h2 style={{ color: '#ffc107', margin: '0 0 10px 0' }}>GAIDĀM ŠOVA SĀKUMU!</h2>
+                <p style={{ color: '#ccc', lineHeight: 1.5, margin: 0 }}>
+                  Sekojiet līdzi lielajam ekrānam. Tiklīdz vadītājs palaidīs pirmo jautājumu, šeit parādīsies atbilžu pogas!
+                </p>
+              </div>
+            )
+          )}
+        </div>
 
         <div style={darkStatusStrip}>
           <span style={{ color: '#00ff00', fontWeight: 'bold' }}>
@@ -287,7 +328,7 @@ export default function Player() {
     );
   }
 
-  // 3. SPĒLES BEIGAS (GAME OVER)
+  // 3. SPĒLES BEIGAS
   if (isGameOver) {
     return (
       <div style={appBgStyle}>
@@ -333,7 +374,7 @@ export default function Player() {
 
   const options = rawOptions.length > 0 ? rawOptions : ['A', 'B', 'C', 'D'];
 
-  // 4. SPĒLES EKRĀNS AR LIELO LOGO VIRS POGĀM
+  // 4. SPĒLES EKRĀNS
   return (
     <div style={appBgStyle}>
       <div style={mobileHeader}>
@@ -409,7 +450,7 @@ export default function Player() {
             {currentSub === 'ACTIVE' && (
               <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', boxSizing: 'border-box', padding: '5px 0' }}>
                 
-                {/* KRIETNI LIELĀKS LOGO VIRS VARIANTIEM */}
+                {/* LIELS LOGO VIRS VARIANTIEM */}
                 {branding.appLogo ? (
                   <div style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', maxHeight: '16vh', minHeight: '60px', marginBottom: '4px' }}>
                     <img
@@ -664,4 +705,18 @@ const buzzerBtnCompact: React.CSSProperties = {
   boxSizing: 'border-box',
   userSelect: 'none',
   WebkitTapHighlightColor: 'transparent'
+};
+
+const testBuzzerBtn: React.CSSProperties = {
+  width: '100%',
+  padding: '16px',
+  borderRadius: '12px',
+  background: 'linear-gradient(135deg, #e63946, #d90429)',
+  color: '#fff',
+  border: '2px solid #fff',
+  fontSize: '1.1rem',
+  fontWeight: 'bold',
+  cursor: 'pointer',
+  boxShadow: '0 0 25px rgba(217, 4, 41, 0.6)',
+  transition: 'transform 0.1s ease'
 };

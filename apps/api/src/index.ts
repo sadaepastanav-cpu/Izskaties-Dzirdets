@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import * as path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { PrismaClient } from '@prisma/client';
@@ -45,6 +46,19 @@ app.use('/project-media', (req, res, next) => {
   express.static(currentProjectPath)(req, res, next);
 });
 
+// Automātiska lokālās IP adreses noteikšana
+const getLocalIpAddress = () => {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+};
+
 const sessions = new Map<string, any>();
 const sessionScores = new Map<string, Map<string, any>>();
 const participants = new Map<string, Set<string>>();
@@ -82,10 +96,13 @@ const clearSnapshot = (pin: string) => {
   }
 };
 
-// BALSOJUMA APSTRĀDE
 const handleVote = (pin: string, answers: string[], playerId: string) => {
   const s = sessions.get(pin);
-  const activeParticipantsCount = participants.get(pin)?.size || 0;
+  const playersMap = sessionScores.get(pin);
+  const player = playersMap?.get(playerId);
+  if (player?.isDisabled) return;
+
+  const activeParticipantsCount = Array.from(playersMap?.values() || []).filter(p => !p.isDisabled).length;
 
   if (s?.subState === 'ACTIVE') {
     const now = Date.now();
@@ -108,7 +125,6 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
 
     io.to(pin).emit('votes-updated', { summary, votedCount: s.votes.length });
 
-    // Kad visi nobalsojuši -> pārejam uz STATS, bet statistiku automātiski neatklājam (gaida 'C')
     if (activeParticipantsCount > 0 && s.votes.length >= activeParticipantsCount) {
       s.subState = 'STATS';
       if (s.currentScene) s.currentScene.endTime = Date.now();
@@ -119,7 +135,11 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
   }
 };
 
-// REST MARŠRUTI
+// REST API
+app.get('/api/network-ip', (_req, res) => {
+  res.json({ localIp: getLocalIpAddress() });
+});
+
 app.get('/api/current-path', (_req, res) => res.json({ currentPath: currentProjectPath }));
 
 app.post('/api/set-path', (req, res) => {
@@ -232,10 +252,12 @@ io.on('connection', (socket) => {
       currentSceneIdx: -1,
       scenes: data.projectData?.scenes || [],
       branding: data.projectData?.branding || {},
+      connectionUrl: data.connectionUrl || '', // Saglabājam izvēlēto LAN vai tuneļa adresi
       subState: 'IDLE',
       votes: [],
       currentScene: null,
       isRevealed: false,
+      revealReadyToAdvance: false,
       currentPaging: 0,
       finalPodiumStage: 0,
       questionStartTime: 0
@@ -250,11 +272,41 @@ io.on('connection', (socket) => {
     saveSnapshot(pin);
   });
 
+  // Iespēja dinamiski nomainīt saiti sesijas laikā
+  socket.on('host:update-connection-url', (data: { pin: string; connectionUrl: string }) => {
+    const s = sessions.get(data.pin);
+    if (s) {
+      s.connectionUrl = data.connectionUrl;
+      io.to(data.pin).emit('connection-url-changed', data.connectionUrl);
+      saveSnapshot(data.pin);
+    }
+  });
+
   socket.on('get-branding', (data: { pin: string }) => {
     const cleanPin = String(data?.pin || '').trim();
     const s = sessions.get(cleanPin);
     if (s && s.branding) {
       socket.emit('session-branding', s.branding);
+    }
+  });
+
+  socket.on('participant:test-buzzer', (data: { pin: string; playerId: string }) => {
+    io.to(data.pin).emit('player-buzzer-test', { playerId: data.playerId });
+  });
+
+  socket.on('host:update-player', (data: { pin: string; playerId: string; name?: string; score?: number; totalTimeMs?: number; isDisabled?: boolean }) => {
+    const players = sessionScores.get(data.pin);
+    if (players && players.has(data.playerId)) {
+      const p = players.get(data.playerId);
+      if (data.name !== undefined) p.name = data.name;
+      if (data.score !== undefined) p.score = Number(data.score);
+      if (data.totalTimeMs !== undefined) p.totalTimeMs = Number(data.totalTimeMs);
+      if (data.isDisabled !== undefined) p.isDisabled = data.isDisabled;
+
+      const playerList = Array.from(players.values());
+      io.to(data.pin).emit('presence-update', { count: players.size, players: playerList });
+      io.to(data.pin).emit('leaderboard-update', { data: playerList });
+      saveSnapshot(data.pin);
     }
   });
 
@@ -273,6 +325,7 @@ io.on('connection', (socket) => {
           roundScore: 0,
           totalTimeMs: 0,
           roundTimeMs: 0,
+          isDisabled: false,
           isBot: true
         });
       }
@@ -284,7 +337,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // STATISTIKAS PĀRSLĒGŠANA AR 'C'
   socket.on('host:toggle-chart', (data: { pin: string }) => {
     io.to(data.pin).emit('toggle-audience-chart');
   });
@@ -298,14 +350,16 @@ io.on('connection', (socket) => {
   });
 
   const getSortedLeaderboard = (playersMap: Map<string, any>, isRound: boolean) => {
-    return Array.from(playersMap.values()).sort((a, b) => {
-      const scoreA = isRound ? (a.roundScore || 0) : (a.score || 0);
-      const scoreB = isRound ? (b.roundScore || 0) : (b.score || 0);
-      if (scoreB !== scoreA) return scoreB - scoreA;
-      const timeA = isRound ? (a.roundTimeMs || 0) : (a.totalTimeMs || 0);
-      const timeB = isRound ? (b.roundTimeMs || 0) : (b.totalTimeMs || 0);
-      return timeA - timeB;
-    });
+    return Array.from(playersMap.values())
+      .filter(p => !p.isDisabled)
+      .sort((a, b) => {
+        const scoreA = isRound ? (a.roundScore || 0) : (a.score || 0);
+        const scoreB = isRound ? (b.roundScore || 0) : (b.score || 0);
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        const timeA = isRound ? (a.roundTimeMs || 0) : (a.totalTimeMs || 0);
+        const timeB = isRound ? (b.roundTimeMs || 0) : (b.totalTimeMs || 0);
+        return timeA - timeB;
+      });
   };
 
   socket.on('host:advance', (pin: string) => {
@@ -315,7 +369,8 @@ io.on('connection', (socket) => {
 
     // FINĀLA APBALVOŠANA
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
-      const totalPlayers = playersMap?.size || 0;
+      const activePlayers = Array.from(playersMap?.values() || []).filter(p => !p.isDisabled);
+      const totalPlayers = activePlayers.length;
       if (s.finalPodiumStage === undefined) s.finalPodiumStage = 0;
 
       if (totalPlayers <= 2) {
@@ -357,7 +412,7 @@ io.on('connection', (socket) => {
 
     // LEADERBOARD LAPOŠANA
     if (s.currentScene && s.currentScene.type === 'LEADERBOARD') {
-      const totalPlayers = playersMap?.size || 0;
+      const totalPlayers = Array.from(playersMap?.values() || []).filter(p => !p.isDisabled).length;
       const maxPages = Math.ceil(totalPlayers / 10);
       if (s.currentPaging < maxPages - 1) {
         s.currentPaging++;
@@ -370,6 +425,13 @@ io.on('connection', (socket) => {
           p.roundTimeMs = 0;
         });
       }
+    }
+
+    // PAPILDU SPACE PAUZE PĒC ATBILDES ATKLĀŠANAS
+    if (s.subState === 'REVEAL' && !s.revealReadyToAdvance) {
+      s.revealReadyToAdvance = true;
+      io.to(pin).emit('reveal-wait-for-host');
+      return;
     }
 
     // PĀREJA UZ NĀKAMO SLAIDU
@@ -387,6 +449,7 @@ io.on('connection', (socket) => {
       s.currentScene = s.scenes[s.currentSceneIdx];
       s.votes = [];
       s.isRevealed = false;
+      s.revealReadyToAdvance = false;
       s.subState = 'READY';
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
@@ -411,7 +474,7 @@ io.on('connection', (socket) => {
 
       const options = s.currentScene?.config?.options || [];
       playersMap?.forEach((p, id) => {
-        if (p.isBot) {
+        if (p.isBot && !p.isDisabled) {
           const delay = Math.random() * Math.max(0.5, dur - 1) * 1000;
           setTimeout(() => {
             const currentSession = sessions.get(pin);
@@ -425,16 +488,15 @@ io.on('connection', (socket) => {
       });
       saveSnapshot(pin);
     } else if (s.subState === 'ACTIVE') {
-      // Pārtrauc balsojumu, bet statistiku automātiski neatver — gaida vadītāja 'C'
       s.subState = 'STATS';
       s.currentScene.endTime = Date.now();
       io.to(pin).emit('state-update', { ...s.currentScene, subState: 'STATS' });
       io.to(pin).emit('video-command', 'pause');
       saveSnapshot(pin);
     } else if (s.subState === 'STATS') {
-      // Atklāj pareizo atbildi (REVEAL) — statistika joprojām parādās tikai ar 'C'
       s.subState = 'REVEAL';
       s.isRevealed = true;
+      s.revealReadyToAdvance = false;
       const config = s.currentScene?.config || {};
       let correct = config.correctAnswers || [];
       const correctnessMap: Record<string, number> = config.answerCorrectness || {};
@@ -473,7 +535,7 @@ io.on('connection', (socket) => {
 
         if (playersMap) {
           const p = playersMap.get(v.playerId);
-          if (p) {
+          if (p && !p.isDisabled) {
             const timeTaken = v.timeSpentMs || 0;
             p.totalTimeMs = (p.totalTimeMs || 0) + timeTaken;
             p.roundTimeMs = (p.roundTimeMs || 0) + timeTaken;
@@ -520,6 +582,7 @@ io.on('connection', (socket) => {
       s.subState = 'IDLE';
       s.votes = [];
       s.isRevealed = false;
+      s.revealReadyToAdvance = false;
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
       io.to(data.pin).emit('state-update', s.currentScene);
@@ -547,6 +610,7 @@ io.on('connection', (socket) => {
             roundScore: 0,
             totalTimeMs: 0,
             roundTimeMs: 0,
+            isDisabled: false,
             isBot: false
           };
           players.set(data.playerId, playerObj);
@@ -565,6 +629,7 @@ io.on('connection', (socket) => {
         playerId: data.playerId,
         deviceNumber: playerObj?.deviceNumber || 1,
         branding: session?.branding || {},
+        connectionUrl: session?.connectionUrl || '',
         currentScene: session?.currentScene,
         subState: session?.subState
       });
@@ -594,4 +659,5 @@ io.on('connection', (socket) => {
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 EVENT STUDIO SERVERIS PALASTS UZ PORTA: ${PORT}`);
+  console.log(`📡 Lokālā tīkla IP adrese: http://${getLocalIpAddress()}:5173`);
 });

@@ -26,6 +26,7 @@ interface MobileBranding {
   appBgImage?: string;
   welcomeImage?: string;
   appBgColor?: string;
+  lobbyMode?: 'CIRCLE' | 'INTERACTIVE_DOTS'; // 5. PUNKTS: Sākuma ekrāna veids
 }
 
 interface CanvasElement {
@@ -60,6 +61,7 @@ interface Slide {
     scoringMode?: 'FIXED' | 'DECREASING';
     speedBonusEnabled?: boolean;
     question?: string;
+    notes?: string; // 2. PUNKTS: Piezīmes vadītājam
     optionsCount: number;
     options: string[];
     correctAnswers: string[];
@@ -81,13 +83,13 @@ export default function Studio() {
   const [mediaList, setMediaList] = useState<string[]>([]);
   const [isSnapToGrid, setIsSnapToGrid] = useState(true);
 
-  // MOBILĀS LIETOTNES BRENDINGA STĀVOKLIS
   const [mobileBranding, setMobileBranding] = useState<MobileBranding>({
     appTitle: 'EVENT BUZZER',
     appLogo: '',
     appBgImage: '',
     welcomeImage: '',
-    appBgColor: '#121212'
+    appBgColor: '#121212',
+    lobbyMode: 'CIRCLE'
   });
 
   const [slides, setSlides] = useState<Slide[]>([
@@ -102,6 +104,7 @@ export default function Studio() {
         pointsMax: 10,
         scoringMode: 'FIXED',
         speedBonusEnabled: false,
+        notes: 'Paskaidrojums vadītājam: Rīga dibināta 1201. gadā.',
         optionsCount: 4,
         options: ['Rīga', 'Liepāja', 'Daugavpils', 'Jelgava'],
         correctAnswers: ['Rīga'],
@@ -270,6 +273,7 @@ export default function Studio() {
         pointsMax: 10,
         scoringMode: 'FIXED',
         speedBonusEnabled: false,
+        notes: '',
         optionsCount: 4,
         options: ['Variants A', 'Variants B', 'Variants C', 'Variants D'],
         correctAnswers: ['Variants A'],
@@ -1163,7 +1167,7 @@ export default function Studio() {
 
         {/* LABĀ PUSE: Iestatījumu panelis */}
         <div style={sidebarRight}>
-          {/* MOBILĀS LIETOTNES DIZAINA IESTATĪJUMI */}
+          {/* MOBILĀS LIETOTNES DIZAINS UN SĀKUMA EKRĀNA IZVĒLE */}
           <div style={{ background: '#1c2833', border: '1px solid #007bff', borderRadius: '8px', padding: '10px', marginBottom: '15px' }}>
             <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#00ff00', marginBottom: '8px' }}>
               📱 MOBILĀS LIETOTNES DIZAINS
@@ -1177,9 +1181,18 @@ export default function Studio() {
               placeholder="EVENT BUZZER"
             />
 
-            <label style={labelStyle}>
-              Sākuma Logo (480 × 120 px PNG):
-            </label>
+            {/* 5. PUNKTS: SĀKUMA EKRĀNA VEIDA IZVĒLE */}
+            <label style={labelStyle}>Sākuma reģistrācijas ekrāns:</label>
+            <select
+              style={{ ...selectStyle, borderColor: '#00e5ff' }}
+              value={mobileBranding.lobbyMode || 'CIRCLE'}
+              onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyMode: e.target.value as any })}
+            >
+              <option value="CIRCLE">Klasiskais (Lielais PIN, QR un Aplis)</option>
+              <option value="INTERACTIVE_DOTS">Interaktīvais (Bumbiņas ar Pults testu)</option>
+            </select>
+
+            <label style={labelStyle}>Sākuma Logo (480 × 120 px PNG):</label>
             <select
               style={selectStyle}
               value={mobileBranding.appLogo || ''}
@@ -1191,9 +1204,7 @@ export default function Studio() {
               ))}
             </select>
 
-            <label style={labelStyle}>
-              Sākuma Reklāmas bilde (1080 × 1920 px 9:16):
-            </label>
+            <label style={labelStyle}>Sākuma Reklāmas bilde (1080 × 1920 px 9:16):</label>
             <select
               style={selectStyle}
               value={mobileBranding.welcomeImage || ''}
@@ -1205,9 +1216,7 @@ export default function Studio() {
               ))}
             </select>
 
-            <label style={labelStyle}>
-              Fona bilde (1080 × 1920 px 9:16):
-            </label>
+            <label style={labelStyle}>Fona bilde (1080 × 1920 px 9:16):</label>
             <select
               style={selectStyle}
               value={mobileBranding.appBgImage || ''}
@@ -1241,6 +1250,17 @@ export default function Studio() {
             <option value="LEADERBOARD">Leaderboard (Līderu tabula)</option>
             <option value="BILLBOARD">Billboard (Informatīvs ekrāns)</option>
           </select>
+
+          {/* 2. PUNKTS: VADĪTĀJA PIEZĪMES / KOMENTĀRS */}
+          <div style={{ margin: '8px 0', borderTop: '1px solid #333', paddingTop: '8px' }}>
+            <label style={{ ...labelStyle, color: '#ffc107', fontWeight: 'bold' }}>📝 Piezīmes vadītājam (Host Notes):</label>
+            <textarea
+              style={{ ...inputStyle, minHeight: '60px', resize: 'vertical', fontSize: '0.85rem' }}
+              value={activeSlide.config.notes || ''}
+              onChange={(e) => updateActiveSlide((s) => (s.config.notes = e.target.value))}
+              placeholder="Ieraksti skaidrojumu vai komentāru vadītājam šeit..."
+            />
+          </div>
 
           {activeSlide.type === 'LEADERBOARD' && (
             <div style={{ margin: '10px 0', borderTop: '1px solid #333', paddingTop: '10px' }}>

@@ -16,6 +16,32 @@ export default function Host() {
 
   const [playersList, setPlayersList] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER'>('SCENES');
+  const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('ORDER');
+
+  // TĪKLA UN TUNEĻA IZVĒLES IESTATĪJUMI
+  const [connectionMode, setConnectionMode] = useState<'LAN' | 'TUNNEL'>(
+    (localStorage.getItem('event_conn_mode') as any) || 'LAN'
+  );
+  const [localIp, setLocalIp] = useState<string>('localhost');
+  const [customTunnelUrl, setCustomTunnelUrl] = useState<string>(
+    localStorage.getItem('event_tunnel_url') || ''
+  );
+
+  // Nolasām datora reālo Wi-Fi IP adresi no servera
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/api/network-ip`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.localIp) setLocalIp(d.localIp);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Aprēķinām aktīvo spēles saiti telefonam
+  const activeBaseUrl =
+    connectionMode === 'TUNNEL' && customTunnelUrl.trim() !== ''
+      ? (customTunnelUrl.trim().startsWith('http') ? customTunnelUrl.trim() : `https://${customTunnelUrl.trim()}`).replace(/\/$/, '')
+      : `http://${localIp}:5173`;
 
   const loadProjects = async (folderPath?: string) => {
     try {
@@ -73,7 +99,13 @@ export default function Host() {
       if (!res.ok) throw new Error();
 
       const projectData = await res.json();
-      socket.emit('host:create-session', { projectData });
+      localStorage.setItem('event_conn_mode', connectionMode);
+      localStorage.setItem('event_tunnel_url', customTunnelUrl);
+
+      socket.emit('host:create-session', {
+        projectData,
+        connectionUrl: activeBaseUrl
+      });
     } catch {
       alert('❌ Neizdevās palaist projektu!');
     } finally {
@@ -99,6 +131,17 @@ export default function Host() {
 
   const toggleChart = () => {
     if (pin) socket.emit('host:toggle-chart', { pin });
+  };
+
+  const updatePlayer = (playerId: string, updates: any) => {
+    if (!pin) return;
+    socket.emit('host:update-player', { pin, playerId, ...updates });
+  };
+
+  // Nomainīt saiti jau palaistā sesijā
+  const applyConnectionUrlLive = (newUrl: string) => {
+    if (!pin) return;
+    socket.emit('host:update-connection-url', { pin, connectionUrl: newUrl });
   };
 
   useEffect(() => {
@@ -158,10 +201,70 @@ export default function Host() {
     };
   }, [pin]);
 
+  // QR KODA ADRESE TELEFONAM
+  const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
+
+  // SKATS 1: PROJEKTA IZVĒLE UN TĪKLA REŽĪMS
   if (!pin) {
     return (
       <div style={panelContainer}>
-        <h1 style={{ color: '#007bff', marginBottom: '25px' }}>EVENT STUDIO — VADĪTĀJA PANELIS</h1>
+        <h1 style={{ color: '#007bff', marginBottom: '20px' }}>EVENT STUDIO — VADĪTĀJA PANELIS</h1>
+        
+        {/* TĪKLA UN TUNEĻA KONFIGURĀCIJAS KASTE */}
+        <div style={{ ...cardBox, border: '1px solid #007bff', marginBottom: '20px', background: '#182430' }}>
+          <h3 style={{ margin: '0 0 10px 0', color: '#00e5ff' }}>📡 KĀ SPĒLĒTĀJI PIESLĒGSIES?</h3>
+          <p style={{ fontSize: '0.85rem', color: '#aaa', margin: '0 0 15px 0' }}>
+            Izvēlies, kāda saite tiks iekodēta QR kodā, lai telefoni to uzreiz atvērtu kā interneta vietni:
+          </p>
+
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+            <button
+              onClick={() => setConnectionMode('LAN')}
+              style={{
+                ...btnMode,
+                background: connectionMode === 'LAN' ? '#007bff' : '#222',
+                borderColor: connectionMode === 'LAN' ? '#00e5ff' : '#444'
+              }}
+            >
+              📶 Lokālais Wi-Fi (LAN)
+            </button>
+            <button
+              onClick={() => setConnectionMode('TUNNEL')}
+              style={{
+                ...btnMode,
+                background: connectionMode === 'TUNNEL' ? '#6f42c1' : '#222',
+                borderColor: connectionMode === 'TUNNEL' ? '#d63384' : '#444'
+              }}
+            >
+              🌐 Publiskais tunelis (4G/5G)
+            </button>
+          </div>
+
+          {connectionMode === 'LAN' ? (
+            <div style={noticeBox}>
+              <span style={{ color: '#00ff00', fontWeight: 'bold' }}>✓ Wi-Fi adrese: </span>
+              <code>http://{localIp}:5173</code>
+              <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '4px' }}>
+                Telefoniem jābūt pieslēgtiem tam pašam Wi-Fi tīklam. QR kods atvērsies uzreiz!
+              </div>
+            </div>
+          ) : (
+            <div style={{ ...noticeBox, background: '#251525', borderColor: '#d63384' }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: '#ff79c6', marginBottom: '4px' }}>
+                Ievadi sava tuneļa saiti (Cloudflare vai Localtunnel):
+              </label>
+              <input
+                value={customTunnelUrl}
+                onChange={(e) => setCustomTunnelUrl(e.target.value)}
+                placeholder="piem., https://mana-spele.loca.lt vai Cloudflare saite"
+                style={{ ...folderInputHost, color: '#ff79c6', width: '100%', boxSizing: 'border-box' }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* PROJEKTU MAPE */}
         <div style={cardBox}>
           <h3>📂 AKTUĀLĀ DARBA MAPE</h3>
 
@@ -198,15 +301,28 @@ export default function Host() {
 
   const isFinalLb = currentScene?.type === 'LEADERBOARD' && currentScene?.config?.lbType === 'FINAL';
 
+  const sortedPlayers = [...playersList].sort((a, b) => {
+    if (sortMode === 'SCORE') {
+      if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
+      return (a.totalTimeMs || 0) - (b.totalTimeMs || 0);
+    }
+    return (a.deviceNumber || 0) - (b.deviceNumber || 0);
+  });
+
   return (
     <div style={panelContainer}>
       <div style={topBar}>
-        <div>
-          <span style={{ color: '#aaa', fontSize: '1.2rem' }}>Aktīvā sesija: </span>
-          <span style={{ color: '#28a745', fontSize: '1.8rem', fontWeight: 'bold' }}>PIN: {pin}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <div>
+            <span style={{ color: '#aaa', fontSize: '1.1rem' }}>Aktīvā sesija: </span>
+            <span style={{ color: '#28a745', fontSize: '1.8rem', fontWeight: 'bold' }}>PIN: {pin}</span>
+          </div>
+          <div style={{ fontSize: '0.85rem', color: '#00e5ff', background: 'rgba(0,229,255,0.15)', padding: '4px 10px', borderRadius: '6px', border: '1px solid #00e5ff' }}>
+            🔗 {activeBaseUrl}
+          </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas skaitļus ekrānā">
             📊 Statistika [C]
           </button>
@@ -227,9 +343,19 @@ export default function Host() {
         <div style={{ marginTop: '5px', opacity: 0.9 }}>
           Slaids: <strong>{currentScene?.title || 'Nav sākts'}</strong> | Fāze:{' '}
           <span style={{ color: '#ffc107', fontWeight: 'bold' }}>{currentScene?.subState || 'IDLE'}</span>
-          {' '}| <em>Spiediet [ C ], lai parādītu/paslēptu statistiku!</em>
         </div>
       </div>
+
+      {currentScene?.config?.notes && currentScene.config.notes.trim() !== '' && (
+        <div style={hostNotesCard}>
+          <div style={{ fontWeight: 'bold', color: '#ffc107', marginBottom: '5px', fontSize: '0.95rem' }}>
+            📝 VADĪTĀJA PIEZĪMES ŠIM SLAIDAM (Nav redzams skatītājiem):
+          </div>
+          <div style={{ fontSize: '1.05rem', color: '#fff', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
+            {currentScene.config.notes}
+          </div>
+        </div>
+      )}
 
       {isFinalLb && (
         <div style={{ background: '#1c3d1c', border: '2px solid #28a745', padding: '15px', borderRadius: '8px', textAlign: 'center', marginBottom: '20px' }}>
@@ -261,28 +387,46 @@ export default function Host() {
         </div>
       )}
 
-      <div style={{ maxWidth: '850px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', gap: '10px', borderBottom: '2px solid #333', marginBottom: '15px' }}>
-          <button
-            onClick={() => setActiveTab('SCENES')}
-            style={{
-              ...tabButton,
-              borderBottom: activeTab === 'SCENES' ? '3px solid #007bff' : 'none',
-              color: activeTab === 'SCENES' ? '#fff' : '#888'
-            }}
-          >
-            📋 Slaidu secība ({scenes.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('ANALYZER')}
-            style={{
-              ...tabButton,
-              borderBottom: activeTab === 'ANALYZER' ? '3px solid #00e5ff' : 'none',
-              color: activeTab === 'ANALYZER' ? '#00e5ff' : '#888'
-            }}
-          >
-            📈 Analītika & Spēlētāju laiki ({playersList.length})
-          </button>
+      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #333', marginBottom: '15px' }}>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={() => setActiveTab('SCENES')}
+              style={{
+                ...tabButton,
+                borderBottom: activeTab === 'SCENES' ? '3px solid #007bff' : 'none',
+                color: activeTab === 'SCENES' ? '#fff' : '#888'
+              }}
+            >
+              📋 Slaidu secība ({scenes.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('ANALYZER')}
+              style={{
+                ...tabButton,
+                borderBottom: activeTab === 'ANALYZER' ? '3px solid #00e5ff' : 'none',
+                color: activeTab === 'ANALYZER' ? '#00e5ff' : '#888'
+              }}
+            >
+              👥 Spēlētāju vadība & Laiki ({playersList.length})
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <img
+              src={qrCodeUrl}
+              alt="QR"
+              style={{ width: '45px', height: '45px', borderRadius: '4px', cursor: 'pointer', border: '1px solid #fff' }}
+              title="Atvērt spēles saiti"
+              onClick={() => window.open(joinUrl, '_blank')}
+            />
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>QR Kods gatavs</div>
+              <div style={{ fontSize: '0.75rem', color: '#888', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {activeBaseUrl}
+              </div>
+            </div>
+          </div>
         </div>
 
         {activeTab === 'SCENES' && (
@@ -299,10 +443,17 @@ export default function Host() {
                     border: isActive ? '2px solid #fff' : '1px solid #444'
                   }}
                 >
-                  <span>
-                    {i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})
-                    {s.type === 'LEADERBOARD' && ` [${s.config?.lbType || 'TOTAL'}]`}
-                  </span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 'bold' }}>
+                      {i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})
+                      {s.type === 'LEADERBOARD' && ` [${s.config?.lbType || 'TOTAL'}]`}
+                    </div>
+                    {s.config?.notes && (
+                      <div style={{ fontSize: '0.8rem', color: '#ffc107', marginTop: '3px' }}>
+                        💬 {s.config.notes}
+                      </div>
+                    )}
+                  </div>
                   {isActive && <span style={activeBadge}>{currentScene?.subState || 'IDLE'}</span>}
                 </div>
               );
@@ -312,36 +463,89 @@ export default function Host() {
 
         {activeTab === 'ANALYZER' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
-            <h4 style={{ margin: '0 0 12px 0', color: '#00e5ff' }}>
-              ⏱️ SPĒLĒTĀJU REZULTĀTI UN APDOMAS LAIKI (TIE-BREAKER ANALYZER)
-            </h4>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h4 style={{ margin: 0, color: '#00e5ff' }}>👥 DALĪBNIEKU PĀRVALDĪBA UN REZULTĀTI</h4>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  onClick={() => setSortMode('ORDER')}
+                  style={{ ...btnSmallSort, background: sortMode === 'ORDER' ? '#007bff' : '#333' }}
+                >
+                  Pēc pults #
+                </button>
+                <button
+                  onClick={() => setSortMode('SCORE')}
+                  style={{ ...btnSmallSort, background: sortMode === 'SCORE' ? '#007bff' : '#333' }}
+                >
+                  Pēc punktiem (Līderi)
+                </button>
+              </div>
+            </div>
 
-            {playersList.length === 0 ? (
+            {sortedPlayers.length === 0 ? (
               <p style={{ color: '#888', fontStyle: 'italic' }}>Pagaidām nav pieslēdzies neviens spēlētājs.</p>
             ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.95rem' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid #444', color: '#aaa' }}>
-                    <th style={{ padding: '8px' }}>#</th>
-                    <th style={{ padding: '8px' }}>Vārds</th>
-                    <th style={{ padding: '8px' }}>Pults ID</th>
+                    <th style={{ padding: '8px' }}>Pults</th>
+                    <th style={{ padding: '8px' }}>Vārds (Rediģējams)</th>
                     <th style={{ padding: '8px' }}>Punkti</th>
-                    <th style={{ padding: '8px' }}>Kārtas punkti</th>
-                    <th style={{ padding: '8px' }}>Kopējais laiks</th>
+                    <th style={{ padding: '8px' }}>Apdomas laiks</th>
+                    <th style={{ padding: '8px', textAlign: 'center' }}>Darbība</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {playersList.map((p, idx) => (
-                    <tr key={p.id || idx} style={{ borderBottom: '1px solid #2a2a2a' }}>
-                      <td style={{ padding: '8px', fontWeight: 'bold', color: idx === 0 ? 'gold' : '#fff' }}>
-                        {idx + 1}.
+                  {sortedPlayers.map((p) => (
+                    <tr key={p.id} style={{ borderBottom: '1px solid #2a2a2a', opacity: p.isDisabled ? 0.4 : 1 }}>
+                      <td style={{ padding: '8px', fontWeight: 'bold', color: '#ffc107' }}>
+                        #{p.deviceNumber || 1}
                       </td>
-                      <td style={{ padding: '8px' }}>{p.name}</td>
-                      <td style={{ padding: '8px', color: '#ffc107' }}>Pults #{p.deviceNumber || idx + 1}</td>
-                      <td style={{ padding: '8px', fontWeight: 'bold', color: 'gold' }}>{p.score ?? 0} pt</td>
-                      <td style={{ padding: '8px', color: '#28a745' }}>{p.roundScore ?? 0} pt</td>
-                      <td style={{ padding: '8px', color: '#00e5ff', fontWeight: 'bold' }}>
-                        ⏱️ {((p.totalTimeMs || 0) / 1000).toFixed(2)}s
+                      <td style={{ padding: '8px' }}>
+                        <input
+                          value={p.name}
+                          onChange={(e) => updatePlayer(p.id, { name: e.target.value })}
+                          style={tableInput}
+                          title="Klikšķini, lai mainītu vārdu"
+                        />
+                      </td>
+                      <td style={{ padding: '8px' }}>
+                        <input
+                          type="number"
+                          value={p.score ?? 0}
+                          onChange={(e) => updatePlayer(p.id, { score: Number(e.target.value) })}
+                          style={{ ...tableInput, width: '60px', color: 'gold', fontWeight: 'bold' }}
+                          title="Klikšķini, lai labotu punktus"
+                        />
+                      </td>
+                      <td style={{ padding: '8px' }}>
+                        <input
+                          type="number"
+                          step="100"
+                          value={p.totalTimeMs ?? 0}
+                          onChange={(e) => updatePlayer(p.id, { totalTimeMs: Number(e.target.value) })}
+                          style={{ ...tableInput, width: '90px', color: '#00e5ff' }}
+                          title="Laiks milisekundēs"
+                        />
+                        <span style={{ fontSize: '0.8rem', color: '#888', marginLeft: '4px' }}>
+                          ({((p.totalTimeMs || 0) / 1000).toFixed(2)}s)
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px', textAlign: 'center' }}>
+                        <button
+                          onClick={() => updatePlayer(p.id, { isDisabled: !p.isDisabled })}
+                          style={{
+                            padding: '4px 10px',
+                            background: p.isDisabled ? '#28a745' : '#dc3545',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem',
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          {p.isDisabled ? 'Ieslēgt' : 'Atslēgt'}
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -372,6 +576,26 @@ const cardBox: React.CSSProperties = {
   padding: '25px',
   borderRadius: '12px',
   border: '1px solid #333'
+};
+
+const btnMode: React.CSSProperties = {
+  flex: 1,
+  padding: '12px',
+  color: '#fff',
+  border: '2px solid',
+  borderRadius: '8px',
+  cursor: 'pointer',
+  fontWeight: 'bold',
+  fontSize: '0.95rem',
+  transition: 'all 0.15s ease'
+};
+
+const noticeBox: React.CSSProperties = {
+  padding: '12px 15px',
+  background: '#112211',
+  border: '1px solid #28a745',
+  borderRadius: '6px',
+  fontSize: '0.95rem'
 };
 
 const folderInputHost: React.CSSProperties = {
@@ -408,11 +632,20 @@ const topBar: React.CSSProperties = {
 const instructionBox: React.CSSProperties = {
   background: '#004085',
   color: '#b8daff',
-  padding: '15px',
+  padding: '12px',
   borderRadius: '8px',
   textAlign: 'center',
-  marginBottom: '20px',
+  marginBottom: '15px',
   border: '1px solid #0056b3'
+};
+
+const hostNotesCard: React.CSSProperties = {
+  background: 'rgba(50, 40, 0, 0.7)',
+  border: '2px solid #ffc107',
+  padding: '12px 18px',
+  borderRadius: '8px',
+  marginBottom: '15px',
+  boxShadow: '0 4px 15px rgba(255, 193, 7, 0.2)'
 };
 
 const leaderControlBox: React.CSSProperties = {
@@ -443,11 +676,11 @@ const slideRow: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
-  padding: '14px 20px',
+  padding: '12px 18px',
   margin: '8px 0',
   borderRadius: '8px',
   cursor: 'pointer',
-  fontSize: '1.05rem'
+  fontSize: '1rem'
 };
 
 const activeBadge: React.CSSProperties = {
@@ -516,4 +749,24 @@ const tabButton: React.CSSProperties = {
   fontSize: '1rem',
   fontWeight: 'bold',
   cursor: 'pointer'
+};
+
+const btnSmallSort: React.CSSProperties = {
+  padding: '5px 10px',
+  color: '#fff',
+  border: '1px solid #555',
+  borderRadius: '4px',
+  cursor: 'pointer',
+  fontSize: '0.8rem',
+  fontWeight: 'bold'
+};
+
+const tableInput: React.CSSProperties = {
+  background: '#000',
+  border: '1px solid #444',
+  color: '#fff',
+  padding: '4px 8px',
+  borderRadius: '4px',
+  fontSize: '0.9rem',
+  boxSizing: 'border-box'
 };

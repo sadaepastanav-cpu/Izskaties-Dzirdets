@@ -135,6 +135,7 @@ export default function Presentation() {
     votedCount: 0
   });
   const [participantCount, setParticipantCount] = useState(0);
+  const [players, setPlayers] = useState<any[]>([]);
   const [isRevealed, setIsRevealed] = useState(false);
   const [isStatsVisible, setIsStatsVisible] = useState(false);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
@@ -143,11 +144,25 @@ export default function Presentation() {
   const [podiumStage, setPodiumStage] = useState(0);
   const [isMediaReady, setIsMediaReady] = useState(false);
 
+  // Īstā saite telefonam (LAN vai Tunelis)
+  const [connectionUrl, setConnectionUrl] = useState<string>('');
+  const [testedBuzzerCounts, setTestedBuzzerCounts] = useState<Record<string, number>>({});
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (pin) socket.emit('join-session', { pin, name: 'EKRĀNS', playerId: 'scr_' + pin });
+
+    // Iegūstam sesijas datus un saiti
+    const handleSessionInfo = (data: any) => {
+      if (data?.state?.connectionUrl) setConnectionUrl(data.state.connectionUrl);
+    };
+    socket.on('session-info', handleSessionInfo);
+
+    socket.on('connection-url-changed', (newUrl: string) => {
+      setConnectionUrl(newUrl);
+    });
 
     const handleStateUpdate = (newScene: any) => {
       setScene((prevScene: any) => {
@@ -165,11 +180,23 @@ export default function Presentation() {
     socket.on('votes-updated', (data: any) => {
       setVoteData({ summary: data?.summary || {}, votedCount: data?.votedCount || 0 });
     });
-    socket.on('presence-update', (data) => setParticipantCount(data?.count || 0));
+
+    socket.on('presence-update', (data) => {
+      setParticipantCount(data?.count || 0);
+      if (Array.isArray(data?.players)) setPlayers(data.players);
+    });
+
     socket.on('results-revealed', () => setIsRevealed(true));
 
     socket.on('toggle-audience-chart', () => {
       setIsStatsVisible((prev) => !prev);
+    });
+
+    socket.on('player-buzzer-test', (data: { playerId: string }) => {
+      setTestedBuzzerCounts((prev) => ({
+        ...prev,
+        [data.playerId]: (prev[data.playerId] || 0) + 1
+      }));
     });
 
     socket.on('leaderboard-update', (payload: any) => {
@@ -206,11 +233,14 @@ export default function Presentation() {
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
+      socket.off('session-info', handleSessionInfo);
+      socket.off('connection-url-changed');
       socket.off('state-update', handleStateUpdate);
       socket.off('votes-updated');
       socket.off('presence-update');
       socket.off('results-revealed');
       socket.off('toggle-audience-chart');
+      socket.off('player-buzzer-test');
       socket.off('leaderboard-update');
       socket.off('podium-stage-change');
       socket.off('leaderboard-page-change');
@@ -349,21 +379,115 @@ export default function Presentation() {
     );
   }
 
+  // PILNĪGI DROŠA UN DERĪGA SAITE TELEFONAM (NEKAD NAV TIKAI 'LOCALHOST')
+  const baseHost = connectionUrl && connectionUrl.trim() !== '' ? connectionUrl.trim() : window.location.origin;
+  const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
+
+  // LOBBY SKATS
   if (!scene) {
+    const lobbyMode = scene?.branding?.lobbyMode || 'CIRCLE';
+
+    // INTERAKTĪVO BUMBIŅU REŽĪMS
+    if (lobbyMode === 'INTERACTIVE_DOTS') {
+      return (
+        <div style={{ ...fullScreen, backgroundColor: '#0a0a0a', padding: '30px', boxSizing: 'border-box' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+            <div>
+              <span style={{ fontSize: '1.8vw', color: '#888' }}>PIEVIENOJIES SPĒLEI: </span>
+              <span style={{ fontSize: '3vw', color: '#00ff00', fontWeight: 'bold' }}>PIN: {pin}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 15px', borderRadius: '12px' }}>
+              <img src={qrCodeUrl} alt="QR" style={{ width: '90px', height: '90px' }} />
+              <div style={{ textAlign: 'left', color: '#000' }}>
+                <div style={{ fontWeight: 'bold', fontSize: '1vw' }}>Skenē kamerā!</div>
+                <div style={{ fontSize: '0.8vw', color: '#555', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {baseHost}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ margin: '15px 0', textAlign: 'center' }}>
+            <h2 style={{ fontSize: '2vw', color: '#ffc107', margin: 0 }}>
+              🎮 PIESLĒGUŠIES DALĪBNIEKI ({participantCount}):
+            </h2>
+            <span style={{ fontSize: '1vw', color: '#888' }}>Spiediet telefonā "Pārbaudīt pulti", lai bumbiņa pulsētu un uzsprāgtu!</span>
+          </div>
+
+          <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '20px', justifyContent: 'center', alignItems: 'center', overflowY: 'auto' }}>
+            {players.map((p) => {
+              const pressCount = testedBuzzerCounts[p.id] || 0;
+              const hasExploded = pressCount >= 3;
+              const currentScale = hasExploded ? 1 : 1 + (pressCount % 3) * 0.35;
+              const orbColor = hasExploded ? '#ffd700' : pressCount > 0 ? '#00e5ff' : '#00ff00';
+
+              return (
+                <div
+                  key={p.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    transform: `scale(${currentScale})`,
+                    transition: 'all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '65px',
+                      height: '65px',
+                      borderRadius: '50%',
+                      background: orbColor,
+                      boxShadow: `0 0 ${hasExploded ? '35px #ffd700' : '20px ' + orbColor}`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#000',
+                      fontWeight: 'bold',
+                      fontSize: '1.3rem'
+                    }}
+                  >
+                    #{p.deviceNumber || 1}
+                  </div>
+                  <span style={{ fontSize: '1vw', fontWeight: 'bold', color: '#fff', marginTop: '6px', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.name}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // KLASISKAIS REŽĪMS
     const circleColor = getLobbyColor(participantCount);
-    const circleSize = `${Math.min(15 + participantCount * 0.2, 35)}vw`;
+    const circleSize = `${Math.min(14 + participantCount * 0.2, 32)}vw`;
 
     return (
-      <div style={{ ...fullScreenCenter, backgroundColor: '#000', gap: '2vw' }}>
-        <h1 style={{ fontSize: '3vw', color: '#888', margin: 0 }}>PIEVIENOJIES SPĒLEI:</h1>
-        <div style={{ border: '8px solid #0f0', padding: '2vw 6vw', borderRadius: '40px', boxShadow: '0 0 80px rgba(0,255,0,0.3)' }}>
-          <h1 style={{ fontSize: '12vw', margin: 0, letterSpacing: '1vw', lineHeight: 1, color: '#fff' }}>{pin}</h1>
+      <div style={{ ...fullScreenCenter, backgroundColor: '#000', gap: '1.5vw' }}>
+        <h1 style={{ fontSize: '2.5vw', color: '#888', margin: 0 }}>PIEVIENOJIES SPĒLEI:</h1>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '35px' }}>
+          <div style={{ border: '6px solid #0f0', padding: '1.5vw 3.5vw', borderRadius: '30px', boxShadow: '0 0 60px rgba(0,255,0,0.3)' }}>
+            <h1 style={{ fontSize: '8vw', margin: 0, letterSpacing: '0.8vw', lineHeight: 1, color: '#fff' }}>{pin}</h1>
+          </div>
+
+          <div style={{ background: '#fff', padding: '12px 16px', borderRadius: '15px', display: 'flex', flexDirection: 'column', alignItems: 'center', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
+            <img src={qrCodeUrl} alt="QR" style={{ width: '135px', height: '135px' }} />
+            <span style={{ color: '#000', fontSize: '0.9vw', fontWeight: 'bold', marginTop: '6px' }}>Skenē kamerā!</span>
+            <span style={{ color: '#555', fontSize: '0.75vw', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {baseHost}
+            </span>
+          </div>
         </div>
+
         <div
           style={{
             width: circleSize,
             height: circleSize,
-            border: `1vw solid ${circleColor}`,
+            border: `0.8vw solid ${circleColor}`,
             borderRadius: '50%',
             display: 'flex',
             flexDirection: 'column',
@@ -371,11 +495,11 @@ export default function Presentation() {
             justifyContent: 'center',
             transition: 'all 0.5s ease',
             boxShadow: `0 0 50px ${circleColor}`,
-            marginTop: '1vw'
+            marginTop: '0.5vw'
           }}
         >
-          <span style={{ fontSize: '6vw', fontWeight: 'bold', color: '#fff', lineHeight: 1 }}>{participantCount}</span>
-          <span style={{ fontSize: '1.2vw', color: '#aaa', marginTop: '0.5vw', textTransform: 'uppercase' }}>
+          <span style={{ fontSize: '5vw', fontWeight: 'bold', color: '#fff', lineHeight: 1 }}>{participantCount}</span>
+          <span style={{ fontSize: '1.1vw', color: '#aaa', marginTop: '0.4vw', textTransform: 'uppercase' }}>
             {participantCount === 1 ? 'Dalībnieks' : 'Dalībnieki'}
           </span>
         </div>
