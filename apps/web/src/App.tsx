@@ -1,8 +1,10 @@
+import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BACKEND_URL } from './config';
 import Player from './player';
-import Host from './Host';
-import Presentation from './Presentation';
-import Studio from './Studio';
+import Host from './host';
+import Presentation from './presentation';
+import Studio from './studio';
 
 export default function App() {
   return (

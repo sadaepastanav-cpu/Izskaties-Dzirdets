@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { BACKEND_URL } from './config';
 
-const MEDIA_BASE_URL = `http://${window.location.hostname}:3000/project-media`;
+const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 
 const secondsToTimeStr = (totalSec: number = 0): string => {
   const m = Math.floor(totalSec / 60);
@@ -23,6 +24,7 @@ interface MobileBranding {
   appTitle?: string;
   appLogo?: string;
   appBgImage?: string;
+  welcomeImage?: string;
   appBgColor?: string;
 }
 
@@ -79,11 +81,12 @@ export default function Studio() {
   const [mediaList, setMediaList] = useState<string[]>([]);
   const [isSnapToGrid, setIsSnapToGrid] = useState(true);
 
-  // 4. PUNKTS: MOBILĀS LIETOTNES BRENDINGA STĀVOKLIS
+  // MOBILĀS LIETOTNES BRENDINGA STĀVOKLIS
   const [mobileBranding, setMobileBranding] = useState<MobileBranding>({
     appTitle: 'EVENT BUZZER',
     appLogo: '',
     appBgImage: '',
+    welcomeImage: '',
     appBgColor: '#121212'
   });
 
@@ -213,7 +216,7 @@ export default function Studio() {
 
   const syncWorkingFolder = async (folderToSet?: string) => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:3000/api/set-path`, {
+      const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: folderToSet || activeFolder })
@@ -496,7 +499,7 @@ export default function Studio() {
       formData.append('mediaFile', file);
 
       try {
-        const res = await fetch(`http://${window.location.hostname}:3000/api/upload-media`, {
+        const res = await fetch(`${BACKEND_URL}/api/upload-media`, {
           method: 'POST',
           body: formData
         });
@@ -553,7 +556,6 @@ export default function Studio() {
     if (previewMediaRef.current) previewMediaRef.current.pause();
   };
 
-  // 4. PUNKTS: PROJEKTA SAGLABĀŠANA KOPĀ AR MOBILO BRENDINGU
   const handleSaveProject = async () => {
     const cleanFileName = projectFile.trim().endsWith('.json') ? projectFile.trim() : `${projectFile.trim()}.json`;
     if (availableProjects.includes(cleanFileName)) {
@@ -564,14 +566,14 @@ export default function Studio() {
     }
 
     try {
-      const res = await fetch(`http://${window.location.hostname}:3000/api/save-to-file`, {
+      const res = await fetch(`${BACKEND_URL}/api/save-to-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileName: cleanFileName,
           data: {
             scenes: slides,
-            branding: mobileBranding // Saglabā arī pielāgoto telefona dizainu!
+            branding: mobileBranding
           }
         })
       });
@@ -589,7 +591,7 @@ export default function Studio() {
   const handleOpenProject = async (name: string) => {
     if (!name) return;
     try {
-      const res = await fetch(`http://${window.location.hostname}:3000/api/load-project/${name}`);
+      const res = await fetch(`${BACKEND_URL}/api/load-project/${name}`);
       const data = await res.json();
       if (data.scenes && Array.isArray(data.scenes)) {
         setSlides(data.scenes);
@@ -1161,7 +1163,7 @@ export default function Studio() {
 
         {/* LABĀ PUSE: Iestatījumu panelis */}
         <div style={sidebarRight}>
-          {/* 4. PUNKTS: MOBILĀS LIETOTNES DIZAINA IESTATĪJUMI */}
+          {/* MOBILĀS LIETOTNES DIZAINA IESTATĪJUMI */}
           <div style={{ background: '#1c2833', border: '1px solid #007bff', borderRadius: '8px', padding: '10px', marginBottom: '15px' }}>
             <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#00ff00', marginBottom: '8px' }}>
               📱 MOBILĀS LIETOTNES DIZAINS
@@ -1185,6 +1187,20 @@ export default function Studio() {
             >
               <option value="">(Noklusējuma ikona 🎮)</option>
               {mediaList.filter((f) => /\.(png|webp|svg)$/i.test(f)).map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+
+            <label style={labelStyle}>
+              Sākuma Reklāmas bilde (1080 × 1920 px 9:16):
+            </label>
+            <select
+              style={selectStyle}
+              value={mobileBranding.welcomeImage || ''}
+              onChange={(e) => setMobileBranding({ ...mobileBranding, welcomeImage: e.target.value })}
+            >
+              <option value="">(Nav reklāmas)</option>
+              {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
                 <option key={f} value={f}>{f}</option>
               ))}
             </select>

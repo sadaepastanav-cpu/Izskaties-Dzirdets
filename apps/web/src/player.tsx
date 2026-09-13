@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
+import { BACKEND_URL } from './config';
 
-const MEDIA_BASE_URL = `http://${window.location.hostname}:3000/project-media`;
+const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 const BUTTON_COLORS = ['#007bff', '#fd7e14', '#28a745', '#ffc107', '#6f42c1', '#17a2b8'];
 
 export default function Player() {
@@ -49,12 +50,27 @@ export default function Player() {
     }
   });
 
+  // Screen Wake Lock API — novērš telefona ekrāna iemigšanu spēles laikā
+  useEffect(() => {
+    let wakeLock: any = null;
+    const requestWakeLock = async () => {
+      if ('wakeLock' in navigator && (navigator as any).wakeLock) {
+        try {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+        } catch {}
+      }
+    };
+    requestWakeLock();
+    return () => {
+      if (wakeLock) wakeLock.release().catch(() => {});
+    };
+  }, []);
+
   // Pieslēgšanās serverim
   useEffect(() => {
-    const s = io(`http://${window.location.hostname}:3000`);
+    const s = io(BACKEND_URL);
     setSocket(s);
 
-    // Ja spēlētājs jau bija pieslēdzies pirms lapas pārlādes
     const wasAlreadyJoined = sessionStorage.getItem('player_active_session') === 'true';
     const savedPin = localStorage.getItem('player_pin');
     const savedName = localStorage.getItem('player_name');
@@ -119,7 +135,7 @@ export default function Player() {
     };
   }, [playerId]);
 
-  // Nolasām dizainu tiklīdz ievada PIN kodu
+  // Nolasām dizainu, kad ievadīts PIN
   useEffect(() => {
     if (socket && pin && pin.trim().length >= 4) {
       socket.emit('get-branding', { pin: pin.trim() });
@@ -271,7 +287,7 @@ export default function Player() {
     );
   }
 
-  // 3. SPĒLES BEIGAS
+  // 3. SPĒLES BEIGAS (GAME OVER)
   if (isGameOver) {
     return (
       <div style={appBgStyle}>
@@ -293,7 +309,6 @@ export default function Player() {
             <div style={{ fontSize: '1.2rem', color: '#fff' }}>
               Punkti: <strong style={{ color: 'gold' }}>{myScoreData?.score ?? 0} pt</strong>
             </div>
-            {/* Rāda arī kopējo patērēto laiku */}
             <div style={{ fontSize: '0.95rem', color: '#00e5ff', marginTop: '6px' }}>
               ⏱️ Kopējais laiks: {(myScoreData?.totalTimeMs ? (myScoreData.totalTimeMs / 1000).toFixed(2) : '0.00')}s
             </div>
@@ -318,7 +333,7 @@ export default function Player() {
 
   const options = rawOptions.length > 0 ? rawOptions : ['A', 'B', 'C', 'D'];
 
-  // 4. SPĒLES EKRĀNS
+  // 4. SPĒLES EKRĀNS AR LIELO LOGO VIRS POGĀM
   return (
     <div style={appBgStyle}>
       <div style={mobileHeader}>
@@ -394,7 +409,7 @@ export default function Player() {
             {currentSub === 'ACTIVE' && (
               <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', boxSizing: 'border-box', padding: '5px 0' }}>
                 
-                {/* LIELS LOGO VIRS ATBILŽU POGĀM */}
+                {/* KRIETNI LIELĀKS LOGO VIRS VARIANTIEM */}
                 {branding.appLogo ? (
                   <div style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', maxHeight: '16vh', minHeight: '60px', marginBottom: '4px' }}>
                     <img

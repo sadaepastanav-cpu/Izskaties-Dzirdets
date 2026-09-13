@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { socket } from './socket';
+import { BACKEND_URL } from './config';
 
 export default function Host() {
   const [pin, setPin] = useState<string | null>(localStorage.getItem('active_pin'));
@@ -20,7 +21,7 @@ export default function Host() {
     try {
       setIsLoading(true);
       const targetFolder = folderPath || folder;
-      const res = await fetch(`http://${window.location.hostname}:3000/api/set-path`, {
+      const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: targetFolder })
@@ -39,7 +40,7 @@ export default function Host() {
   };
 
   useEffect(() => {
-    fetch(`http://${window.location.hostname}:3000/api/check-recovery`)
+    fetch(`${BACKEND_URL}/api/check-recovery`)
       .then((res) => res.json())
       .then((data) => {
         if (data.canRecover && data.pin) {
@@ -47,7 +48,7 @@ export default function Host() {
             `Atrasta nepabeigta sesija ar PIN: ${data.pin} ("${data.title || 'Aktīvā spēle'}"). Vai atjaunot?`
           );
           if (shouldRecover) {
-            fetch(`http://${window.location.hostname}:3000/api/recover-session`, { method: 'POST' })
+            fetch(`${BACKEND_URL}/api/recover-session`, { method: 'POST' })
               .then((r) => r.json())
               .then((rec) => {
                 if (rec.success) {
@@ -68,7 +69,7 @@ export default function Host() {
   const startProject = async (fileName: string) => {
     try {
       setIsLoading(true);
-      const res = await fetch(`http://${window.location.hostname}:3000/api/load-project/${fileName}`);
+      const res = await fetch(`${BACKEND_URL}/api/load-project/${fileName}`);
       if (!res.ok) throw new Error();
 
       const projectData = await res.json();
@@ -96,7 +97,6 @@ export default function Host() {
     socket.emit('host:change-leaderboard-page', { pin, page: newPage });
   };
 
-  // Pārslēgt statistiku ekrānā ar 'C'
   const toggleChart = () => {
     if (pin) socket.emit('host:toggle-chart', { pin });
   };
@@ -207,7 +207,6 @@ export default function Host() {
         </div>
 
         <div style={{ display: 'flex', gap: '8px' }}>
-          {/* STATISTIKAS PĀRSLĒGŠANAS POGA */}
           <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas skaitļus ekrānā">
             📊 Statistika [C]
           </button>

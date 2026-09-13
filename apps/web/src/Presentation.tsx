@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { socket } from './socket';
 import { useParams } from 'react-router-dom';
 import Timer from './Timer';
+import { BACKEND_URL } from './config';
 
-const MEDIA_BASE_URL = `http://${window.location.hostname}:3000/project-media`;
+const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 
 const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
   let c = hex.replace('#', '');
@@ -135,7 +136,6 @@ export default function Presentation() {
   });
   const [participantCount, setParticipantCount] = useState(0);
   const [isRevealed, setIsRevealed] = useState(false);
-  // STATISTIKA PĒC NOKLUSĒJUMA IR IZSLEEGTA UN PARĀDĀS TIKAI AR 'C'
   const [isStatsVisible, setIsStatsVisible] = useState(false);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [leaderboardType, setLeaderboardType] = useState<'ROUND' | 'TOTAL' | 'FINAL'>('TOTAL');
@@ -151,7 +151,6 @@ export default function Presentation() {
 
     const handleStateUpdate = (newScene: any) => {
       setScene((prevScene: any) => {
-        // Ja sākas pilnīgi jauns slaids, notīram balsis un aizveram statistiku
         if (!prevScene || prevScene.id !== newScene.id || newScene.subState === 'READY') {
           setVoteData({ summary: {}, votedCount: 0 });
           setIsRevealed(false);
@@ -169,7 +168,6 @@ export default function Presentation() {
     socket.on('presence-update', (data) => setParticipantCount(data?.count || 0));
     socket.on('results-revealed', () => setIsRevealed(true));
 
-    // STATISTIKAS PĀRSLĒGŠANA AR 'C'
     socket.on('toggle-audience-chart', () => {
       setIsStatsVisible((prev) => !prev);
     });
@@ -199,7 +197,6 @@ export default function Presentation() {
       }
     });
 
-    // Tastatūras klausītājs projektora ekrānam (var nospiest 'C' arī šeit)
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.key === 'c' || e.key === 'C') && (scene?.subState === 'STATS' || isRevealed)) {
         e.preventDefault();
@@ -499,7 +496,6 @@ export default function Presentation() {
                     </span>
                   )}
 
-                  {/* STATISTIKA PARĀDĀS TIKAI TAD, JA IESLĒGTA AR 'C' */}
                   {isStatsVisible && (scene.subState === 'STATS' || isRevealed) && (
                     <span style={voteBadge}>{count}</span>
                   )}
@@ -561,7 +557,6 @@ export default function Presentation() {
                       </span>
                     )}
 
-                    {/* STATISTIKA PARĀDĀS TIKAI TAD, JA IESLĒGTA AR 'C' */}
                     {isStatsVisible && (scene.subState === 'STATS' || isRevealed) && (
                       <span style={voteBadge}>{count}</span>
                     )}
