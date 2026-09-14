@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BACKEND_URL } from './config';
+import { BACKEND_URL, ADMIN_API_KEY, getAdminHeaders } from './config';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 
@@ -26,7 +26,7 @@ interface MobileBranding {
   appBgImage?: string;
   welcomeImage?: string;
   appBgColor?: string;
-  lobbyMode?: 'CIRCLE' | 'INTERACTIVE_DOTS'; // 5. PUNKTS: Sākuma ekrāna veids
+  lobbyMode?: 'CIRCLE' | 'INTERACTIVE_DOTS';
 }
 
 interface CanvasElement {
@@ -60,8 +60,9 @@ interface Slide {
     pointsMax?: number;
     scoringMode?: 'FIXED' | 'DECREASING';
     speedBonusEnabled?: boolean;
+    selectionMode?: 'ALL' | 'ANY_ONE';
     question?: string;
-    notes?: string; // 2. PUNKTS: Piezīmes vadītājam
+    notes?: string;
     optionsCount: number;
     options: string[];
     correctAnswers: string[];
@@ -104,6 +105,7 @@ export default function Studio() {
         pointsMax: 10,
         scoringMode: 'FIXED',
         speedBonusEnabled: false,
+        selectionMode: 'ALL',
         notes: 'Paskaidrojums vadītājam: Rīga dibināta 1201. gadā.',
         optionsCount: 4,
         options: ['Rīga', 'Liepāja', 'Daugavpils', 'Jelgava'],
@@ -221,7 +223,7 @@ export default function Studio() {
     try {
       const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(), // <-- ŠAJĀ RINDIŅĀ nosūtām x-admin-key
         body: JSON.stringify({ path: folderToSet || activeFolder })
       });
       const data = await res.json();
@@ -273,6 +275,7 @@ export default function Studio() {
         pointsMax: 10,
         scoringMode: 'FIXED',
         speedBonusEnabled: false,
+        selectionMode: 'ALL',
         notes: '',
         optionsCount: 4,
         options: ['Variants A', 'Variants B', 'Variants C', 'Variants D'],
@@ -505,6 +508,7 @@ export default function Studio() {
       try {
         const res = await fetch(`${BACKEND_URL}/api/upload-media`, {
           method: 'POST',
+          headers: { 'x-admin-key': ADMIN_API_KEY },
           body: formData
         });
         const data = await res.json();
@@ -572,7 +576,7 @@ export default function Studio() {
     try {
       const res = await fetch(`${BACKEND_URL}/api/save-to-file`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({
           fileName: cleanFileName,
           data: {
@@ -595,7 +599,9 @@ export default function Studio() {
   const handleOpenProject = async (name: string) => {
     if (!name) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/api/load-project/${name}`);
+      const res = await fetch(`${BACKEND_URL}/api/load-project/${name}`, {
+        headers: { 'x-admin-key': ADMIN_API_KEY }
+      });
       const data = await res.json();
       if (data.scenes && Array.isArray(data.scenes)) {
         setSlides(data.scenes);
@@ -642,6 +648,7 @@ export default function Studio() {
                       options: ['A', 'B', 'C', 'D'],
                       correctAnswers: ['A'],
                       answerCorrectness: { A: 100 },
+                      selectionMode: 'ALL',
                       optionsLayout: 'GRID',
                       optionsPositions: {},
                       layout: []
@@ -1181,7 +1188,6 @@ export default function Studio() {
               placeholder="EVENT BUZZER"
             />
 
-            {/* 5. PUNKTS: SĀKUMA EKRĀNA VEIDA IZVĒLE */}
             <label style={labelStyle}>Sākuma reģistrācijas ekrāns:</label>
             <select
               style={{ ...selectStyle, borderColor: '#00e5ff' }}
@@ -1251,7 +1257,7 @@ export default function Studio() {
             <option value="BILLBOARD">Billboard (Informatīvs ekrāns)</option>
           </select>
 
-          {/* 2. PUNKTS: VADĪTĀJA PIEZĪMES / KOMENTĀRS */}
+          {/* VADĪTĀJA PIEZĪMES */}
           <div style={{ margin: '8px 0', borderTop: '1px solid #333', paddingTop: '8px' }}>
             <label style={{ ...labelStyle, color: '#ffc107', fontWeight: 'bold' }}>📝 Piezīmes vadītājam (Host Notes):</label>
             <textarea
@@ -1490,6 +1496,28 @@ export default function Studio() {
                   </button>
                 ))}
               </div>
+
+              {/* JAUNUMS: Vairāku pareizo atbilžu režīma izvēle */}
+              {activeSlide.config.correctAnswers.length > 1 && (
+                <div style={{ marginTop: '8px', background: '#1c2833', border: '1px solid #007bff', borderRadius: '6px', padding: '8px' }}>
+                  <label style={{ ...labelStyle, color: '#00e5ff', fontWeight: 'bold', marginTop: 0 }}>
+                    🎯 Vairāku pareizo atbilžu režīms:
+                  </label>
+                  <select
+                    style={{ ...selectStyle, borderColor: '#00e5ff', marginTop: '4px', marginBottom: '4px' }}
+                    value={activeSlide.config.selectionMode || 'ALL'}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.selectionMode = e.target.value as any))}
+                  >
+                    <option value="ALL">☑️ Jānorāda visas pareizās (Daudzizvēle)</option>
+                    <option value="ANY_ONE">☝️ Pietiek ar vienu pareizo (Viens klikšķis)</option>
+                  </select>
+                  <div style={{ fontSize: '0.75rem', color: '#aaa' }}>
+                    {activeSlide.config.selectionMode === 'ANY_ONE'
+                      ? 'Spēlētājs nospiež 1 variantu. Ja tas ir starp pareizajiem, saņem 100% punktu.'
+                      : 'Spēlētājs telefonā ieķeksē vairākas un nospiež pogu "Iesniegt".'}
+                  </div>
+                </div>
+              )}
 
               <label style={labelStyle}>Izkārtojums:</label>
               <select

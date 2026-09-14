@@ -6,6 +6,29 @@ import { BACKEND_URL } from './config';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 
+// KRĀŠŅA NEONA KRĀSU PALETE BEZGALĪGAJAM CIKLAM
+const NEON_PALETTE = [
+  { base: '#00f0ff', glow: '#00f0ff', dark: '#00838f', text: '#000' },
+  { base: '#ff007f', glow: '#ff007f', dark: '#99004d', text: '#fff' },
+  { base: '#00ff66', glow: '#00ff66', dark: '#009933', text: '#000' },
+  { base: '#ffd700', glow: '#ffd700', dark: '#b29500', text: '#000' },
+  { base: '#b537f2', glow: '#b537f2', dark: '#6a1b9a', text: '#fff' },
+  { base: '#ff6b35', glow: '#ff6b35', dark: '#c43d0e', text: '#fff' },
+  { base: '#00e5ff', glow: '#00e5ff', dark: '#0097a7', text: '#000' },
+  { base: '#f72585', glow: '#f72585', dark: '#7209b7', text: '#fff' },
+  { base: '#76ff03', glow: '#76ff03', dark: '#388e3c', text: '#000' },
+  { base: '#ff9100', glow: '#ff9100', dark: '#b26500', text: '#000' }
+];
+
+const getDynamicOrbConfig = (count: number) => {
+  if (count <= 4) return { size: 115, numFont: '2.3rem', nameFont: '1.05rem', maxW: 125, gap: 30 };
+  if (count <= 10) return { size: 95, numFont: '1.9rem', nameFont: '0.95rem', maxW: 105, gap: 24 };
+  if (count <= 20) return { size: 78, numFont: '1.5rem', nameFont: '0.82rem', maxW: 86, gap: 18 };
+  if (count <= 40) return { size: 62, numFont: '1.2rem', nameFont: '0.72rem', maxW: 70, gap: 14 };
+  if (count <= 70) return { size: 48, numFont: '0.95rem', nameFont: '0.6rem', maxW: 54, gap: 10 };
+  return { size: 38, numFont: '0.75rem', nameFont: '0.5rem', maxW: 42, gap: 8 };
+};
+
 const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
   let c = hex.replace('#', '');
   if (c.length === 3) c = c.split('').map((x) => x + x).join('');
@@ -20,6 +43,135 @@ const getLobbyColor = (count: number) => {
   if (count < 10) return '#00ff00';
   if (count < 50) return '#007bff';
   return '#ff00ff';
+};
+
+// REAKTĪVS MEDIJU ELEMENTS (Video / Audio / Bilde / Teksts)
+const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean }> = ({ el, subState, isRevealed }) => {
+  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  const vis = el.visibility || 'ALWAYS';
+  const src = `${MEDIA_BASE_URL}/${el.content}`;
+
+  const isVisible =
+    vis === 'ALWAYS' ||
+    (vis === 'DURING_QUESTION' && subState === 'ACTIVE') ||
+    (vis === 'AFTER_REVEAL' && (isRevealed || subState === 'REVEAL'));
+
+  const shouldPlay = isVisible && (
+    (vis === 'ALWAYS' && ['READY', 'ACTIVE', 'STATS', 'REVEAL'].includes(subState)) ||
+    (vis === 'DURING_QUESTION' && subState === 'ACTIVE') ||
+    (vis === 'AFTER_REVEAL' && (isRevealed || subState === 'REVEAL'))
+  );
+
+  useEffect(() => {
+    const m = mediaRef.current;
+    if (!m) return;
+    m.volume = (el.volume !== undefined ? el.volume : 100) / 100;
+
+    if (shouldPlay) {
+      m.currentTime = el.trimStart || 0;
+      m.play().catch(() => {});
+    } else {
+      m.pause();
+    }
+  }, [shouldPlay, subState, isRevealed, el.trimStart, el.volume]);
+
+  if (!isVisible) return null;
+
+  const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 80 : 50));
+  const style: React.CSSProperties = {
+    position: 'absolute',
+    left: `${el.x}%`,
+    top: `${el.y}%`,
+    width: `${el.w}%`,
+    minHeight: `${el.h}%`,
+    height: 'auto',
+    zIndex: el.z || el.zIndex || 2,
+    color: el.color || '#ffffff',
+    fontFamily: el.fontFamily || 'Segoe UI',
+    fontSize: typeof el.fontSize === 'number' ? `${el.fontSize}vw` : el.fontSize || '2.2vw',
+    fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal'),
+    whiteSpace: 'pre-wrap',
+    textAlign: 'center',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    wordBreak: 'break-word',
+    boxSizing: 'border-box'
+  };
+
+  if (el.type === 'QUESTION' || el.type === 'TEXT') {
+    return (
+      <div
+        style={{
+          ...style,
+          background: bgRgba,
+          padding: el.type === 'QUESTION' ? '15px 25px' : '10px',
+          borderRadius: el.type === 'QUESTION' ? '20px' : '6px',
+          backdropFilter: 'blur(8px)',
+          border: el.type === 'QUESTION' ? '2px solid #ffc107' : 'none',
+          textShadow: '2px 2px 10px #000'
+        }}
+      >
+        {el.content}
+      </div>
+    );
+  }
+
+  if (el.type === 'IMAGE' && el.content) {
+    return (
+      <img
+        src={src}
+        style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: 'block' }}
+        alt="Medijs"
+      />
+    );
+  }
+
+  if (el.type === 'VIDEO' && el.content) {
+    return (
+      <video
+        ref={(v) => { mediaRef.current = v; }}
+        src={src}
+        style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: 'block' }}
+        loop={!!el.loop}
+        playsInline
+        onTimeUpdate={() => {
+          const v = mediaRef.current;
+          if (v && el.trimEnd && v.currentTime >= el.trimEnd) {
+            if (el.loop) {
+              v.currentTime = el.trimStart || 0;
+              v.play().catch(() => {});
+            } else {
+              v.pause();
+            }
+          }
+        }}
+      />
+    );
+  }
+
+  if (el.type === 'AUDIO' && el.content) {
+    return (
+      <audio
+        ref={(a) => { mediaRef.current = a; }}
+        src={src}
+        loop={!!el.loop}
+        onTimeUpdate={() => {
+          const a = mediaRef.current;
+          if (a && el.trimEnd && a.currentTime >= el.trimEnd) {
+            if (el.loop) {
+              a.currentTime = el.trimStart || 0;
+              a.play().catch(() => {});
+            } else {
+              a.pause();
+            }
+          }
+        }}
+      />
+    );
+  }
+
+  return null;
 };
 
 interface TopBarProps {
@@ -128,7 +280,8 @@ const TopBar: React.FC<TopBarProps> = ({ pin, scene, participantCount, voteData,
 };
 
 export default function Presentation() {
-  const { pin } = useParams<{ pin: string }>();
+  const { pin: routePin } = useParams<{ pin: string }>();
+  const [pin, setPin] = useState<string>('');
   const [scene, setScene] = useState<any>(null);
   const [voteData, setVoteData] = useState<{ summary: Record<string, number>; votedCount: number }>({
     summary: {},
@@ -144,20 +297,29 @@ export default function Presentation() {
   const [podiumStage, setPodiumStage] = useState(0);
   const [isMediaReady, setIsMediaReady] = useState(false);
 
-  // Īstā saite telefonam (LAN vai Cloudflare Tunelis)
+  const [branding, setBranding] = useState<any>({
+    lobbyMode: 'CIRCLE',
+    appTitle: '',
+    appLogo: '',
+    welcomeImage: '',
+    appBgImage: '',
+    appBgColor: '#0a0a0a'
+  });
+
   const [connectionUrl, setConnectionUrl] = useState<string>('');
   const [testedBuzzerCounts, setTestedBuzzerCounts] = useState<Record<string, number>>({});
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
   useEffect(() => {
-    // 1. Pieslēdzamies sesijai
-    if (pin) {
-      socket.emit('join-session', { pin, name: 'EKRĀNS', playerId: 'scr_' + pin });
+    const params = new URLSearchParams(window.location.search);
+    const targetPin = routePin || params.get('pin') || localStorage.getItem('presentation_pin') || '';
+
+    if (targetPin) {
+      setPin(targetPin.trim());
+      localStorage.setItem('presentation_pin', targetPin.trim());
+      socket.emit('join-session', { pin: targetPin.trim(), name: 'EKRĀNS', playerId: 'scr_' + targetPin.trim() });
+      socket.emit('get-branding', { pin: targetPin.trim() });
     }
 
-    // 2. Nolasām tīkla un tuneļa datus caur API
     fetch(`${BACKEND_URL}/api/network-ip`)
       .then((r) => r.json())
       .then((d) => {
@@ -165,14 +327,21 @@ export default function Presentation() {
       })
       .catch(() => {});
 
-    // 3. Iegūstam sesijas datus no join-success
     const handleJoinSuccess = (data: any) => {
       if (data?.connectionUrl) setConnectionUrl(data.connectionUrl);
       if (data?.currentScene) setScene(data.currentScene);
+      if (data?.branding) setBranding((prev: any) => ({ ...prev, ...data.branding }));
     };
 
     const handleSessionInfo = (data: any) => {
       if (data?.state?.connectionUrl) setConnectionUrl(data.state.connectionUrl);
+      if (data?.state?.branding) setBranding((prev: any) => ({ ...prev, ...data.state.branding }));
+    };
+
+    const handleSessionBranding = (br: any) => {
+      if (br && Object.keys(br).length > 0) {
+        setBranding((prev: any) => ({ ...prev, ...br }));
+      }
     };
 
     const handleConnectionUrlChanged = (newUrl: string) => {
@@ -185,6 +354,7 @@ export default function Presentation() {
 
     socket.on('join-success', handleJoinSuccess);
     socket.on('session-info', handleSessionInfo);
+    socket.on('session-branding', handleSessionBranding);
     socket.on('connection-url-changed', handleConnectionUrlChanged);
     socket.on('tunnel-ready', handleTunnelReady);
 
@@ -197,6 +367,9 @@ export default function Presentation() {
         }
         return newScene;
       });
+      if (newScene?.subState === 'REVEAL') {
+        setIsRevealed(true);
+      }
       setPodiumStage(0);
     };
 
@@ -238,16 +411,6 @@ export default function Presentation() {
     socket.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
     socket.on('leaderboard-page-change', (page: number) => setLeaderboardPage(page));
 
-    socket.on('video-command', (cmd: string) => {
-      if (cmd === 'play') {
-        videoRef.current?.play().catch(() => {});
-        audioRef.current?.play().catch(() => {});
-      } else if (cmd === 'pause') {
-        videoRef.current?.pause();
-        audioRef.current?.pause();
-      }
-    });
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.key === 'c' || e.key === 'C') && (scene?.subState === 'STATS' || isRevealed)) {
         e.preventDefault();
@@ -259,6 +422,7 @@ export default function Presentation() {
     return () => {
       socket.off('join-success', handleJoinSuccess);
       socket.off('session-info', handleSessionInfo);
+      socket.off('session-branding', handleSessionBranding);
       socket.off('connection-url-changed', handleConnectionUrlChanged);
       socket.off('tunnel-ready', handleTunnelReady);
       socket.off('state-update', handleStateUpdate);
@@ -270,130 +434,9 @@ export default function Presentation() {
       socket.off('leaderboard-update');
       socket.off('podium-stage-change');
       socket.off('leaderboard-page-change');
-      socket.off('video-command');
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [pin, scene?.subState, isRevealed]);
-
-  const renderLayoutElements = (s: any) => {
-    if (!s?.config?.layout) return null;
-
-    return s.config.layout.map((el: any, idx: number) => {
-      const src = `${MEDIA_BASE_URL}/${el.content}`;
-      const itemKey = el.id || `el-${idx}`;
-      const vis = el.visibility || 'ALWAYS';
-
-      if (vis === 'DURING_QUESTION' && s.subState !== 'ACTIVE') return null;
-      if (vis === 'AFTER_REVEAL' && (!isRevealed || s.subState !== 'REVEAL')) return null;
-
-      const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 80 : 50));
-
-      const style: React.CSSProperties = {
-        position: 'absolute',
-        left: `${el.x}%`,
-        top: `${el.y}%`,
-        width: `${el.w}%`,
-        minHeight: `${el.h}%`,
-        height: 'auto',
-        zIndex: el.z || el.zIndex || 2,
-        color: el.color || '#ffffff',
-        fontFamily: el.fontFamily || 'Segoe UI',
-        fontSize: typeof el.fontSize === 'number' ? `${el.fontSize}vw` : el.fontSize || '2.2vw',
-        fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal'),
-        whiteSpace: 'pre-wrap',
-        textAlign: 'center',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        wordBreak: 'break-word',
-        boxSizing: 'border-box'
-      };
-
-      if (el.type === 'QUESTION' || el.type === 'TEXT') {
-        return (
-          <div
-            key={itemKey}
-            style={{
-              ...style,
-              background: bgRgba,
-              padding: el.type === 'QUESTION' ? '15px 25px' : '10px',
-              borderRadius: el.type === 'QUESTION' ? '20px' : '6px',
-              backdropFilter: 'blur(8px)',
-              border: el.type === 'QUESTION' ? '2px solid #ffc107' : 'none',
-              textShadow: '2px 2px 10px #000'
-            }}
-          >
-            {el.content}
-          </div>
-        );
-      }
-
-      if (el.type === 'IMAGE' && el.content) {
-        return (
-          <img
-            key={itemKey}
-            src={src}
-            style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: 'block' }}
-            alt="Medijs"
-          />
-        );
-      }
-
-      if (el.type === 'VIDEO' && el.content) {
-        return (
-          <video
-            key={itemKey}
-            src={src}
-            style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: 'block' }}
-            loop={!!el.loop}
-            playsInline
-            ref={(v) => {
-              if (!v) return;
-              videoRef.current = v;
-              v.volume = (el.volume !== undefined ? el.volume : 100) / 100;
-              if (s.subState === 'ACTIVE') {
-                if (v.paused) {
-                  v.currentTime = el.trimStart || 0;
-                  v.play().catch(() => {});
-                }
-                v.ontimeupdate = () => {
-                  if (el.trimEnd && v.currentTime >= el.trimEnd) {
-                    v.pause();
-                    v.ontimeupdate = null;
-                  }
-                };
-              } else {
-                v.pause();
-              }
-            }}
-          />
-        );
-      }
-
-      if (el.type === 'AUDIO' && el.content) {
-        return (
-          <audio
-            key={itemKey}
-            src={src}
-            loop={!!el.loop}
-            ref={(a) => {
-              if (!a) return;
-              audioRef.current = a;
-              a.volume = (el.volume !== undefined ? el.volume : 100) / 100;
-              if (s.subState === 'ACTIVE' && a.paused) {
-                a.currentTime = el.trimStart || 0;
-                a.play().catch(() => {});
-              } else if (s.subState !== 'ACTIVE') {
-                a.pause();
-              }
-            }}
-          />
-        );
-      }
-
-      return null;
-    });
-  };
+  }, [routePin, scene?.subState, isRevealed]);
 
   if (!isMediaReady) {
     return (
@@ -405,87 +448,146 @@ export default function Presentation() {
     );
   }
 
-  // DINAMISKĀ SAITE TELEFONAM (AUTOMĀTISKI IZMANTO CLOUDFLARE TŪNELI)
   const baseHost = connectionUrl && connectionUrl.trim() !== '' ? connectionUrl.trim() : window.location.origin;
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
 
-  // LOBBY SKATS
+  // 1. LOBBY SKATS (PIRMS 1. JAUTĀJUMA)
   if (!scene) {
-    const lobbyMode = scene?.branding?.lobbyMode || 'CIRCLE';
+    const lobbyMode = branding?.lobbyMode || 'CIRCLE';
 
-    // INTERAKTĪVO BUMBIŅU REŽĪMS
     if (lobbyMode === 'INTERACTIVE_DOTS') {
+      const orbCfg = getDynamicOrbConfig(players.length);
+
       return (
-        <div style={{ ...fullScreen, backgroundColor: '#0a0a0a', padding: '30px', boxSizing: 'border-box' }}>
+        <div style={{ ...fullScreen, backgroundColor: branding.appBgColor || '#0a0a0a', padding: '25px 35px', boxSizing: 'border-box' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-            <div>
-              <span style={{ fontSize: '1.8vw', color: '#888' }}>PIEVIENOJIES SPĒLEI: </span>
-              <span style={{ fontSize: '3vw', color: '#00ff00', fontWeight: 'bold' }}>PIN: {pin}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+              <div style={{ border: '4px solid #00ff00', padding: '8px 26px', borderRadius: '18px', boxShadow: '0 0 35px rgba(0,255,0,0.35)', background: '#000' }}>
+                <span style={{ fontSize: '1.4vw', color: '#888' }}>PIN: </span>
+                <span style={{ fontSize: '3.2vw', color: '#00ff00', fontWeight: 'bold' }}>{pin}</span>
+              </div>
             </div>
-            {/* QR KODS BEZ ADRESES TEKSTA */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 15px', borderRadius: '12px' }}>
-              <img src={qrCodeUrl} alt="QR" style={{ width: '90px', height: '90px' }} />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 18px', borderRadius: '15px', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
+              <img src={qrCodeUrl} alt="QR" style={{ width: '95px', height: '95px' }} />
               <div style={{ textAlign: 'left', color: '#000' }}>
-                <div style={{ fontWeight: 'bold', fontSize: '1vw' }}>Skenē kamerā!</div>
+                <div style={{ fontWeight: 'bold', fontSize: '1.2vw' }}>Skenē kamerā!</div>
+                <div style={{ fontSize: '0.85vw', color: '#555' }}>Pieslēdzies spēlei</div>
               </div>
             </div>
           </div>
 
           <div style={{ margin: '15px 0', textAlign: 'center' }}>
-            <h2 style={{ fontSize: '2vw', color: '#ffc107', margin: 0 }}>
+            <h2 style={{ fontSize: '2.2vw', color: '#ffc107', margin: 0, textShadow: '0 0 15px rgba(255,193,7,0.4)' }}>
               🎮 PIESLĒGUŠIES DALĪBNIEKI ({participantCount}):
             </h2>
-            <span style={{ fontSize: '1vw', color: '#888' }}>Spiediet telefonā "Pārbaudīt pulti", lai bumbiņa pulsētu un uzsprāgtu!</span>
+            <span style={{ fontSize: '1.1vw', color: '#aaa', marginTop: '4px', display: 'inline-block' }}>
+              Spiediet telefonā "Pārbaudīt pulti", lai mainītu krāsas un bumbiņa uzsprāgtu! 💥
+            </span>
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: '20px', justifyContent: 'center', alignItems: 'center', overflowY: 'auto' }}>
-            {players.map((p) => {
-              const pressCount = testedBuzzerCounts[p.id] || 0;
-              const hasExploded = pressCount >= 3;
-              const currentScale = hasExploded ? 1 : 1 + (pressCount % 3) * 0.35;
-              const orbColor = hasExploded ? '#ffd700' : pressCount > 0 ? '#00e5ff' : '#00ff00';
+          <div
+            style={{
+              flex: 1,
+              width: '100%',
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: `${orbCfg.gap}px`,
+              justifyContent: 'center',
+              alignItems: 'center',
+              alignContent: 'center',
+              overflowY: 'auto',
+              padding: '15px',
+              boxSizing: 'border-box'
+            }}
+          >
+            {players.length === 0 ? (
+              <div style={{ color: '#555', fontSize: '1.5vw', fontStyle: 'italic' }}>
+                Gaidām dalībnieku pieslēgšanos...
+              </div>
+            ) : (
+              players.map((p, idx) => {
+                const pressCount = testedBuzzerCounts[p.id] || 0;
+                const cycle = Math.floor(pressCount / 3);
+                const step = pressCount % 3;
+                const isBursting = step === 0 && pressCount > 0;
 
-              return (
-                <div
-                  key={p.id}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    transform: `scale(${currentScale})`,
-                    transition: 'all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                  }}
-                >
+                const baseIndex = p.deviceNumber ? p.deviceNumber - 1 : idx;
+                const colorIdx = (baseIndex + cycle) % NEON_PALETTE.length;
+                const pal = NEON_PALETTE[colorIdx];
+
+                const currentScale = isBursting ? 1.25 : 1 + step * 0.15;
+
+                const orbBg = isBursting
+                  ? 'radial-gradient(circle at 35% 35%, #ffffff 0%, #ffd700 45%, #b29500 100%)'
+                  : `radial-gradient(circle at 35% 35%, #ffffff 0%, ${pal.base} 45%, ${pal.dark} 100%)`;
+
+                const orbShadow = isBursting
+                  ? '0 0 45px #ffd700, 0 0 90px rgba(255, 215, 0, 0.85)'
+                  : `0 0 ${22 + step * 10}px ${pal.glow}, 0 0 ${45 + step * 15}px ${hexToRgba(pal.glow, 50)}`;
+
+                return (
                   <div
+                    key={p.id || idx}
                     style={{
-                      width: '65px',
-                      height: '65px',
-                      borderRadius: '50%',
-                      background: orbColor,
-                      boxShadow: `0 0 ${hasExploded ? '35px #ffd700' : '20px ' + orbColor}`,
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#000',
-                      fontWeight: 'bold',
-                      fontSize: '1.3rem'
+                      width: `${orbCfg.maxW}px`,
+                      transform: `scale(${currentScale})`,
+                      transition: 'all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                     }}
                   >
-                    #{p.deviceNumber || 1}
+                    <div
+                      style={{
+                        width: `${orbCfg.size}px`,
+                        height: `${orbCfg.size}px`,
+                        borderRadius: '50%',
+                        background: orbBg,
+                        boxShadow: orbShadow,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: isBursting ? '#000' : pal.text,
+                        fontWeight: '900',
+                        fontSize: orbCfg.numFont,
+                        border: 'none',
+                        outline: 'none',
+                        userSelect: 'none'
+                      }}
+                    >
+                      #{p.deviceNumber || idx + 1}
+                    </div>
+
+                    <span
+                      style={{
+                        fontSize: orbCfg.nameFont,
+                        fontWeight: 'bold',
+                        color: '#fff',
+                        marginTop: '6px',
+                        width: '100%',
+                        maxWidth: `${orbCfg.maxW}px`,
+                        textAlign: 'center',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        textShadow: '0 2px 6px #000',
+                        display: 'block'
+                      }}
+                      title={p.name}
+                    >
+                      {p.name}
+                    </span>
                   </div>
-                  <span style={{ fontSize: '1vw', fontWeight: 'bold', color: '#fff', marginTop: '6px', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {p.name}
-                  </span>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       );
     }
 
-    // KLASISKAIS REŽĪMS
     const circleColor = getLobbyColor(participantCount);
     const circleSize = `${Math.min(14 + participantCount * 0.2, 32)}vw`;
 
@@ -498,7 +600,6 @@ export default function Presentation() {
             <h1 style={{ fontSize: '8vw', margin: 0, letterSpacing: '0.8vw', lineHeight: 1, color: '#fff' }}>{pin}</h1>
           </div>
 
-          {/* QR KODS BEZ ADRESES TEKSTA */}
           <div style={{ background: '#fff', padding: '12px 16px', borderRadius: '15px', display: 'flex', flexDirection: 'column', alignItems: 'center', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
             <img src={qrCodeUrl} alt="QR" style={{ width: '135px', height: '135px' }} />
             <span style={{ color: '#000', fontSize: '0.9vw', fontWeight: 'bold', marginTop: '6px' }}>Skenē kamerā!</span>
@@ -581,9 +682,17 @@ export default function Presentation() {
           overflow: 'hidden'
         }}
       >
-        {renderLayoutElements(scene)}
+        {/* STUDIJĀ IZVIETOTIE MEDIJI UN TEKSTI (AUTOMĀTISKA ATSKAŅOŠANA) */}
+        {scene?.config?.layout?.map((el: any, idx: number) => (
+          <MediaLayoutItem
+            key={el.id || `layout-el-${idx}`}
+            el={el}
+            subState={scene?.subState || 'IDLE'}
+            isRevealed={isRevealed}
+          />
+        ))}
 
-        {/* ATBILŽU POGAS */}
+        {/* ATBILŽU POGAS TIKAI JAUTĀJUMU SLAIDIEM */}
         {optionsList.length > 0 && (
           optLayout === 'INDIVIDUAL' ? (
             optionsList.map((opt: string, i: number) => {
@@ -612,7 +721,7 @@ export default function Presentation() {
                     ...optionCard,
                     background: isOnlyLetter ? 'transparent' : isCorrect ? '#28a745' : 'rgba(0, 0, 0, 0.8)',
                     borderColor: isOnlyLetter ? 'transparent' : isCorrect ? '#00ff00' : '#555',
-                    boxShadow: isOnlyLetter ? 'none' : '0 4px 15px rgba(0,0,0,0.6)',
+                    boxShadow: isOnlyLetter ? 'none' : isCorrect ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 4px 15px rgba(0,0,0,0.6)',
                     padding: isOnlyLetter ? '0' : '12px 20px',
                     zIndex: 10
                   }}
@@ -674,7 +783,7 @@ export default function Presentation() {
                       ...optionCard,
                       background: isOnlyLetter ? 'transparent' : isCorrect ? '#28a745' : 'rgba(0, 0, 0, 0.8)',
                       borderColor: isOnlyLetter ? 'transparent' : isCorrect ? '#00ff00' : '#555',
-                      boxShadow: isOnlyLetter ? 'none' : '0 4px 15px rgba(0,0,0,0.6)'
+                      boxShadow: isOnlyLetter ? 'none' : isCorrect ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 4px 15px rgba(0,0,0,0.6)'
                     }}
                   >
                     <div
@@ -743,7 +852,7 @@ export default function Presentation() {
           </div>
         )}
 
-        {/* FINĀLA APBALVOŠANA */}
+        {/* FINĀLA APBALVOŠANA (1., 2., 3. VIETA) */}
         {scene.type === 'LEADERBOARD' && isFinalLb && (
           <div style={{ width: '85vw', height: '80vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
             {podiumStage < 4 && (

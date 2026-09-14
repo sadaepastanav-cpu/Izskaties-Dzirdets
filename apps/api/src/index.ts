@@ -9,16 +9,125 @@ import { Server } from 'socket.io';
 import { PrismaClient } from '@prisma/client';
 import multer from 'multer';
 import { spawn } from 'child_process';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, { cors: { origin: '*' } });
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3000;
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'izskaties_dzirdets_super_secret_key_2026';
 
 let publicTunnelUrl = '';
+
+// 1. DROŠS CORS
+const allowedOriginPatterns = [
+  /^http:\/\/localhost(:\d+)?$/,
+  /^http:\/\/127\.0\.0\.1(:\d+)?$/,
+  /^http:\/\/192\.168\.\d+\.\d+(:\d+)?$/,
+  /^http:\/\/10\.\d+\.\d+\.\d+(:\d+)?$/,
+  /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+(:\d+)?$/,
+  /^https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com$/
+];
+
+const isOriginAllowed = (origin?: string): boolean => {
+  if (!origin) return true;
+  return allowedOriginPatterns.some((pattern) => pattern.test(origin));
+};
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) callback(null, true);
+      else callback(new Error('Bloķēts ar CORS drošības politiku'));
+    },
+    credentials: true
+  })
+);
+
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+
+// 2. RATE LIMITING (Aizsardzība pret uzbrukumiem un spamu)
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minūte
+  max: 120, // max 120 pieprasījumi minūtē no vienas IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Pārāk daudz pieprasījumu. Lūdzu, uzgaidiet brīdi.' }
+});
+
+const uploadLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 20, // max 20 failu augšupielādes minūtē
+  message: { error: 'Pārāk daudz augšupielāžu vienlaikus.' }
+});
+
+app.use('/api/', apiLimiter);
+
+// 3. SOCKET.IO AR PĀRSLĒGŠANĀS UN NOTURĪBAS IESTATĪJUMIEM
+const io = new Server(httpServer, {
+  cors: {
+    origin: (origin, callback) => callback(null, isOriginAllowed(origin)),
+    credentials: true
+  },
+  pingTimeout: 30000, // 30 sekunžu logs mobilajiem telefoniem pirms atslēgšanas
+  pingInterval: 10000
+});
+
+// ADMIN AUTH MIDDLEWARE
+const requireAdminAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const incomingKey = req.headers['x-admin-key'] || req.query.adminKey;
+  if (incomingKey === ADMIN_API_KEY) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Piekļuve liegta: Nepieciešama derīga administratora atslēga.' });
+};
+
+// FAILU SISTĒMA
+let currentProjectPath = path.resolve(process.cwd(), '../../public/uploads');
+if (!fs.existsSync(currentProjectPath)) {
+  fs.mkdirSync(currentProjectPath, { recursive: true });
+}
+
+const safeResolve = (userFileName: string): string => {
+  const safeBase = path.basename(userFileName);
+  return path.join(currentProjectPath, safeBase);
+};
+
+// MULTER VALIDĀCIJA
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+  'video/mp4', 'video/quicktime', 'video/webm',
+  'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg'
+];
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    if (!fs.existsSync(currentProjectPath)) fs.mkdirSync(currentProjectPath, { recursive: true });
+    cb(null, currentProjectPath);
+  },
+  filename: (_req, file, cb) => {
+    const cleanName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    const safeName = path.basename(cleanName).replace(/\s+/g, '_');
+    cb(null, safeName);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const isMimeAllowed = ALLOWED_MIME_TYPES.includes(file.mimetype);
+    const isExtAllowed = /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(file.originalname);
+    if (isMimeAllowed || isExtAllowed) {
+      cb(null, true);
+    } else {
+      cb(new Error('Neatļauts faila tips! Drīkst augšupielādēt tikai attēlus, video un audio.'));
+    }
+  }
+});
 
 function startCloudflareTunnel() {
   console.log('[Cloudflare] Startējam tuneli...');
@@ -37,10 +146,8 @@ function startCloudflareTunnel() {
         console.log(`🚀 DINAMISKAIS CLOUDFLARE LINKS: ${publicTunnelUrl}`);
         console.log(`=========================================\n`);
 
-        // 1. Paziņojam visiem pieslēgtajiem logiem (Host, Presenter u.c.)
         io.emit('tunnel-ready', { url: publicTunnelUrl });
 
-        // 2. Automātiski atjauninām visas jau aktīvās sesijas uz jauno Cloudflare saiti
         sessions.forEach((sessionData, sessionPin) => {
           sessionData.connectionUrl = publicTunnelUrl;
           io.to(sessionPin).emit('connection-url-changed', publicTunnelUrl);
@@ -51,40 +158,12 @@ function startCloudflareTunnel() {
 
     tunnel.stdout?.on('data', handleOutput);
     tunnel.stderr?.on('data', handleOutput);
-
-    tunnel.on('error', (err) => {
-      console.error('⚠️ [Cloudflare] Kļūda palaižot cloudflared:', err.message);
-    });
-
-    tunnel.on('close', (code) => {
-      console.log(`[Cloudflare] Tunelis aizvērts (${code})`);
-    });
+    tunnel.on('error', (err) => console.error('⚠️ [Cloudflare] Kļūda:', err.message));
+    tunnel.on('close', (code) => console.log(`[Cloudflare] Tunelis aizvērts (${code})`));
   } catch (err: any) {
     console.error('⚠️ [Cloudflare] Izsaukuma kļūda:', err.message);
   }
 }
-
-app.use(cors());
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ extended: true, limit: '100mb' }));
-
-let currentProjectPath = path.resolve(process.cwd(), '../../public/uploads');
-if (!fs.existsSync(currentProjectPath)) {
-  fs.mkdirSync(currentProjectPath, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    if (!fs.existsSync(currentProjectPath)) fs.mkdirSync(currentProjectPath, { recursive: true });
-    cb(null, currentProjectPath);
-  },
-  filename: (_req, file, cb) => {
-    const cleanName = Buffer.from(file.originalname, 'latin1').toString('utf8');
-    const safeName = path.basename(cleanName).replace(/\s+/g, '_');
-    cb(null, safeName);
-  }
-});
-const upload = multer({ storage });
 
 app.use('/project-media', (req, res, next) => {
   if (!currentProjectPath || !fs.existsSync(currentProjectPath)) {
@@ -93,7 +172,6 @@ app.use('/project-media', (req, res, next) => {
   express.static(currentProjectPath)(req, res, next);
 });
 
-// Automātiska lokālās IP adreses noteikšana
 const getLocalIpAddress = () => {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
@@ -125,8 +203,8 @@ const saveSnapshot = (pin: string) => {
 
     fs.writeFileSync(path.join(currentProjectPath, 'active_session.json'), JSON.stringify(payload, null, 2));
     fs.writeFileSync(path.join(currentProjectPath, 'last_session_snapshot.json'), JSON.stringify(payload, null, 2));
-  } catch (err) {
-    console.error(`Kļūda saglabājot snapshot:`, err);
+  } catch (err: any) {
+    console.error(`[Snapshot] Kļūda saglabājot sesiju ${pin}:`, err.message);
   }
 };
 
@@ -138,30 +216,36 @@ const clearSnapshot = (pin: string) => {
     if (fs.existsSync(activeFile)) fs.unlinkSync(activeFile);
     if (fs.existsSync(lastFile)) fs.unlinkSync(lastFile);
     if (fs.existsSync(pinFile)) fs.unlinkSync(pinFile);
-  } catch (err) {
-    console.error(`Kļūda dzēšot snapshot:`, err);
+  } catch (err: any) {
+    console.error(`[Snapshot] Kļūda dzēšot snapshot:`, err.message);
   }
 };
 
+// BALSOŠANAS LOĢIKA AR SPAMA UN DUBULTBALSU AIZSARDZĪBU
 const handleVote = (pin: string, answers: string[], playerId: string) => {
   const s = sessions.get(pin);
   const playersMap = sessionScores.get(pin);
   const player = playersMap?.get(playerId);
-  if (player?.isDisabled) return;
+  if (!s || !player || player.isDisabled) return;
 
-  const activeParticipantsCount = Array.from(playersMap?.values() || []).filter(p => !p.isDisabled).length;
+  const activeParticipantsCount = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled).length;
 
-  if (s?.subState === 'ACTIVE') {
+  if (s.subState === 'ACTIVE') {
     const now = Date.now();
     const timeSpentMs = Math.max(0, now - (s.questionStartTime || now));
 
-    s.votes = s.votes.filter((v: any) => v.playerId !== playerId);
-    s.votes.push({
-      optionIds: answers,
-      playerId,
-      timeReceived: now,
-      timeSpentMs
-    });
+    // Aizsardzība: Ja balss jau reģistrēta, aizvietojam, saglabājot pirmo laiku
+    const existingIndex = s.votes.findIndex((v: any) => v.playerId === playerId);
+    if (existingIndex !== -1) {
+      s.votes[existingIndex].optionIds = answers;
+    } else {
+      s.votes.push({
+        optionIds: answers,
+        playerId,
+        timeReceived: now,
+        timeSpentMs
+      });
+    }
 
     const summary: Record<string, number> = {};
     s.votes.forEach((v: any) => {
@@ -172,6 +256,7 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
 
     io.to(pin).emit('votes-updated', { summary, votedCount: s.votes.length });
 
+    // Ja visi aktīvie spēlētāji ir nobalsojuši, uzreiz pārslēdzam uz STATS
     if (activeParticipantsCount > 0 && s.votes.length >= activeParticipantsCount) {
       s.subState = 'STATS';
       if (s.currentScene) s.currentScene.endTime = Date.now();
@@ -182,88 +267,23 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
   }
 };
 
-// REST API
-app.get('/api/tunnel-url', (_req, res) => {
-  res.json({ tunnelUrl: publicTunnelUrl });
+// --- REST API MARŠRUTI ---
+
+// Sistēmas veselības pārbaude
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    uptimeSec: Math.floor(process.uptime()),
+    activeSessions: sessions.size,
+    tunnelUrl: publicTunnelUrl || null,
+    timestamp: new Date().toISOString()
+  });
 });
+
+app.get('/api/tunnel-url', (_req, res) => res.json({ tunnelUrl: publicTunnelUrl }));
 
 app.get('/api/network-ip', (_req, res) => {
   res.json({ localIp: getLocalIpAddress(), tunnelUrl: publicTunnelUrl });
-});
-
-app.get('/api/current-path', (_req, res) => res.json({ currentPath: currentProjectPath }));
-
-app.post('/api/set-path', (req, res) => {
-  try {
-    if (req.body.path?.trim()) currentProjectPath = path.resolve(req.body.path.trim());
-    if (!fs.existsSync(currentProjectPath)) fs.mkdirSync(currentProjectPath, { recursive: true });
-    const projects = fs.readdirSync(currentProjectPath).filter((f) => f.endsWith('.json') && !f.includes('snapshot'));
-    const media = fs.readdirSync(currentProjectPath).filter((f) =>
-      /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(f)
-    );
-    res.json({ success: true, currentPath: currentProjectPath, projects, media });
-  } catch {
-    res.status(500).json({ error: 'Kļūda piekļūstot mapei' });
-  }
-});
-
-app.get('/api/media-list', (_req, res) => {
-  try {
-    if (!currentProjectPath || !fs.existsSync(currentProjectPath)) return res.json([]);
-    const files = fs.readdirSync(currentProjectPath).filter((f) =>
-      /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(f)
-    );
-    res.json(files);
-  } catch {
-    res.status(500).json({ error: 'Kļūda nolasot medijus' });
-  }
-});
-
-app.post('/api/upload-media', upload.single('mediaFile'), (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'Nav faila' });
-    const files = fs.readdirSync(currentProjectPath).filter((f) =>
-      /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(f)
-    );
-    io.emit('media-list', files);
-    res.json({ success: true, fileName: req.file.filename, files });
-  } catch {
-    res.status(500).json({ error: 'Kļūda saglabājot failu' });
-  }
-});
-
-app.get('/api/list-projects', (_req, res) => {
-  try {
-    if (!currentProjectPath || !fs.existsSync(currentProjectPath)) return res.json([]);
-    const files = fs.readdirSync(currentProjectPath).filter((f) => f.endsWith('.json') && !f.includes('snapshot'));
-    res.json(files);
-  } catch {
-    res.status(500).json({ error: 'Kļūda nolasot projektus' });
-  }
-});
-
-app.get('/api/load-project/:name', (req, res) => {
-  try {
-    const rawName = path.basename(req.params.name);
-    const fileName = rawName.endsWith('.json') ? rawName : `${rawName}.json`;
-    const filePath = path.join(currentProjectPath, fileName);
-    if (fs.existsSync(filePath)) res.json(JSON.parse(fs.readFileSync(filePath, 'utf-8')));
-    else res.status(404).json({ error: 'Fails nav atrasts' });
-  } catch {
-    res.status(500).json({ error: 'Kļūda nolasot failu' });
-  }
-});
-
-app.post('/api/save-to-file', (req, res) => {
-  try {
-    const rawName = path.basename(req.body.fileName || 'project');
-    const fileName = rawName.endsWith('.json') ? rawName : `${rawName}.json`;
-    const filePath = path.join(currentProjectPath, fileName);
-    fs.writeFileSync(filePath, JSON.stringify(req.body.data, null, 2));
-    res.json({ success: true, fileName, fullPath: filePath });
-  } catch {
-    res.status(500).json({ error: 'Neizdevās saglabāt' });
-  }
 });
 
 app.get('/api/check-recovery', (_req, res) => {
@@ -275,12 +295,93 @@ app.get('/api/check-recovery', (_req, res) => {
       const data = JSON.parse(fs.readFileSync(target, 'utf-8'));
       res.json({ canRecover: true, pin: data.pin, title: data.state?.currentScene?.title || 'Saglabātā Sesija', ...data });
     } else res.json({ canRecover: false });
-  } catch {
+  } catch (err: any) {
+    console.error('Kļūda /api/check-recovery:', err.message);
     res.json({ canRecover: false });
   }
 });
 
-app.post('/api/recover-session', (_req, res) => {
+// Aizsargātie Admin maršruti
+app.get('/api/current-path', requireAdminAuth, (_req, res) => res.json({ currentPath: currentProjectPath }));
+
+app.post('/api/set-path', requireAdminAuth, (req, res) => {
+  try {
+    if (req.body.path?.trim()) currentProjectPath = path.resolve(req.body.path.trim());
+    if (!fs.existsSync(currentProjectPath)) fs.mkdirSync(currentProjectPath, { recursive: true });
+    const projects = fs.readdirSync(currentProjectPath).filter((f) => f.endsWith('.json') && !f.includes('snapshot'));
+    const media = fs.readdirSync(currentProjectPath).filter((f) =>
+      /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(f)
+    );
+    res.json({ success: true, currentPath: currentProjectPath, projects, media });
+  } catch (err: any) {
+    console.error('Kļūda /api/set-path:', err.message);
+    res.status(500).json({ error: 'Kļūda piekļūstot mapei' });
+  }
+});
+
+app.get('/api/media-list', requireAdminAuth, (_req, res) => {
+  try {
+    if (!currentProjectPath || !fs.existsSync(currentProjectPath)) return res.json([]);
+    const files = fs.readdirSync(currentProjectPath).filter((f) =>
+      /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(f)
+    );
+    res.json(files);
+  } catch (err: any) {
+    console.error('Kļūda /api/media-list:', err.message);
+    res.status(500).json({ error: 'Kļūda nolasot medijus' });
+  }
+});
+
+app.post('/api/upload-media', requireAdminAuth, uploadLimiter, upload.single('mediaFile'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Nav faila vai neatļauts formāts' });
+    const files = fs.readdirSync(currentProjectPath).filter((f) =>
+      /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(f)
+    );
+    io.emit('media-list', files);
+    res.json({ success: true, fileName: req.file.filename, files });
+  } catch (err: any) {
+    console.error('Kļūda /api/upload-media:', err.message);
+    res.status(500).json({ error: 'Kļūda saglabājot failu' });
+  }
+});
+
+app.get('/api/list-projects', requireAdminAuth, (_req, res) => {
+  try {
+    if (!currentProjectPath || !fs.existsSync(currentProjectPath)) return res.json([]);
+    const files = fs.readdirSync(currentProjectPath).filter((f) => f.endsWith('.json') && !f.includes('snapshot'));
+    res.json(files);
+  } catch (err: any) {
+    console.error('Kļūda /api/list-projects:', err.message);
+    res.status(500).json({ error: 'Kļūda nolasot projektus' });
+  }
+});
+
+app.get('/api/load-project/:name', requireAdminAuth, (req, res) => {
+  try {
+    const filePath = safeResolve(req.params.name.endsWith('.json') ? req.params.name : `${req.params.name}.json`);
+    if (fs.existsSync(filePath)) res.json(JSON.parse(fs.readFileSync(filePath, 'utf-8')));
+    else res.status(404).json({ error: 'Fails nav atrasts' });
+  } catch (err: any) {
+    console.error('Kļūda /api/load-project:', err.message);
+    res.status(500).json({ error: 'Kļūda nolasot failu' });
+  }
+});
+
+app.post('/api/save-to-file', requireAdminAuth, (req, res) => {
+  try {
+    const rawName = req.body.fileName || 'project';
+    const fileName = rawName.endsWith('.json') ? rawName : `${rawName}.json`;
+    const filePath = safeResolve(fileName);
+    fs.writeFileSync(filePath, JSON.stringify(req.body.data, null, 2));
+    res.json({ success: true, fileName: path.basename(filePath), fullPath: filePath });
+  } catch (err: any) {
+    console.error('Kļūda /api/save-to-file:', err.message);
+    res.status(500).json({ error: 'Neizdevās saglabāt' });
+  }
+});
+
+app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   try {
     const p1 = path.join(currentProjectPath, 'active_session.json');
     if (fs.existsSync(p1)) {
@@ -290,22 +391,55 @@ app.post('/api/recover-session', (_req, res) => {
       if (!participants.has(data.pin)) participants.set(data.pin, new Set());
       res.json({ success: true, pin: data.pin, state: data.state });
     } else res.status(404).json({ error: 'Nav faila' });
-  } catch {
+  } catch (err: any) {
+    console.error('Kļūda /api/recover-session:', err.message);
     res.status(500).json({ error: 'Kļūda atjaunojot' });
   }
 });
 
-// SOCKET.IO
+// GDPR UN SESIJAS DATU TĪRĪŠANAS MARŠRUTS
+app.post('/api/cleanup-session', requireAdminAuth, (req, res) => {
+  try {
+    const { pin } = req.body;
+
+    // 1. Iztīrām atmiņas kartes
+    if (pin) {
+      sessions.delete(pin);
+      sessionScores.delete(pin);
+      participants.delete(pin);
+      clearSnapshot(pin);
+    } else {
+      sessions.clear();
+      sessionScores.clear();
+      participants.clear();
+    }
+
+    // 2. Iztīrām visus snapshot failus no diska
+    const files = fs.readdirSync(currentProjectPath);
+    files.forEach((file) => {
+      if (file.includes('snapshot') || file.includes('active_session')) {
+        try {
+          fs.unlinkSync(path.join(currentProjectPath, file));
+        } catch {}
+      }
+    });
+
+    console.log(`[GDPR Cleanup] Sesijas un dalībnieku dati veiksmīgi notīrīti.`);
+    res.json({ success: true, message: 'Dati un sesijas veiksmīgi dzēstas.' });
+  } catch (err: any) {
+    console.error('Kļūda /api/cleanup-session:', err.message);
+    res.status(500).json({ error: 'Kļūda tīrot datus' });
+  }
+});
+
+// --- SOCKET.IO NOTIKUMI ---
 io.on('connection', (socket) => {
-  // Ja tunelis jau ir aktīvs, uzreiz paziņojam tikko pieslēgtajam klientam
   if (publicTunnelUrl) {
     socket.emit('tunnel-ready', { url: publicTunnelUrl });
   }
 
   socket.on('host:create-session', (data: any) => {
     const pin = data.existingPin || Math.floor(1000 + Math.random() * 9000).toString();
-
-    // Prioritāte: norādītā saite -> automātiskais Cloudflare tunelis -> lokālais Wi-Fi
     const finalUrl = data.connectionUrl || publicTunnelUrl || `http://${getLocalIpAddress()}:5173`;
 
     const sessionData = {
@@ -410,13 +544,13 @@ io.on('connection', (socket) => {
 
   const getSortedLeaderboard = (playersMap: Map<string, any>, isRound: boolean) => {
     return Array.from(playersMap.values())
-      .filter(p => !p.isDisabled)
+      .filter((p) => !p.isDisabled)
       .sort((a, b) => {
-        const scoreA = isRound ? (a.roundScore || 0) : (a.score || 0);
-        const scoreB = isRound ? (b.roundScore || 0) : (b.score || 0);
+        const scoreA = isRound ? a.roundScore || 0 : a.score || 0;
+        const scoreB = isRound ? b.roundScore || 0 : b.score || 0;
         if (scoreB !== scoreA) return scoreB - scoreA;
-        const timeA = isRound ? (a.roundTimeMs || 0) : (a.totalTimeMs || 0);
-        const timeB = isRound ? (b.roundTimeMs || 0) : (b.totalTimeMs || 0);
+        const timeA = isRound ? a.roundTimeMs || 0 : a.totalTimeMs || 0;
+        const timeB = isRound ? b.roundTimeMs || 0 : b.totalTimeMs || 0;
         return timeA - timeB;
       });
   };
@@ -426,9 +560,8 @@ io.on('connection', (socket) => {
     const playersMap = sessionScores.get(pin);
     if (!s) return;
 
-    // FINĀLA APBALVOŠANA
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
-      const activePlayers = Array.from(playersMap?.values() || []).filter(p => !p.isDisabled);
+      const activePlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
       const totalPlayers = activePlayers.length;
       if (s.finalPodiumStage === undefined) s.finalPodiumStage = 0;
 
@@ -469,9 +602,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // LEADERBOARD LAPOŠANA
     if (s.currentScene && s.currentScene.type === 'LEADERBOARD') {
-      const totalPlayers = Array.from(playersMap?.values() || []).filter(p => !p.isDisabled).length;
+      const totalPlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled).length;
       const maxPages = Math.ceil(totalPlayers / 10);
       if (s.currentPaging < maxPages - 1) {
         s.currentPaging++;
@@ -486,14 +618,12 @@ io.on('connection', (socket) => {
       }
     }
 
-    // PAPILDU SPACE PAUZE PĒC ATBILDES ATKLĀŠANAS
     if (s.subState === 'REVEAL' && !s.revealReadyToAdvance) {
       s.revealReadyToAdvance = true;
       io.to(pin).emit('reveal-wait-for-host');
       return;
     }
 
-    // PĀREJA UZ NĀKAMO SLAIDU
     if (
       s.subState === 'IDLE' ||
       s.subState === 'REVEAL' ||
@@ -575,6 +705,7 @@ io.on('connection', (socket) => {
       const totalDuration = dur * 1000;
       const maxPoints = config.pointsMax ?? config.points ?? 10;
       const minPoints = config.pointsMin ?? (config.scoringMode === 'DECREASING' ? 1 : maxPoints);
+      const isAnyOneMode = config.selectionMode === 'ANY_ONE';
 
       const sortedVotes = [...s.votes].sort((a, b) => a.timeReceived - b.timeReceived);
       let correctCounter = 0;
@@ -584,7 +715,12 @@ io.on('connection', (socket) => {
         if (Array.isArray(v.optionIds)) {
           v.optionIds.forEach((opt: string) => {
             if (correct.includes(opt)) {
-              const pct = correctnessMap[opt] !== undefined ? correctnessMap[opt] : Math.round(100 / Math.max(1, correct.length));
+              const pct =
+                correctnessMap[opt] !== undefined
+                  ? correctnessMap[opt]
+                  : isAnyOneMode
+                  ? 100
+                  : Math.round(100 / Math.max(1, correct.length));
               earnedPercentage += pct;
             }
           });
@@ -620,6 +756,8 @@ io.on('connection', (socket) => {
         }
       });
 
+      // SVARĪGI: Izsūtam state-update, lai prezentācijas ekrāns un telefoni uzzina par REVEAL fāzi
+      io.to(pin).emit('state-update', { ...s.currentScene, subState: 'REVEAL', isRevealed: true });
       io.to(pin).emit('results-revealed', { correctAnswers: correct, correctnessMap });
 
       const nextScene = s.scenes[s.currentSceneIdx + 1];
@@ -649,6 +787,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  // JOIN-SESSION AR AUTOMĀTISKO ATJAUNOŠANOS (RECONNECT NOTURĪBA)
   socket.on('join-session', (data: { pin: string; name: string; playerId: string }) => {
     if (sessions.has(data.pin)) {
       socket.join(data.pin);
@@ -659,6 +798,7 @@ io.on('connection', (socket) => {
         if (!participants.has(data.pin)) participants.set(data.pin, new Set());
         participants.get(data.pin)?.add(socket.id);
 
+        // Ja dalībnieks pieslēdzas pirmo reizi
         if (!playerObj) {
           const deviceNumber = players.size + 1;
           playerObj = {
@@ -673,6 +813,11 @@ io.on('connection', (socket) => {
             isBot: false
           };
           players.set(data.playerId, playerObj);
+        } else {
+          // Ja dalībnieks atgriežas pēc ekrāna iemigšanas / tīkla pārtraukuma
+          if (data.name && data.name !== playerObj.name) {
+            playerObj.name = data.name;
+          }
         }
       }
 
@@ -720,6 +865,5 @@ httpServer.listen(PORT, () => {
   console.log(`🚀 EVENT STUDIO SERVERIS PALAISTS UZ PORTA: ${PORT}`);
   console.log(`📡 Lokālā tīkla IP adrese: http://${getLocalIpAddress()}:5173`);
 
-  // Palaižam Cloudflare tuneli
   startCloudflareTunnel();
 });

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { socket } from './socket';
-import { BACKEND_URL } from './config';
+import { BACKEND_URL, ADMIN_API_KEY, getAdminHeaders } from './config';
 
 export default function Host() {
   const [pin, setPin] = useState<string | null>(localStorage.getItem('active_pin'));
@@ -28,9 +28,8 @@ export default function Host() {
   );
   const [isTunnelAutoDetected, setIsTunnelAutoDetected] = useState(false);
 
-  // 1. Automātiski uztveram Cloudflare tuneli no visiem avotiem (URL parametrs, API, Socket)
+  // 1. Automātiski uztveram Cloudflare tuneli no visiem avotiem
   useEffect(() => {
-    // A) Pārbaudām, vai saite nav nodota URL parametrā (?tunnel=https://...)
     const urlParams = new URLSearchParams(window.location.search);
     const tunnelParam = urlParams.get('tunnel');
     if (tunnelParam) {
@@ -40,7 +39,6 @@ export default function Host() {
       localStorage.setItem('event_tunnel_url', tunnelParam);
     }
 
-    // B) Nolasām IP un iespējamo tuneli caur REST API
     fetch(`${BACKEND_URL}/api/network-ip`)
       .then((r) => r.json())
       .then((d) => {
@@ -54,7 +52,6 @@ export default function Host() {
       })
       .catch(() => {});
 
-    // C) Klausāmies reāllaika Socket paziņojumu, tiklīdz Cloudflare ir gatavs
     const handleTunnelReady = (data: { url: string }) => {
       if (data?.url) {
         console.log('🚀 [Cloudflare] Automātiski saņemta tuneļa saite:', data.url);
@@ -78,20 +75,23 @@ export default function Host() {
       ? (customTunnelUrl.trim().startsWith('http') ? customTunnelUrl.trim() : `https://${customTunnelUrl.trim()}`).replace(/\/$/, '')
       : `http://${localIp}:5173`;
 
+  // PROJEKTU MAPES SKENĒŠANA AR ADMIN ATSLĒGU
   const loadProjects = async (folderPath?: string) => {
     try {
       setIsLoading(true);
       const targetFolder = folderPath || folder;
       const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(), // <-- Nosūta x-admin-key drošības atslēgu
         body: JSON.stringify({ path: targetFolder })
       });
       const data = await res.json();
-      if (Array.isArray(data.projects)) {
+      if (data.success && Array.isArray(data.projects)) {
         setLocalProjects(data.projects);
         setFolder(data.currentPath);
         localStorage.setItem('event_studio_folder', data.currentPath);
+      } else {
+        setLocalProjects([]);
       }
     } catch {
       alert('❌ Kļūda piekļūstot mapei!');
@@ -109,7 +109,10 @@ export default function Host() {
             `Atrasta nepabeigta sesija ar PIN: ${data.pin} ("${data.title || 'Aktīvā spēle'}"). Vai atjaunot?`
           );
           if (shouldRecover) {
-            fetch(`${BACKEND_URL}/api/recover-session`, { method: 'POST' })
+            fetch(`${BACKEND_URL}/api/recover-session`, {
+              method: 'POST',
+              headers: getAdminHeaders() // <-- Nosūta x-admin-key
+            })
               .then((r) => r.json())
               .then((rec) => {
                 if (rec.success) {
@@ -127,10 +130,13 @@ export default function Host() {
     loadProjects();
   }, []);
 
+  // PROJEKTA IELĀDE UN SĀKŠANA
   const startProject = async (fileName: string) => {
     try {
       setIsLoading(true);
-      const res = await fetch(`${BACKEND_URL}/api/load-project/${fileName}`);
+      const res = await fetch(`${BACKEND_URL}/api/load-project/${fileName}`, {
+        headers: { 'x-admin-key': ADMIN_API_KEY } // <-- Nosūta x-admin-key
+      });
       if (!res.ok) throw new Error();
 
       const projectData = await res.json();
@@ -351,6 +357,14 @@ export default function Host() {
     return (a.deviceNumber || 0) - (b.deviceNumber || 0);
   });
 
+  const isCurrentMulti =
+    currentScene?.config?.selectionMode === 'ALL' &&
+    (currentScene?.config?.correctAnswers?.length || 0) > 1;
+
+  const isCurrentAnyOne =
+    currentScene?.config?.selectionMode === 'ANY_ONE' &&
+    (currentScene?.config?.correctAnswers?.length || 0) > 1;
+
   return (
     <div style={panelContainer}>
       <div style={topBar}>
@@ -385,6 +399,16 @@ export default function Host() {
         <div style={{ marginTop: '5px', opacity: 0.9 }}>
           Slaids: <strong>{currentScene?.title || 'Nav sākts'}</strong> | Fāze:{' '}
           <span style={{ color: '#ffc107', fontWeight: 'bold' }}>{currentScene?.subState || 'IDLE'}</span>
+          {isCurrentMulti && (
+            <span style={{ marginLeft: '10px', background: '#007bff', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>
+              ☑️ Daudzizvēle (Visi jānorāda)
+            </span>
+          )}
+          {isCurrentAnyOne && (
+            <span style={{ marginLeft: '10px', background: '#17a2b8', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>
+              ☝️ Pietiek ar 1 pareizo
+            </span>
+          )}
         </div>
       </div>
 
@@ -475,6 +499,9 @@ export default function Host() {
           <div>
             {scenes.map((s, i) => {
               const isActive = currentScene?.id === s.id;
+              const hasMulti = s.config?.selectionMode === 'ALL' && (s.config?.correctAnswers?.length || 0) > 1;
+              const hasAnyOne = s.config?.selectionMode === 'ANY_ONE' && (s.config?.correctAnswers?.length || 0) > 1;
+
               return (
                 <div
                   key={s.id || i}
@@ -486,9 +513,19 @@ export default function Host() {
                   }}
                 >
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 'bold' }}>
-                      {i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})
-                      {s.type === 'LEADERBOARD' && ` [${s.config?.lbType || 'TOTAL'}]`}
+                    <div style={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                      <span>{i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})</span>
+                      {s.type === 'LEADERBOARD' && <span>[{s.config?.lbType || 'TOTAL'}]</span>}
+                      {hasMulti && (
+                        <span style={{ fontSize: '0.75rem', background: '#007bff', color: '#fff', padding: '1px 6px', borderRadius: '4px' }}>
+                          ☑️ Daudzizvēle
+                        </span>
+                      )}
+                      {hasAnyOne && (
+                        <span style={{ fontSize: '0.75rem', background: '#17a2b8', color: '#fff', padding: '1px 6px', borderRadius: '4px' }}>
+                          ☝️ Viens no
+                        </span>
+                      )}
                     </div>
                     {s.config?.notes && (
                       <div style={{ fontSize: '0.8rem', color: '#ffc107', marginTop: '3px' }}>

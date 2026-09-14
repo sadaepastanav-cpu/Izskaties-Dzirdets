@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { io } from 'socket.io-client';
+import { io, Socket } from 'socket.io-client';
 import { BACKEND_URL } from './config';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
@@ -17,31 +17,34 @@ export default function Player() {
     return id;
   });
 
-  const [socket, setSocket] = useState<any>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
   const [deviceNumber, setDeviceNumber] = useState<number | null>(null);
   const [isJoined, setIsJoined] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
   const [scene, setScene] = useState<any>(null);
   const [subState, setSubState] = useState<string>('IDLE');
-  const [hasStartedFirstQuestion, setHasStartedFirstQuestion] = useState(false);
+
+  // Atbilžu izvēles stāvokļi
   const [myChoice, setMyChoice] = useState<string | null>(null);
+  const [selectedMultipleOptions, setSelectedMultipleOptions] = useState<string[]>([]);
+
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [leaderboardType, setLeaderboardType] = useState<string>('TOTAL');
-
-  // 5. PUNKTS: Pults testa spiedienu skaitītājs telefonā
   const [buzzerTestPresses, setBuzzerTestPresses] = useState(0);
 
   const [branding, setBranding] = useState<any>(() => {
     try {
       const cached = localStorage.getItem('cached_branding');
-      return cached ? JSON.parse(cached) : {
-        appTitle: 'EVENT BUZZER',
-        appLogo: '',
-        appBgImage: '',
-        welcomeImage: '',
-        appBgColor: '#121212',
-        lobbyMode: 'CIRCLE'
-      };
+      return cached
+        ? JSON.parse(cached)
+        : {
+            appTitle: 'EVENT BUZZER',
+            appLogo: '',
+            appBgImage: '',
+            welcomeImage: '',
+            appBgColor: '#121212',
+            lobbyMode: 'CIRCLE'
+          };
     } catch {
       return {
         appTitle: 'EVENT BUZZER',
@@ -70,7 +73,7 @@ export default function Player() {
     };
   }, []);
 
-  // Automātiski nolasa PIN no URL parametriem (ja noskenēts QR kods)
+  // Automātiski nolasa PIN no URL parametriem
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlPin = params.get('pin');
@@ -80,18 +83,30 @@ export default function Player() {
     }
   }, []);
 
-  // Pieslēgšanās serverim
+  // SOCKET.IO SAVIENOJUMS AR RECONNECT NOTURĪBU
   useEffect(() => {
-    const s = io(BACKEND_URL);
+    const s = io(BACKEND_URL, {
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    });
     setSocket(s);
 
-    const wasAlreadyJoined = sessionStorage.getItem('player_active_session') === 'true';
-    const savedPin = localStorage.getItem('player_pin');
-    const savedName = localStorage.getItem('player_name');
+    const tryAutoJoin = () => {
+      const savedPin = localStorage.getItem('player_pin');
+      const savedName = localStorage.getItem('player_name');
+      const wasJoined = sessionStorage.getItem('player_active_session') === 'true';
 
-    if (wasAlreadyJoined && savedPin && savedName) {
-      s.emit('join-session', { pin: savedPin.trim(), name: savedName.trim(), playerId });
-    }
+      if (wasJoined && savedPin && savedName) {
+        s.emit('join-session', { pin: savedPin.trim(), name: savedName.trim(), playerId });
+      }
+    };
+
+    s.on('connect', () => {
+      tryAutoJoin();
+    });
 
     s.on('join-success', (data: any) => {
       setIsJoined(true);
@@ -108,7 +123,6 @@ export default function Player() {
       if (data?.currentScene) setScene(data.currentScene);
       const currentSub = (data?.subState || data?.currentScene?.subState || 'IDLE').toUpperCase();
       setSubState(currentSub);
-      if (currentSub === 'ACTIVE') setHasStartedFirstQuestion(true);
       localStorage.setItem('player_pin', pin.trim());
       localStorage.setItem('player_name', name.trim());
     });
@@ -127,8 +141,8 @@ export default function Player() {
       setScene(newScene);
       const newSub = (newScene?.subState || 'READY').toUpperCase();
       setSubState(newSub);
-      if (newSub === 'ACTIVE') setHasStartedFirstQuestion(true);
       setMyChoice(null);
+      setSelectedMultipleOptions([]);
     });
 
     s.on('leaderboard-update', (payload: any) => {
@@ -167,7 +181,10 @@ export default function Player() {
     }
   };
 
-  const handleVoteSubmit = (option: string, letter: string) => {
+  const isMultiSelectMode =
+    scene?.config?.selectionMode === 'ALL' && (scene?.config?.correctAnswers?.length || 0) > 1;
+
+  const handleSingleVoteSubmit = (option: string, letter: string) => {
     if (myChoice || !socket) return;
     try {
       if ('vibrate' in navigator) navigator.vibrate(80);
@@ -178,7 +195,34 @@ export default function Player() {
     socket.emit('participant:submit-answer', { pin, answer: option || letter, answers, playerId });
   };
 
-  // 5. PUNKTS: PULTS TESTA POGA
+  const toggleMultiSelectOption = (item: string) => {
+    if (myChoice) return;
+    try {
+      if ('vibrate' in navigator) navigator.vibrate(40);
+    } catch {}
+
+    setSelectedMultipleOptions((prev) =>
+      prev.includes(item) ? prev.filter((x) => x !== item) : [...prev, item]
+    );
+  };
+
+  const handleMultiVoteSubmit = () => {
+    if (myChoice || !socket || selectedMultipleOptions.length === 0) return;
+    try {
+      if ('vibrate' in navigator) navigator.vibrate(100);
+    } catch {}
+
+    const chosenStr = selectedMultipleOptions.join(', ');
+    setMyChoice(chosenStr);
+
+    socket.emit('participant:submit-answer', {
+      pin,
+      answer: chosenStr,
+      answers: selectedMultipleOptions,
+      playerId
+    });
+  };
+
   const handleTestBuzzer = () => {
     if (!socket) return;
     try {
@@ -193,8 +237,9 @@ export default function Player() {
     localStorage.removeItem('player_pin');
     setIsJoined(false);
     setIsGameOver(false);
-    setHasStartedFirstQuestion(false);
+    setScene(null);
     setMyChoice(null);
+    setSelectedMultipleOptions([]);
     setDeviceNumber(null);
     setBuzzerTestPresses(0);
     setPin('');
@@ -260,10 +305,8 @@ export default function Player() {
     );
   }
 
-  // 2. SĀKUMA GAIDĪŠANAS / REKLĀMAS EKRĀNS (AR 5. PUNKTA PULTS TESTA POGU)
-  const isWaitingForFirstQuestion = !hasStartedFirstQuestion && (!scene || subState === 'IDLE' || subState === 'READY');
-
-  if (isWaitingForFirstQuestion) {
+  // 2. SĀKUMA REĢISTRĀCIJAS LOBIJS (RĀDA TIKAI TAD, KAD ŠOVS VĒL NAV SĀKTS — scene === null)
+  if (!scene) {
     const isInteractiveLobby = branding.lobbyMode === 'INTERACTIVE_DOTS';
 
     return (
@@ -285,18 +328,17 @@ export default function Player() {
           <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
         </div>
 
-        {/* 5. PUNKTS: PULTS TESTA POGA INTERAKTĪVAJĀ REŽĪMĀ */}
         <div style={{ margin: 'auto', textAlign: 'center', padding: '20px', width: '90%', maxWidth: '360px' }}>
           {isInteractiveLobby ? (
             <div style={infoCard}>
               <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>🎯</div>
               <h2 style={{ color: '#00e5ff', margin: '0 0 10px 0', fontSize: '1.4rem' }}>PĀRBAUDI PULTI!</h2>
               <p style={{ color: '#ccc', fontSize: '0.95rem', lineHeight: 1.4, marginBottom: '20px' }}>
-                Nospiediet pogu, lai pārbaudītu pults darbību. Tava bumbiņa lielajā ekrānā pulsēs!
+                Nospiediet pogu, lai pārbaudītu pults darbību. Tava bumbiņa lielajā ekrānā pulsēs un mainīs krāsas!
               </p>
 
               <button onClick={handleTestBuzzer} style={testBuzzerBtn}>
-                🔴 PĀRBAUDĪT PULTI ({buzzerTestPresses >= 3 ? 'GATAVS! 🎉' : `${buzzerTestPresses}/3`})
+                🔴 PĀRBAUDĪT PULTI ({buzzerTestPresses > 0 ? `Spiediens #${buzzerTestPresses} 💥` : 'SPIED ŠEIT 🎯'})
               </button>
             </div>
           ) : (
@@ -394,6 +436,7 @@ export default function Player() {
       </div>
 
       <div style={mobileBody}>
+        {/* A) BILLBOARD EKRĀNS */}
         {slideType === 'BILLBOARD' && (
           <div style={infoCard}>
             {branding.appLogo && (
@@ -405,12 +448,13 @@ export default function Player() {
             )}
             <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>👀</div>
             <h2 style={{ color: '#ffc107', margin: '0 0 10px 0', fontSize: '1.4rem' }}>SEKOJIET EKRĀNAM!</h2>
-            <p style={{ color: '#ccc', fontSize: '1rem', lineHeight: 1.4, margin: 0 }}>
-              Sekojiet tekstam un video lielajā ekrānā. Drīz sāksies nākamais jautājums!
+            <p style={{ color: '#fff', fontSize: '1.05rem', lineHeight: 1.5, margin: 0, fontWeight: 'bold' }}>
+              Aicinām sekot līdzi informācijai galvenajā ekrānā!
             </p>
           </div>
         )}
 
+        {/* B) LĪDERU TABULA */}
         {slideType === 'LEADERBOARD' && (
           <div style={infoCard}>
             <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🏆</div>
@@ -437,27 +481,33 @@ export default function Player() {
           </div>
         )}
 
+        {/* C) JAUTĀJUMU EKRĀNS */}
         {(slideType === 'QUESTION' || slideType === 'QUIZ' || slideType === 'VOTE' || slideType === 'MAJORITY' || slideType === '') && (
           <>
+            {/* 1. FĀZE: READY (Vadītājs nupat atvēris jautājumu, laiks vēl neiet) */}
             {currentSub === 'READY' && (
               <div style={infoCard}>
-                <div style={{ fontSize: '3rem', marginBottom: '10px' }}>⏳</div>
-                <h2 style={{ color: '#ffc107', margin: '0 0 10px 0' }}>UZMANĪBU!</h2>
-                <p style={{ color: '#ccc', fontSize: '1rem', margin: 0 }}>Gatavojieties! Tūlīt parādīsies atbilžu varianti...</p>
+                <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>⏳</div>
+                <h2 style={{ color: '#ffc107', margin: '0 0 12px 0', fontSize: '1.5rem' }}>UZMANĪBU!</h2>
+                <p style={{ color: '#fff', fontSize: '1.1rem', lineHeight: 1.5, margin: 0, fontWeight: 'bold' }}>
+                  Uzgaidi, tūlīt startēs laiks un parādīsies atbilžu varianti!
+                </p>
+                <p style={{ color: '#888', fontSize: '0.85rem', marginTop: '12px' }}>
+                  Seko līdzi jautājumam uz lielā ekrāna.
+                </p>
               </div>
             )}
 
+            {/* 2. FĀZE: ACTIVE (Rit laiks un spēlētājs var atbildēt) */}
             {currentSub === 'ACTIVE' && (
               <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', boxSizing: 'border-box', padding: '5px 0' }}>
-                
-                {/* LIELS LOGO VIRS VARIANTIEM */}
                 {branding.appLogo ? (
-                  <div style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', maxHeight: '16vh', minHeight: '60px', marginBottom: '4px' }}>
+                  <div style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', maxHeight: '14vh', minHeight: '50px', marginBottom: '4px' }}>
                     <img
                       src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
                       alt="Logo"
                       style={{
-                        maxHeight: '14vh',
+                        maxHeight: '12vh',
                         maxWidth: '85vw',
                         height: 'auto',
                         objectFit: 'contain',
@@ -466,11 +516,15 @@ export default function Player() {
                     />
                   </div>
                 ) : (
-                  <div style={{ height: '10px' }} />
+                  <div style={{ height: '6px' }} />
                 )}
 
                 <div style={textHeaderBadge}>
-                  {myChoice ? '✅ ATBILDE NOSŪTĪTA' : 'SPIED ATBILDI:'}
+                  {myChoice
+                    ? '✅ ATBILDE NOSŪTĪTA'
+                    : isMultiSelectMode
+                    ? '☑️ ATZĪMĒ VISAS PAREIZĀS ATBILDES:'
+                    : 'SPIED ATBILDI:'}
                 </div>
 
                 <div
@@ -480,31 +534,41 @@ export default function Player() {
                     gap: '8px',
                     width: '100%',
                     flex: 1,
-                    maxHeight: options.length > 4 ? '50vh' : '45vh',
+                    maxHeight: options.length > 4 ? '48vh' : '42vh',
                     alignContent: 'center'
                   }}
                 >
                   {options.map((opt, i) => {
                     const letter = String.fromCharCode(65 + i);
-                    const isChosen = myChoice === opt || myChoice === letter;
+                    const itemKey = opt || letter;
+
+                    const isSelectedMulti = selectedMultipleOptions.includes(itemKey) || selectedMultipleOptions.includes(opt) || selectedMultipleOptions.includes(letter);
+                    const isChosenSingle = myChoice === opt || myChoice === letter;
+                    const isChosen = isMultiSelectMode ? isSelectedMulti : isChosenSingle;
 
                     return (
                       <button
                         key={i}
                         disabled={!!myChoice}
-                        onClick={() => handleVoteSubmit(opt, letter)}
+                        onClick={() => {
+                          if (isMultiSelectMode) {
+                            toggleMultiSelectOption(itemKey);
+                          } else {
+                            handleSingleVoteSubmit(opt, letter);
+                          }
+                        }}
                         style={{
                           ...buzzerBtnCompact,
-                          minHeight: options.length > 4 ? '44px' : '52px',
-                          maxHeight: options.length > 4 ? '56px' : '65px',
+                          minHeight: options.length > 4 ? '44px' : '50px',
+                          maxHeight: options.length > 4 ? '56px' : '62px',
                           background: isChosen ? '#28a745' : BUTTON_COLORS[i % BUTTON_COLORS.length],
                           border: isChosen ? '3px solid #fff' : 'none',
                           opacity: myChoice && !isChosen ? 0.35 : 1,
                           boxShadow: isChosen ? '0 0 20px #28a745' : '0 4px 10px rgba(0,0,0,0.6)'
                         }}
                       >
-                        <span style={{ fontSize: '1.8rem', fontWeight: '900', marginRight: opt && opt.trim() !== '' ? '8px' : '0' }}>
-                          {letter}
+                        <span style={{ fontSize: '1.6rem', fontWeight: '900', marginRight: opt && opt.trim() !== '' ? '8px' : '0' }}>
+                          {isMultiSelectMode ? (isChosen ? '☑️ ' : '⬜ ') : ''}{letter}
                         </span>
                         {opt && opt.trim() !== '' && (
                           <span style={{ fontSize: '1rem', fontWeight: 'bold', flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -516,14 +580,29 @@ export default function Player() {
                   })}
                 </div>
 
+                {isMultiSelectMode && !myChoice && (
+                  <button
+                    onClick={handleMultiVoteSubmit}
+                    disabled={selectedMultipleOptions.length === 0}
+                    style={{
+                      ...btnSubmitMulti,
+                      opacity: selectedMultipleOptions.length === 0 ? 0.4 : 1,
+                      cursor: selectedMultipleOptions.length === 0 ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    🚀 IESNIEGT ATBILDES ({selectedMultipleOptions.length})
+                  </button>
+                )}
+
                 {myChoice && (
                   <div style={voteConfirmedBadge}>
-                    ✅ Atbilde {myChoice} pieņemta!
+                    ✅ Atbilde ({myChoice}) pieņemta!
                   </div>
                 )}
               </div>
             )}
 
+            {/* 3. FĀZE: STATS vai REVEAL (Balsošana noslēgusies) */}
             {(currentSub === 'STATS' || currentSub === 'REVEAL') && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3rem', marginBottom: '10px' }}>📊</div>
@@ -682,6 +761,19 @@ const voteConfirmedBadge: React.CSSProperties = {
   fontWeight: 'bold',
   fontSize: '0.95rem',
   marginTop: '5px'
+};
+
+const btnSubmitMulti: React.CSSProperties = {
+  width: '100%',
+  padding: '12px',
+  borderRadius: '10px',
+  background: 'linear-gradient(135deg, #28a745, #20c997)',
+  color: '#fff',
+  border: '2px solid #fff',
+  fontSize: '1.05rem',
+  fontWeight: 'bold',
+  boxShadow: '0 0 15px rgba(40, 167, 69, 0.6)',
+  marginTop: '8px'
 };
 
 const darkStatusStrip: React.CSSProperties = {
