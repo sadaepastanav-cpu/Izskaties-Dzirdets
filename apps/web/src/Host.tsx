@@ -9,6 +9,7 @@ const formatThinkingTime = (ms?: number): string => {
 
 export default function Host() {
   const [pin, setPin] = useState<string | null>(localStorage.getItem('active_pin'));
+  const [hostToken, setHostToken] = useState<string | null>(localStorage.getItem('active_host_token'));
   const [scenes, setScenes] = useState<any[]>([]);
   const [currentScene, setCurrentScene] = useState<any>(null);
   const [folder, setFolder] = useState(
@@ -16,6 +17,7 @@ export default function Host() {
   );
   const [localProjects, setLocalProjects] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isStartingTunnel, setIsStartingTunnel] = useState(false);
   const [leaderboardPage, setLeaderboardPage] = useState<number>(0);
   const [podiumStage, setPodiumStage] = useState<number>(0);
 
@@ -25,7 +27,7 @@ export default function Host() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // TĪKLA UN TUNEĻA IZVĒLES IESTATĪJUMI
+  // TĪKLA UN TUNEĻA IESTATĪJUMI
   const [connectionMode, setConnectionMode] = useState<'LAN' | 'TUNNEL'>(
     (localStorage.getItem('event_conn_mode') as any) || 'TUNNEL'
   );
@@ -35,7 +37,6 @@ export default function Host() {
   );
   const [isTunnelAutoDetected, setIsTunnelAutoDetected] = useState(false);
 
-  // 1. Automātiski uztveram Cloudflare tuneli un lokālo IP
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tunnelParam = urlParams.get('tunnel');
@@ -61,10 +62,11 @@ export default function Host() {
 
     const handleTunnelReady = (data: { url: string }) => {
       if (data?.url) {
-        console.log('🚀 [Cloudflare] Automātiski saņemta tuneļa saite:', data.url);
+        console.log('🚀 [Cloudflare] Tunelis gatavs:', data.url);
         setCustomTunnelUrl(data.url);
         setConnectionMode('TUNNEL');
         setIsTunnelAutoDetected(true);
+        setIsStartingTunnel(false);
         localStorage.setItem('event_tunnel_url', data.url);
       }
     };
@@ -81,7 +83,11 @@ export default function Host() {
       ? (customTunnelUrl.trim().startsWith('http') ? customTunnelUrl.trim() : `https://${customTunnelUrl.trim()}`).replace(/\/$/, '')
       : `http://${localIp}:5173`;
 
-  // 2. PROJEKTU MAPES SKENĒŠANA UN SERVERA MAPES NOLASĪŠANA
+  const handleStartTunnel = () => {
+    setIsStartingTunnel(true);
+    socket.emit('host:start-tunnel');
+  };
+
   const loadProjects = async (folderPath?: string) => {
     try {
       setIsLoading(true);
@@ -107,7 +113,6 @@ export default function Host() {
   };
 
   useEffect(() => {
-    // Nolasām no servera pašreizējo ceļu
     fetch(`${BACKEND_URL}/api/current-path`, {
       headers: getAdminHeaders()
     })
@@ -139,9 +144,11 @@ export default function Host() {
               .then((rec) => {
                 if (rec.success) {
                   setPin(rec.pin);
+                  setHostToken(rec.hostToken);
                   setCurrentScene(rec.state?.currentScene);
                   setScenes(rec.state?.scenes || []);
                   localStorage.setItem('active_pin', rec.pin);
+                  if (rec.hostToken) localStorage.setItem('active_host_token', rec.hostToken);
                 }
               });
           }
@@ -150,7 +157,6 @@ export default function Host() {
       .catch(() => {});
   }, []);
 
-  // PROJEKTA IELĀDE NO MAPES
   const startProject = async (fileName: string) => {
     try {
       setIsLoading(true);
@@ -174,7 +180,6 @@ export default function Host() {
     }
   };
 
-  // TIEŠA PROJEKTA IELĀDE NO .JSON FAILA DATORĀ
   const handleDirectFileOpen = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -203,38 +208,43 @@ export default function Host() {
     reader.readAsText(file);
   };
 
-  // SESIJAS BEIGŠANA
   const handleEndSession = () => {
-    if (pin) {
-      socket.emit('host:end-session', { pin });
+    if (pin && hostToken) {
+      socket.emit('host:end-session', { pin, hostToken });
     }
     setPin(null);
+    setHostToken(null);
     setCurrentScene(null);
     setScenes([]);
     setLeaderboardPage(0);
     setPodiumStage(0);
     setPlayersList([]);
     localStorage.removeItem('active_pin');
+    localStorage.removeItem('active_host_token');
   };
 
   const changeLeaderboardPage = (newPage: number) => {
-    if (newPage < 0 || !pin) return;
+    if (newPage < 0 || !pin || !hostToken) return;
     setLeaderboardPage(newPage);
-    socket.emit('host:change-leaderboard-page', { pin, page: newPage });
+    socket.emit('host:change-leaderboard-page', { pin, hostToken, page: newPage });
   };
 
   const toggleChart = () => {
-    if (pin) socket.emit('host:toggle-chart', { pin });
+    if (pin && hostToken) socket.emit('host:toggle-chart', { pin, hostToken });
   };
 
   const updatePlayer = (playerId: string, updates: any) => {
-    if (!pin) return;
-    socket.emit('host:update-player', { pin, playerId, ...updates });
+    if (!pin || !hostToken) return;
+    socket.emit('host:update-player', { pin, hostToken, playerId, ...updates });
   };
 
   useEffect(() => {
     const handleSessionInfo = (data: any) => {
       setPin(data.pin);
+      if (data.hostToken) {
+        setHostToken(data.hostToken);
+        localStorage.setItem('active_host_token', data.hostToken);
+      }
       setScenes(data.state?.scenes || []);
       setCurrentScene(data.state?.currentScene);
       localStorage.setItem('active_pin', data.pin);
@@ -268,9 +278,9 @@ export default function Host() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
 
-      if (e.code === 'Space' && pin) {
+      if (e.code === 'Space' && pin && hostToken) {
         e.preventDefault();
-        socket.emit('host:advance', pin);
+        socket.emit('host:advance', { pin, hostToken });
       } else if ((e.key === 'c' || e.key === 'C') && pin) {
         e.preventDefault();
         toggleChart();
@@ -287,16 +297,15 @@ export default function Host() {
       socket.off('podium-stage-change');
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [pin]);
+  }, [pin, hostToken]);
 
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
 
-  // SKATS 1: PROJEKTA IZVĒLE UN DARBA MAPE
+  // SKATS 1: PROJEKTA IZVĒLE
   if (!pin) {
     return (
       <div style={panelContainer}>
-        {/* Slēpts failu ievades lauks */}
         <input
           type="file"
           ref={fileInputRef}
@@ -309,10 +318,18 @@ export default function Host() {
         
         {/* TĪKLA UN TUNEĻA KONFIGURĀCIJA */}
         <div style={{ ...cardBox, border: '1px solid #007bff', marginBottom: '20px', background: '#182430' }}>
-          <h3 style={{ margin: '0 0 10px 0', color: '#00e5ff' }}>📡 KĀ SPĒLĒTĀJI PIESLĒGSIES?</h3>
-          <p style={{ fontSize: '0.85rem', color: '#aaa', margin: '0 0 15px 0' }}>
-            Saite, kas tiks iekodēta QR kodā un nosūtīta pultīm:
-          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <h3 style={{ margin: 0, color: '#00e5ff' }}>📡 KĀ SPĒLĒTĀJI PIESLĒGSIES?</h3>
+            {!customTunnelUrl && (
+              <button
+                onClick={handleStartTunnel}
+                disabled={isStartingTunnel}
+                style={{ ...btnScan, background: '#6f42c1', fontSize: '0.85rem', padding: '6px 12px' }}
+              >
+                {isStartingTunnel ? '⏳ Startējam...' : '🚀 Palaist Cloudflare tuneli'}
+              </button>
+            )}
+          </div>
 
           <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
             <button
@@ -349,7 +366,7 @@ export default function Host() {
             <div style={{ ...noticeBox, background: '#1a1025', borderColor: customTunnelUrl ? '#00ff00' : '#d63384' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                 <span style={{ fontSize: '0.85rem', color: customTunnelUrl ? '#00ff00' : '#ff79c6', fontWeight: 'bold' }}>
-                  {customTunnelUrl ? '✓ Cloudflare tunelis aktīvs:' : '⏳ Gaidām Cloudflare tuneļa saiti...'}
+                  {customTunnelUrl ? '✓ Cloudflare tunelis aktīvs:' : '⏳ Tunelis nav palaists (nospiediet augšā pogu):'}
                 </span>
                 {isTunnelAutoDetected && (
                   <span style={{ fontSize: '0.75rem', background: '#28a745', color: '#fff', padding: '2px 6px', borderRadius: '4px' }}>
@@ -360,7 +377,7 @@ export default function Host() {
               <input
                 value={customTunnelUrl}
                 onChange={(e) => setCustomTunnelUrl(e.target.value)}
-                placeholder="Gaidām tuneli vai ievadi manuāli..."
+                placeholder="Palaidiet tuneli vai ievadiet manuāli..."
                 style={{
                   ...folderInputHost,
                   color: '#00e5ff',
@@ -373,7 +390,7 @@ export default function Host() {
           )}
         </div>
 
-        {/* PROJEKTU MAPE UN TIEŠA FAILA ATVĒRŠANA */}
+        {/* PROJEKTU MAPE */}
         <div style={cardBox}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <h3 style={{ margin: 0 }}>📂 AKTUĀLĀ PROJEKTU MAPE</h3>
@@ -463,7 +480,7 @@ export default function Host() {
           <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas skaitļus ekrānā">
             📊 Statistika [C]
           </button>
-          <button onClick={() => socket.emit('host:simulate-players', { pin, count: 20 })} style={btnGray}>
+          <button onClick={() => socket.emit('host:simulate-players', { pin, hostToken, count: 20 })} style={btnGray}>
             🤖 +20 Boti
           </button>
           <button onClick={() => window.open(`/present/${pin}`, '_blank')} style={btnBlue}>
@@ -482,12 +499,12 @@ export default function Host() {
           <span style={{ color: '#ffc107', fontWeight: 'bold' }}>{currentScene?.subState || 'IDLE'}</span>
           {isCurrentMulti && (
             <span style={{ marginLeft: '10px', background: '#007bff', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>
-              ☑️ Daudzizvēle (Visi jānorāda)
+              ☑️ Daudzizvēle
             </span>
           )}
           {isCurrentAnyOne && (
             <span style={{ marginLeft: '10px', background: '#17a2b8', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>
-              ☝️ Pietiek ar 1 pareizo
+              ☝️ Viens no
             </span>
           )}
         </div>
@@ -586,7 +603,7 @@ export default function Host() {
               return (
                 <div
                   key={s.id || i}
-                  onClick={() => socket.emit('host:next-scene', { pin, scene: s })}
+                  onClick={() => hostToken && socket.emit('host:next-scene', { pin, hostToken, scene: s })}
                   style={{
                     ...slideRow,
                     background: isActive ? '#28a745' : '#222',

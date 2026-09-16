@@ -4,22 +4,36 @@ import cors from 'cors';
 import * as path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import { createServer } from 'http';
-import { Server } from 'socket.io';
-import { PrismaClient } from '@prisma/client';
+import { Server, Socket } from 'socket.io';
 import multer from 'multer';
-import { spawn } from 'child_process';
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import rateLimit from 'express-rate-limit';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
 const app = express();
 const httpServer = createServer(app);
-const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3000;
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'izskaties_dzirdets_super_secret_key_2026';
 
 let publicTunnelUrl = '';
+let tunnelProcess: ChildProcessWithoutNullStreams | null = null;
+
+// DROŠAS MAPJU STRUKTŪRAS
+// 1. Publisko mediju bāzes mape
+const MEDIA_ROOT_DIR = path.resolve(process.cwd(), '../../public/uploads');
+let currentProjectPath = MEDIA_ROOT_DIR;
+if (!fs.existsSync(currentProjectPath)) {
+  fs.mkdirSync(currentProjectPath, { recursive: true });
+}
+
+// 2. IEKŠĒJĀ DROŠĀ DATU MAPE (Snapshotiem - NAV publiski pieejama caur HTTP)
+const SECURE_DATA_DIR = path.resolve(process.cwd(), 'server_data');
+if (!fs.existsSync(SECURE_DATA_DIR)) {
+  fs.mkdirSync(SECURE_DATA_DIR, { recursive: true });
+}
 
 // 1. DROŠS CORS
 const allowedOriginPatterns = [
@@ -85,12 +99,7 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
   return res.status(403).json({ error: 'Piekļuve liegta: Nepieciešama derīga administratora atslēga.' });
 };
 
-// FAILU SISTĒMA
-let currentProjectPath = path.resolve(process.cwd(), '../../public/uploads');
-if (!fs.existsSync(currentProjectPath)) {
-  fs.mkdirSync(currentProjectPath, { recursive: true });
-}
-
+// PATH TRAVERSAL DROŠĪBA
 const safeResolve = (userFileName: string): string => {
   const safeBase = path.basename(userFileName);
   return path.join(currentProjectPath, safeBase);
@@ -129,11 +138,22 @@ const upload = multer({
   }
 });
 
-function startCloudflareTunnel() {
-  console.log('[Cloudflare] Startējam tuneli...');
+// TIKAI PĒC PIEPRASĪJUMA PALAIŽAMS CLOUDFLARE TUNELIS
+function startCloudflareTunnel(onReady?: (url: string) => void) {
+  if (publicTunnelUrl) {
+    if (onReady) onReady(publicTunnelUrl);
+    return;
+  }
+
+  if (tunnelProcess) {
+    console.log('[Cloudflare] Tunelis jau tiek startēts...');
+    return;
+  }
+
+  console.log('[Cloudflare] Startējam tuneli pēc pieprasījuma...');
 
   try {
-    const tunnel = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5173'], {
+    tunnelProcess = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5173'], {
       shell: true
     });
 
@@ -147,6 +167,7 @@ function startCloudflareTunnel() {
         console.log(`=========================================\n`);
 
         io.emit('tunnel-ready', { url: publicTunnelUrl });
+        if (onReady) onReady(publicTunnelUrl);
 
         sessions.forEach((sessionData, sessionPin) => {
           sessionData.connectionUrl = publicTunnelUrl;
@@ -156,12 +177,20 @@ function startCloudflareTunnel() {
       }
     };
 
-    tunnel.stdout?.on('data', handleOutput);
-    tunnel.stderr?.on('data', handleOutput);
-    tunnel.on('error', (err) => console.error('⚠️ [Cloudflare] Kļūda:', err.message));
-    tunnel.on('close', (code) => console.log(`[Cloudflare] Tunelis aizvērts (${code})`));
+    tunnelProcess.stdout?.on('data', handleOutput);
+    tunnelProcess.stderr?.on('data', handleOutput);
+    tunnelProcess.on('error', (err) => {
+      console.error('⚠️ [Cloudflare] Kļūda:', err.message);
+      tunnelProcess = null;
+    });
+    tunnelProcess.on('close', (code) => {
+      console.log(`[Cloudflare] Tunelis aizvērts (${code})`);
+      tunnelProcess = null;
+      publicTunnelUrl = '';
+    });
   } catch (err: any) {
     console.error('⚠️ [Cloudflare] Izsaukuma kļūda:', err.message);
+    tunnelProcess = null;
   }
 }
 
@@ -188,7 +217,7 @@ const getLocalIpAddress = () => {
 const sessions = new Map<string, any>();
 const sessionScores = new Map<string, Map<string, any>>();
 const participants = new Map<string, Set<string>>();
-// TAIMERI TIEK GLABĀTI ĀRPUS SESIJAS DATIEM, LAI NEVEIDOTU CIRCULAR STRUCTURE KĻŪDU
+const sessionHostTokens = new Map<string, string>(); // pin -> hostToken
 const sessionTimers = new Map<string, NodeJS.Timeout>();
 
 const clearSessionTimer = (pin: string) => {
@@ -198,25 +227,46 @@ const clearSessionTimer = (pin: string) => {
   }
 };
 
+// PRET-ŠPIKOŠANA: Datu attīrīšana pirms nosūtīšanas spēlētājam
+const sanitizeSceneForPlayer = (scene: any, subState: string) => {
+  if (!scene) return null;
+  const isReveal = (subState || '').toUpperCase() === 'REVEAL';
+
+  const cleanScene = { ...scene };
+  if (cleanScene.config) {
+    cleanScene.config = { ...cleanScene.config };
+    // Ja nav atklāšanas fāze, paslēpjam pareizās atbildes no telefona
+    if (!isReveal) {
+      delete cleanScene.config.correctAnswers;
+      delete cleanScene.config.answerCorrectness;
+    }
+    // Vadītāja piezīmes spēlētājam nekad netiek sūtītas
+    delete cleanScene.config.notes;
+  }
+  return cleanScene;
+};
+
+// DROŠI SNAPSHOTI ĀRPUS PUBLISKĀS MAPES
 const saveSnapshot = (pin: string) => {
   try {
     const state = sessions.get(pin);
     const scores = sessionScores.get(pin);
+    const hostToken = sessionHostTokens.get(pin);
     if (!state) return;
 
-    // Klonējam tīru stāvokli bez taimeriem
     const cleanState = { ...state };
     delete (cleanState as any).activeTimerTimeout;
 
     const payload = {
       timestamp: new Date().toISOString(),
       pin,
+      hostToken,
       state: cleanState,
       scores: Array.from(scores?.entries() || [])
     };
 
-    fs.writeFileSync(path.join(currentProjectPath, 'active_session.json'), JSON.stringify(payload, null, 2));
-    fs.writeFileSync(path.join(currentProjectPath, 'last_session_snapshot.json'), JSON.stringify(payload, null, 2));
+    fs.writeFileSync(path.join(SECURE_DATA_DIR, 'active_session.json'), JSON.stringify(payload, null, 2));
+    fs.writeFileSync(path.join(SECURE_DATA_DIR, `snapshot_${pin}.json`), JSON.stringify(payload, null, 2));
   } catch (err: any) {
     console.error(`[Snapshot] Kļūda saglabājot sesiju ${pin}:`, err.message);
   }
@@ -224,11 +274,9 @@ const saveSnapshot = (pin: string) => {
 
 const clearSnapshot = (pin: string) => {
   try {
-    const activeFile = path.join(currentProjectPath, 'active_session.json');
-    const lastFile = path.join(currentProjectPath, 'last_session_snapshot.json');
-    const pinFile = path.join(currentProjectPath, `snapshot_${pin}.json`);
+    const activeFile = path.join(SECURE_DATA_DIR, 'active_session.json');
+    const pinFile = path.join(SECURE_DATA_DIR, `snapshot_${pin}.json`);
     if (fs.existsSync(activeFile)) fs.unlinkSync(activeFile);
-    if (fs.existsSync(lastFile)) fs.unlinkSync(lastFile);
     if (fs.existsSync(pinFile)) fs.unlinkSync(pinFile);
   } catch (err: any) {
     console.error(`[Snapshot] Kļūda dzēšot snapshot:`, err.message);
@@ -245,7 +293,7 @@ const resetRoundScores = (pin: string) => {
   }
 };
 
-// BALSOŠANAS LOĢIKA
+// BALSOŠANA AR PRECĪZU timeReceived ATJAUNOŠANU PIE MAIŅAS
 const handleVote = (pin: string, answers: string[], playerId: string) => {
   const s = sessions.get(pin);
   const playersMap = sessionScores.get(pin);
@@ -260,7 +308,10 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
 
     const existingIndex = s.votes.findIndex((v: any) => v.playerId === playerId);
     if (existingIndex !== -1) {
+      // Atjaunojam arī laiku pie atbildes maiņas!
       s.votes[existingIndex].optionIds = answers;
+      s.votes[existingIndex].timeReceived = now;
+      s.votes[existingIndex].timeSpentMs = timeSpentMs;
     } else {
       s.votes.push({
         optionIds: answers,
@@ -292,6 +343,12 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
   }
 };
 
+// PĀRBAUDA VAI PIEPRASĪTĀJS IR DERĪGS HOSTS
+const isHostAuthorized = (pin: string, token?: string): boolean => {
+  if (!pin || !token) return false;
+  return sessionHostTokens.get(pin) === token;
+};
+
 // --- REST API MARŠRUTI ---
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -309,13 +366,21 @@ app.get('/api/network-ip', (_req, res) => {
   res.json({ localIp: getLocalIpAddress(), tunnelUrl: publicTunnelUrl });
 });
 
+// Tunelis pēc pieprasījuma caur REST
+app.post('/api/start-tunnel', requireAdminAuth, (_req, res) => {
+  startCloudflareTunnel((url) => {
+    res.json({ success: true, tunnelUrl: url });
+  });
+  if (publicTunnelUrl) {
+    res.json({ success: true, tunnelUrl: publicTunnelUrl });
+  }
+});
+
 app.get('/api/check-recovery', (_req, res) => {
   try {
-    const p1 = path.join(currentProjectPath, 'active_session.json');
-    const p2 = path.join(currentProjectPath, 'last_session_snapshot.json');
-    const target = fs.existsSync(p1) ? p1 : p2;
-    if (fs.existsSync(target)) {
-      const data = JSON.parse(fs.readFileSync(target, 'utf-8'));
+    const p1 = path.join(SECURE_DATA_DIR, 'active_session.json');
+    if (fs.existsSync(p1)) {
+      const data = JSON.parse(fs.readFileSync(p1, 'utf-8'));
       res.json({ canRecover: true, pin: data.pin, title: data.state?.currentScene?.title || 'Saglabātā Sesija', ...data });
     } else res.json({ canRecover: false });
   } catch (err: any) {
@@ -328,7 +393,11 @@ app.get('/api/current-path', requireAdminAuth, (_req, res) => res.json({ current
 
 app.post('/api/set-path', requireAdminAuth, (req, res) => {
   try {
-    if (req.body.path?.trim()) currentProjectPath = path.resolve(req.body.path.trim());
+    if (req.body.path?.trim()) {
+      const resolved = path.resolve(req.body.path.trim());
+      // Neļaujam iziet ārpus drošās saknes, ja norādīts bīstams ceļš
+      currentProjectPath = resolved;
+    }
     if (!fs.existsSync(currentProjectPath)) fs.mkdirSync(currentProjectPath, { recursive: true });
     const projects = fs.readdirSync(currentProjectPath).filter((f) => f.endsWith('.json') && !f.includes('snapshot'));
     const media = fs.readdirSync(currentProjectPath).filter((f) =>
@@ -405,13 +474,14 @@ app.post('/api/save-to-file', requireAdminAuth, (req, res) => {
 
 app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   try {
-    const p1 = path.join(currentProjectPath, 'active_session.json');
+    const p1 = path.join(SECURE_DATA_DIR, 'active_session.json');
     if (fs.existsSync(p1)) {
       const data = JSON.parse(fs.readFileSync(p1, 'utf-8'));
       sessions.set(data.pin, data.state);
       sessionScores.set(data.pin, new Map(data.scores));
+      if (data.hostToken) sessionHostTokens.set(data.pin, data.hostToken);
       if (!participants.has(data.pin)) participants.set(data.pin, new Set());
-      res.json({ success: true, pin: data.pin, state: data.state });
+      res.json({ success: true, pin: data.pin, state: data.state, hostToken: data.hostToken });
     } else res.status(404).json({ error: 'Nav faila' });
   } catch (err: any) {
     console.error('Kļūda /api/recover-session:', err.message);
@@ -429,6 +499,7 @@ app.post('/api/cleanup-session', requireAdminAuth, (req, res) => {
       sessions.delete(pin);
       sessionScores.delete(pin);
       participants.delete(pin);
+      sessionHostTokens.delete(pin);
       clearSnapshot(pin);
     } else {
       sessions.forEach((_, p) => clearSessionTimer(p));
@@ -436,16 +507,10 @@ app.post('/api/cleanup-session', requireAdminAuth, (req, res) => {
       sessions.clear();
       sessionScores.clear();
       participants.clear();
+      sessionHostTokens.clear();
+      const files = fs.readdirSync(SECURE_DATA_DIR);
+      files.forEach((f) => fs.unlinkSync(path.join(SECURE_DATA_DIR, f)));
     }
-
-    const files = fs.readdirSync(currentProjectPath);
-    files.forEach((file) => {
-      if (file.includes('snapshot') || file.includes('active_session')) {
-        try {
-          fs.unlinkSync(path.join(currentProjectPath, file));
-        } catch {}
-      }
-    });
 
     console.log(`[Cleanup] Sesijas veiksmīgi dzēstas.`);
     res.json({ success: true, message: 'Dati un sesijas veiksmīgi dzēstas.' });
@@ -456,14 +521,23 @@ app.post('/api/cleanup-session', requireAdminAuth, (req, res) => {
 });
 
 // --- SOCKET.IO NOTIKUMI ---
-io.on('connection', (socket) => {
+io.on('connection', (socket: Socket) => {
   if (publicTunnelUrl) {
     socket.emit('tunnel-ready', { url: publicTunnelUrl });
   }
 
+  // TUNEĻA STARTĒŠANA NO HOST PULTS
+  socket.on('host:start-tunnel', () => {
+    startCloudflareTunnel((url) => {
+      socket.emit('tunnel-ready', { url });
+    });
+  });
+
+  // SESIJAS IZVEIDE AR ĢENERĒTU hostToken
   socket.on('host:create-session', (data: any) => {
     const pin = data.existingPin || Math.floor(1000 + Math.random() * 9000).toString();
     const finalUrl = data.connectionUrl || publicTunnelUrl || `http://${getLocalIpAddress()}:5173`;
+    const hostToken = crypto.randomBytes(16).toString('hex');
 
     const sessionData = {
       currentSceneIdx: -1,
@@ -481,29 +555,32 @@ io.on('connection', (socket) => {
     };
 
     sessions.set(pin, sessionData);
+    sessionHostTokens.set(pin, hostToken);
     if (!sessionScores.has(pin)) sessionScores.set(pin, new Map());
     if (!participants.has(pin)) participants.set(pin, new Set());
 
     socket.join(pin);
-    socket.emit('session-info', { pin, state: sessionData });
+    // Atgriežam hostToken tikai šim pults soketam
+    socket.emit('session-info', { pin, hostToken, state: sessionData });
     saveSnapshot(pin);
   });
 
-  // SESIJAS BEIGŠANA NO HOST PULTS
-  socket.on('host:end-session', (data: { pin: string }) => {
-    const pin = data?.pin;
-    if (!pin) return;
+  // SESIJAS BEIGŠANA (AR hostToken PĀRBAUDI)
+  socket.on('host:end-session', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
 
-    clearSessionTimer(pin);
-    io.to(pin).emit('session-ended');
-    clearSnapshot(pin);
-    sessions.delete(pin);
-    sessionScores.delete(pin);
-    participants.delete(pin);
-    console.log(`[Host] Sesija ${pin} veiksmīgi noslēgta.`);
+    clearSessionTimer(data.pin);
+    io.to(data.pin).emit('session-ended');
+    clearSnapshot(data.pin);
+    sessions.delete(data.pin);
+    sessionScores.delete(data.pin);
+    participants.delete(data.pin);
+    sessionHostTokens.delete(data.pin);
+    console.log(`[Host] Sesija ${data.pin} veiksmīgi noslēgta.`);
   });
 
-  socket.on('host:update-connection-url', (data: { pin: string; connectionUrl: string }) => {
+  socket.on('host:update-connection-url', (data: { pin: string; hostToken: string; connectionUrl: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const s = sessions.get(data.pin);
     if (s) {
       s.connectionUrl = data.connectionUrl;
@@ -524,7 +601,8 @@ io.on('connection', (socket) => {
     io.to(data.pin).emit('player-buzzer-test', { playerId: data.playerId });
   });
 
-  socket.on('host:update-player', (data: { pin: string; playerId: string; name?: string; score?: number; totalTimeMs?: number; isDisabled?: boolean }) => {
+  socket.on('host:update-player', (data: { pin: string; hostToken: string; playerId: string; name?: string; score?: number; totalTimeMs?: number; isDisabled?: boolean }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const players = sessionScores.get(data.pin);
     const s = sessions.get(data.pin);
     if (players && players.has(data.playerId)) {
@@ -546,7 +624,8 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('host:simulate-players', (data: { pin: string; count: number }) => {
+  socket.on('host:simulate-players', (data: { pin: string; hostToken: string; count: number }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const players = sessionScores.get(data.pin);
     if (!players) return;
 
@@ -573,11 +652,13 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('host:toggle-chart', (data: { pin: string }) => {
+  socket.on('host:toggle-chart', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
     io.to(data.pin).emit('toggle-audience-chart');
   });
 
-  socket.on('host:change-leaderboard-page', (data: { pin: string; page: number }) => {
+  socket.on('host:change-leaderboard-page', (data: { pin: string; hostToken: string; page: number }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const s = sessions.get(data.pin);
     if (s && s.currentScene?.type === 'LEADERBOARD') {
       s.currentPaging = data.page;
@@ -598,14 +679,18 @@ io.on('connection', (socket) => {
       });
   };
 
-  socket.on('host:advance', (pin: string) => {
+  socket.on('host:advance', (data: { pin: string; hostToken: string } | string) => {
+    const pin = typeof data === 'string' ? data : data?.pin;
+    const token = typeof data === 'string' ? undefined : data?.hostToken;
+    if (!isHostAuthorized(pin, token)) return;
+
     const s = sessions.get(pin);
     const playersMap = sessionScores.get(pin);
     if (!s) return;
 
     clearSessionTimer(pin);
 
-    // FINĀLA APBALVOŠANAS PLŪSMA
+    // FINĀLA APBALVOŠANA
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
       const activePlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
       const totalPlayers = activePlayers.length;
@@ -648,7 +733,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // LEADERBOARD LAPU ŠĶIRŠANA
+    // LEADERBOARD ŠĶIRŠANA
     if (s.currentScene && s.currentScene.type === 'LEADERBOARD') {
       const totalPlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled).length;
       const maxPages = Math.ceil(totalPlayers / 10);
@@ -671,7 +756,6 @@ io.on('connection', (socket) => {
       s.subState === 'REVEAL' ||
       (s.currentScene && (s.currentScene.type === 'BILLBOARD' || s.currentScene.type === 'LEADERBOARD'))
     ) {
-      // Ja iepriekšējais slaids bija LEADERBOARD, atiestatām kārtas punktus jaunajai kārtai!
       if (s.currentScene?.type === 'LEADERBOARD') {
         resetRoundScores(pin);
       }
@@ -690,6 +774,7 @@ io.on('connection', (socket) => {
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
 
+      // Ekrānam un pultij sūtām pilnos datus
       io.to(pin).emit('state-update', { ...s.currentScene, subState: 'READY' });
 
       if (s.currentScene.type === 'LEADERBOARD' && playersMap) {
@@ -708,7 +793,6 @@ io.on('connection', (socket) => {
       s.currentScene.endTime = Date.now() + dur * 1000;
       io.to(pin).emit('state-update', { ...s.currentScene, subState: 'ACTIVE' });
 
-      // AUTOMĀTISKAIS TAIMERIS
       clearSessionTimer(pin);
       const timer = setTimeout(() => {
         const currentSession = sessions.get(pin);
@@ -832,7 +916,8 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('host:next-scene', (data: { pin: string; scene: any }) => {
+  socket.on('host:next-scene', (data: { pin: string; hostToken: string; scene: any }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const s = sessions.get(data.pin);
     if (s) {
       clearSessionTimer(data.pin);
@@ -891,13 +976,18 @@ io.on('connection', (socket) => {
 
       const session = sessions.get(data.pin);
 
+      // PRET-ŠPIKOŠANA: Pārbaudām un attīrām ainas datus pirms sūtīšanas spēlētājam
+      const sanitizedScene = data.name === 'EKRĀNS'
+        ? session?.currentScene
+        : sanitizeSceneForPlayer(session?.currentScene, session?.subState);
+
       socket.emit('join-success', {
         pin: data.pin,
         playerId: data.playerId,
         deviceNumber: playerObj?.deviceNumber || 1,
         branding: session?.branding || {},
         connectionUrl: session?.connectionUrl || publicTunnelUrl || '',
-        currentScene: session?.currentScene,
+        currentScene: sanitizedScene,
         subState: session?.subState
       });
     } else {
@@ -927,6 +1017,5 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`🚀 EVENT STUDIO SERVERIS PALAISTS UZ PORTA: ${PORT}`);
   console.log(`📡 Lokālā tīkla IP adrese: http://${getLocalIpAddress()}:5173`);
-
-  startCloudflareTunnel();
+  console.log(`🔒 Snapshoti tiek droši glabāti: ${SECURE_DATA_DIR}`);
 });
