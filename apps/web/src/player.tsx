@@ -164,6 +164,22 @@ export default function Player() {
     });
 
     s.on('game-over', () => setIsGameOver(true));
+    
+    // KAD SESIJA TIEK BEIGTA NO VADĪTĀJA PUSES
+    s.on('session-ended', () => {
+      sessionStorage.removeItem('player_active_session');
+      localStorage.removeItem('player_pin');
+      setIsJoined(false);
+      setIsGameOver(false);
+      setScene(null);
+      setMyChoice(null);
+      setSelectedMultipleOptions([]);
+      setDeviceNumber(null);
+      setBuzzerTestPresses(0);
+      setPin('');
+      alert('Vadītājs ir beidzis spēles sesiju.');
+    });
+
     s.on('error-message', (msg: string) => alert(msg));
 
     return () => {
@@ -257,7 +273,6 @@ export default function Player() {
     setPin('');
   };
 
-  // 🏆 KĀRTOJAM ARĪ TELEFONĀ, LAI VIETAS NUMURS BŪTU 100% PRECIZS
   const isRoundLb = leaderboardType === 'ROUND';
 
   const sortedLeaderboard = [...leaderboard]
@@ -479,11 +494,10 @@ export default function Player() {
           </div>
         )}
 
-        {/* B) LĪDERU TABULA (KĀRTA, KOPVĒRTĒJUMS UN FINĀLA INTRIGA) */}
+        {/* B) LĪDERU TABULA */}
         {slideType === 'LEADERBOARD' && (
           <div style={infoCard}>
             {isFinalLeaderboard && podiumStage < 3 ? (
-              // Fināla intrigas ekrāns, kamēr nav atklāta 1. vieta
               <div>
                 <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>🥇</div>
                 <h2 style={{ color: '#ffc107', margin: '0 0 12px 0', fontSize: '1.4rem' }}>FINĀLA APBALVOŠANA</h2>
@@ -497,7 +511,6 @@ export default function Player() {
                 </div>
               </div>
             ) : (
-              // Parastā līderu tabula vai atklāts fināls
               <div>
                 <div style={{ fontSize: '3rem', marginBottom: '10px' }}>
                   {isFinalLeaderboard ? '👑' : leaderboardType === 'ROUND' ? '🏆' : '⭐'}
@@ -536,7 +549,7 @@ export default function Player() {
         {/* C) JAUTĀJUMU EKRĀNS */}
         {(slideType === 'QUESTION' || slideType === 'QUIZ' || slideType === 'VOTE' || slideType === 'MAJORITY' || slideType === '') && (
           <>
-            {/* 1. FĀZE: READY (Vadītājs tikko atvēris jautājumu, laiks vēl neiet) */}
+            {/* 1. FĀZE: READY */}
             {currentSub === 'READY' && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>⏳</div>
@@ -550,7 +563,7 @@ export default function Player() {
               </div>
             )}
 
-            {/* 2. FĀZE: ACTIVE (Rit laiks un spēlētājs var atbildēt) */}
+            {/* 2. FĀZE: ACTIVE */}
             {currentSub === 'ACTIVE' && (
               <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', boxSizing: 'border-box', padding: '5px 0' }}>
                 {branding.appLogo ? (
@@ -683,7 +696,7 @@ const fullScreenMobile: React.CSSProperties = {
   right: 0,
   bottom: 0,
   width: '100vw',
-  height: '100dvh', // Modernā dinamiskā augstuma kontrole mobilajiem
+  height: '100dvh',
   maxHeight: '100dvh',
   color: '#fff',
   fontFamily: 'Segoe UI, Arial, sans-serif',

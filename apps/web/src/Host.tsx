@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { socket } from './socket';
 import { BACKEND_URL, ADMIN_API_KEY, getAdminHeaders } from './config';
 
@@ -12,7 +12,7 @@ export default function Host() {
   const [scenes, setScenes] = useState<any[]>([]);
   const [currentScene, setCurrentScene] = useState<any>(null);
   const [folder, setFolder] = useState(
-    localStorage.getItem('event_studio_folder') || 'C:/ManiSovi'
+    localStorage.getItem('event_studio_folder') || ''
   );
   const [localProjects, setLocalProjects] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -22,6 +22,8 @@ export default function Host() {
   const [playersList, setPlayersList] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER'>('SCENES');
   const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('ORDER');
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // TĪKLA UN TUNEĻA IZVĒLES IESTATĪJUMI
   const [connectionMode, setConnectionMode] = useState<'LAN' | 'TUNNEL'>(
@@ -33,7 +35,7 @@ export default function Host() {
   );
   const [isTunnelAutoDetected, setIsTunnelAutoDetected] = useState(false);
 
-  // 1. Automātiski uztveram Cloudflare tuneli no visiem avotiem
+  // 1. Automātiski uztveram Cloudflare tuneli un lokālo IP
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const tunnelParam = urlParams.get('tunnel');
@@ -74,38 +76,53 @@ export default function Host() {
     };
   }, []);
 
-  // Aprēķinām aktīvo spēles saiti telefonam
   const activeBaseUrl =
     connectionMode === 'TUNNEL' && customTunnelUrl.trim() !== ''
       ? (customTunnelUrl.trim().startsWith('http') ? customTunnelUrl.trim() : `https://${customTunnelUrl.trim()}`).replace(/\/$/, '')
       : `http://${localIp}:5173`;
 
-  // PROJEKTU MAPES SKENĒŠANA AR ADMIN ATSLĒGU
+  // 2. PROJEKTU MAPES SKENĒŠANA UN SERVERA MAPES NOLASĪŠANA
   const loadProjects = async (folderPath?: string) => {
     try {
       setIsLoading(true);
-      const targetFolder = folderPath || folder;
+      const targetFolder = folderPath !== undefined ? folderPath : folder;
       const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
-        headers: getAdminHeaders(), // <-- Nosūta x-admin-key drošības atslēgu
+        headers: getAdminHeaders(),
         body: JSON.stringify({ path: targetFolder })
       });
       const data = await res.json();
-      if (data.success && Array.isArray(data.projects)) {
-        setLocalProjects(data.projects);
+      if (data.success) {
+        if (Array.isArray(data.projects)) setLocalProjects(data.projects);
         setFolder(data.currentPath);
         localStorage.setItem('event_studio_folder', data.currentPath);
       } else {
         setLocalProjects([]);
       }
     } catch {
-      alert('❌ Kļūda piekļūstot mapei!');
+      console.error('Kļūda skenējot mapi');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
+    // Nolasām no servera pašreizējo ceļu
+    fetch(`${BACKEND_URL}/api/current-path`, {
+      headers: getAdminHeaders()
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.currentPath) {
+          const pathToUse = localStorage.getItem('event_studio_folder') || d.currentPath;
+          setFolder(pathToUse);
+          loadProjects(pathToUse);
+        } else {
+          loadProjects();
+        }
+      })
+      .catch(() => loadProjects());
+
     fetch(`${BACKEND_URL}/api/check-recovery`)
       .then((res) => res.json())
       .then((data) => {
@@ -116,7 +133,7 @@ export default function Host() {
           if (shouldRecover) {
             fetch(`${BACKEND_URL}/api/recover-session`, {
               method: 'POST',
-              headers: getAdminHeaders() // <-- Nosūta x-admin-key
+              headers: getAdminHeaders()
             })
               .then((r) => r.json())
               .then((rec) => {
@@ -131,16 +148,14 @@ export default function Host() {
         }
       })
       .catch(() => {});
-
-    loadProjects();
   }, []);
 
-  // PROJEKTA IELĀDE UN SĀKŠANA
+  // PROJEKTA IELĀDE NO MAPES
   const startProject = async (fileName: string) => {
     try {
       setIsLoading(true);
       const res = await fetch(`${BACKEND_URL}/api/load-project/${fileName}`, {
-        headers: { 'x-admin-key': ADMIN_API_KEY } // <-- Nosūta x-admin-key
+        headers: { 'x-admin-key': ADMIN_API_KEY }
       });
       if (!res.ok) throw new Error();
 
@@ -159,7 +174,40 @@ export default function Host() {
     }
   };
 
+  // TIEŠA PROJEKTA IELĀDE NO .JSON FAILA DATORĀ
+  const handleDirectFileOpen = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const projectData = JSON.parse(event.target?.result as string);
+        if (projectData && (projectData.scenes || Array.isArray(projectData))) {
+          const formattedData = Array.isArray(projectData) ? { scenes: projectData } : projectData;
+
+          localStorage.setItem('event_conn_mode', connectionMode);
+          localStorage.setItem('event_tunnel_url', customTunnelUrl);
+
+          socket.emit('host:create-session', {
+            projectData: formattedData,
+            connectionUrl: activeBaseUrl
+          });
+        } else {
+          alert('❌ Fails nesatur derīgus projekta slaidus!');
+        }
+      } catch {
+        alert('❌ Neizdevās nolasīt .json failu!');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // SESIJAS BEIGŠANA
   const handleEndSession = () => {
+    if (pin) {
+      socket.emit('host:end-session', { pin });
+    }
     setPin(null);
     setCurrentScene(null);
     setScenes([]);
@@ -241,21 +289,29 @@ export default function Host() {
     };
   }, [pin]);
 
-  // QR KODA ADRESE TELEFONAM
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
 
-  // SKATS 1: PROJEKTA IZVĒLE UN TĪKLA REŽĪMS
+  // SKATS 1: PROJEKTA IZVĒLE UN DARBA MAPE
   if (!pin) {
     return (
       <div style={panelContainer}>
+        {/* Slēpts failu ievades lauks */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          accept=".json"
+          style={{ display: 'none' }}
+          onChange={handleDirectFileOpen}
+        />
+
         <h1 style={{ color: '#007bff', marginBottom: '20px' }}>EVENT STUDIO — VADĪTĀJA PANELIS</h1>
         
-        {/* TĪKLA UN TUNEĻA KONFIGURĀCIJAS KASTE */}
+        {/* TĪKLA UN TUNEĻA KONFIGURĀCIJA */}
         <div style={{ ...cardBox, border: '1px solid #007bff', marginBottom: '20px', background: '#182430' }}>
           <h3 style={{ margin: '0 0 10px 0', color: '#00e5ff' }}>📡 KĀ SPĒLĒTĀJI PIESLĒGSIES?</h3>
           <p style={{ fontSize: '0.85rem', color: '#aaa', margin: '0 0 15px 0' }}>
-            Saite, kas tiks iekodēta QR kodā, lai telefoni to uzreiz atvērtu:
+            Saite, kas tiks iekodēta QR kodā un nosūtīta pultīm:
           </p>
 
           <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
@@ -286,14 +342,14 @@ export default function Host() {
               <span style={{ color: '#00ff00', fontWeight: 'bold' }}>✓ Wi-Fi adrese: </span>
               <code>http://{localIp}:5173</code>
               <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '4px' }}>
-                Telefoniem jābūt pieslēgtiem tam pašam Wi-Fi tīklam.
+                Telefoniem jābūt tajā pašā Wi-Fi tīklā.
               </div>
             </div>
           ) : (
             <div style={{ ...noticeBox, background: '#1a1025', borderColor: customTunnelUrl ? '#00ff00' : '#d63384' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                 <span style={{ fontSize: '0.85rem', color: customTunnelUrl ? '#00ff00' : '#ff79c6', fontWeight: 'bold' }}>
-                  {customTunnelUrl ? '✓ Cloudflare tunelis aktīvs (Automātiski savienots):' : '⏳ Gaidām Cloudflare tuneļa saiti...'}
+                  {customTunnelUrl ? '✓ Cloudflare tunelis aktīvs:' : '⏳ Gaidām Cloudflare tuneļa saiti...'}
                 </span>
                 {isTunnelAutoDetected && (
                   <span style={{ fontSize: '0.75rem', background: '#28a745', color: '#fff', padding: '2px 6px', borderRadius: '4px' }}>
@@ -317,28 +373,48 @@ export default function Host() {
           )}
         </div>
 
-        {/* PROJEKTU MAPE */}
+        {/* PROJEKTU MAPE UN TIEŠA FAILA ATVĒRŠANA */}
         <div style={cardBox}>
-          <h3>📂 AKTUĀLĀ DARBA MAPE</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <h3 style={{ margin: 0 }}>📂 AKTUĀLĀ PROJEKTU MAPE</h3>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{ ...btnScan, background: '#28a745' }}
+              title="Atvērt jebkuru .json failu no sava datora"
+            >
+              📄 Pārlūkot failu (.json)
+            </button>
+          </div>
 
           <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
             <input
               value={folder}
               onChange={(e) => setFolder(e.target.value)}
-              placeholder="C:/ManiSovi"
+              placeholder="C:/ManiSovi vai relatīvais ceļš..."
               style={folderInputHost}
             />
             <button onClick={() => loadProjects(folder)} disabled={isLoading} style={btnScan}>
-              {isLoading ? '...' : 'SKENĒT'}
+              {isLoading ? '...' : '🔍 SKENĒT'}
             </button>
           </div>
 
           <div style={{ marginTop: '20px', textAlign: 'left' }}>
-            <h4 style={{ color: '#aaa', borderBottom: '1px solid #444', paddingBottom: '8px' }}>
-              Pieejamie projekti ({localProjects.length}):
+            <h4 style={{ color: '#aaa', borderBottom: '1px solid #444', paddingBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+              <span>Pieejamie projekti mapē ({localProjects.length}):</span>
+              <span style={{ fontSize: '0.8rem', color: '#666' }}>{folder}</span>
             </h4>
             {localProjects.length === 0 ? (
-              <p style={{ color: '#666', fontStyle: 'italic' }}>Šajā mapē nav neviena .json faila.</p>
+              <div style={{ textAlign: 'center', padding: '15px 0' }}>
+                <p style={{ color: '#888', fontStyle: 'italic', margin: '0 0 12px 0' }}>
+                  Šajā mapē nav neviena .json projekta faila vai mape vēl nav noskenēta.
+                </p>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{ ...btnScan, background: '#007bff' }}
+                >
+                  📂 Atvērt projektu tieši no datora failiem
+                </button>
+              </div>
             ) : (
               localProjects.map((p) => (
                 <button key={p} onClick={() => startProject(p)} disabled={isLoading} style={projectBtn}>

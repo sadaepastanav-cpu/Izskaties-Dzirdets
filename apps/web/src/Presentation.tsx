@@ -45,7 +45,7 @@ const getLobbyColor = (count: number) => {
   return '#ff00ff';
 };
 
-// ⏱️ UNIVERSĀLAIS APDOMAS LAIKA FORMATĒTĀJS
+// UNIVERSĀLAIS APDOMAS LAIKA FORMATĒTĀJS
 export const formatThinkingTime = (totalMs: number = 0): string => {
   if (!totalMs || totalMs <= 0) return '0 sek un 000 ms';
   
@@ -61,7 +61,7 @@ export const formatThinkingTime = (totalMs: number = 0): string => {
   return `${seconds} sek un ${msStr} ms`;
 };
 
-// 🎯 REAKTĪVS MEDIJU ELEMENTS
+// REAKTĪVS MEDIJU ELEMENTS
 const MediaLayoutItem: React.FC<{
   el: any;
   subState: string;
@@ -332,6 +332,7 @@ export default function Presentation() {
   const [leaderboardPage, setLeaderboardPage] = useState(0);
   const [podiumStage, setPodiumStage] = useState(0);
   const [isMediaReady, setIsMediaReady] = useState(false);
+  const [isSessionClosed, setIsSessionClosed] = useState(false);
 
   const [branding, setBranding] = useState<any>({
     lobbyMode: 'CIRCLE',
@@ -346,7 +347,7 @@ export default function Presentation() {
   const [connectionUrl, setConnectionUrl] = useState<string>('');
   const [testedBuzzerCounts, setTestedBuzzerCounts] = useState<Record<string, number>>({});
 
-  // 🔊 SISTĒMAS AUDIO EFEKTI
+  // SISTĒMAS AUDIO EFEKTI
   const audioTimerRef = useRef<HTMLAudioElement | null>(null);
   const audioTimeUpRef = useRef<HTMLAudioElement | null>(null);
   const audioRevealRef = useRef<HTMLAudioElement | null>(null);
@@ -413,12 +414,6 @@ export default function Presentation() {
       if (data?.url) setConnectionUrl(data.url);
     };
 
-    socket.on('join-success', handleJoinSuccess);
-    socket.on('session-info', handleSessionInfo);
-    socket.on('session-branding', handleSessionBranding);
-    socket.on('connection-url-changed', handleConnectionUrlChanged);
-    socket.on('tunnel-ready', handleTunnelReady);
-
     const handleStateUpdate = (newScene: any) => {
       setScene((prevScene: any) => {
         if (!prevScene || prevScene.id !== newScene.id || newScene.subState === 'READY') {
@@ -436,7 +431,24 @@ export default function Presentation() {
       setPodiumStage(0);
     };
 
+    // SESIJAS BEIGŠANAS APSTRĀDE
+    const handleSessionEnded = () => {
+      localStorage.removeItem('presentation_pin');
+      setIsSessionClosed(true);
+      setScene(null);
+      // Mēģinām aizvērt logu, ja tas bija popup
+      window.close();
+    };
+
+    socket.on('join-success', handleJoinSuccess);
+    socket.on('session-info', handleSessionInfo);
+    socket.on('session-branding', handleSessionBranding);
+    socket.on('connection-url-changed', handleConnectionUrlChanged);
+    socket.on('tunnel-ready', handleTunnelReady);
     socket.on('state-update', handleStateUpdate);
+    socket.on('session-ended', handleSessionEnded);
+    socket.on('session-closed', handleSessionEnded);
+
     socket.on('votes-updated', (data: any) => {
       setVoteData({ summary: data?.summary || {}, votedCount: data?.votedCount || 0 });
     });
@@ -489,6 +501,8 @@ export default function Presentation() {
       socket.off('connection-url-changed', handleConnectionUrlChanged);
       socket.off('tunnel-ready', handleTunnelReady);
       socket.off('state-update', handleStateUpdate);
+      socket.off('session-ended', handleSessionEnded);
+      socket.off('session-closed', handleSessionEnded);
       socket.off('votes-updated');
       socket.off('presence-update');
       socket.off('results-revealed');
@@ -501,7 +515,6 @@ export default function Presentation() {
     };
   }, [routePin]);
 
-  // KOPĒJIE MAINĪGIE (Nodefinēti tieši VIENU reizi)
   const currentSub = (subState || scene?.subState || 'IDLE').toUpperCase();
   const isQuestionType =
     scene?.type === 'QUESTION' ||
@@ -520,7 +533,7 @@ export default function Presentation() {
       (el.visibility === 'ALWAYS' || el.visibility === 'DURING_QUESTION')
   );
 
-  // 🎵 1. TAIMERA MŪZIKA: 00Time.mp3
+  // 1. TAIMERA MŪZIKA: 00Time.mp3
   useEffect(() => {
     if (!isMediaReady || !audioTimerRef.current) return;
 
@@ -543,7 +556,7 @@ export default function Presentation() {
     }
   };
 
-  // 🎵 2. LAIKS BEIDZAS: 01laiksbeidzas.mp3
+  // 2. LAIKS BEIDZAS: 01laiksbeidzas.mp3
   useEffect(() => {
     if (!isMediaReady || !audioTimeUpRef.current) return;
 
@@ -554,7 +567,7 @@ export default function Presentation() {
     }
   }, [currentSub, isQuestionType, isMediaReady]);
 
-  // 🎵 3. ATKLĀJ ATBILDI: 02atklajatbildi.mp3
+  // 3. ATKLĀJ ATBILDI: 02atklajatbildi.mp3
   useEffect(() => {
     if (!isMediaReady || !audioRevealRef.current) return;
 
@@ -566,7 +579,7 @@ export default function Presentation() {
     }
   }, [currentSub, isQuestionType, isMediaReady]);
 
-  // 🎵 4. FINĀLS LOOP: 04Finals.mp3
+  // 4. FINĀLS LOOP: 04Finals.mp3
   useEffect(() => {
     if (!isMediaReady || !audioFinalsRef.current) return;
 
@@ -580,6 +593,20 @@ export default function Presentation() {
       audioFinalsRef.current.pause();
     }
   }, [isFinalLb, isMediaReady]);
+
+  if (isSessionClosed) {
+    return (
+      <div style={fullScreenCenter}>
+        <div style={{ textAlign: 'center', background: '#1c1c1c', padding: '40px', borderRadius: '20px', border: '2px solid #444' }}>
+          <h1 style={{ color: '#ffc107', fontSize: '3vw', margin: '0 0 15px 0' }}>👋 SPĒLES SESIJA IR BEIGUSIES</h1>
+          <p style={{ color: '#aaa', fontSize: '1.4vw', margin: '0 0 25px 0' }}>Vadītājs ir noslēdzis šo sesiju. Šo logu var droši aizvērt.</p>
+          <button onClick={() => window.close()} style={bigBtn}>
+            Aizvērt logu
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!isMediaReady) {
     return (
@@ -785,7 +812,7 @@ export default function Presentation() {
   const optLayout = scene?.config?.optionsLayout || 'GRID';
   const optPositions = scene?.config?.optionsPositions || {};
 
-  // 🏆 STINGRA KĀRTOŠANA PĒC PUNKTIEM
+  // STINGRA KĀRTOŠANA PĒC PUNKTIEM
   const sortedLeaderboard = [...leaderboard]
     .filter((p) => !p.isDisabled)
     .sort((a, b) => {
@@ -850,7 +877,7 @@ export default function Presentation() {
           />
         ))}
 
-        {/* 🛑 ATBILŽU VARIANTI TIEK RĀDĪTI TIKAI JAUTĀJUMU SLAIDIEM */}
+        {/* ATBILŽU VARIANTI */}
         {shouldShowOptions && (
           optLayout === 'INDIVIDUAL' ? (
             optionsList.map((opt: string, i: number) => {
@@ -1010,7 +1037,7 @@ export default function Presentation() {
           </div>
         )}
 
-        {/* FINĀLA APBALVOŠANA (1., 2., 3. VIETA) */}
+        {/* FINĀLA APBALVOŠANA */}
         {scene.type === 'LEADERBOARD' && isFinalLb && (
           <div style={{ width: '85vw', height: '80vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
             {podiumStage < 4 && (

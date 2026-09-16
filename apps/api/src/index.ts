@@ -49,10 +49,10 @@ app.use(
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// 2. RATE LIMITING (Aizsardzība pret uzbrukumiem un spamu)
+// 2. RATE LIMITING
 const apiLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minūte
-  max: 120, // max 120 pieprasījumi minūtē no vienas IP
+  windowMs: 1 * 60 * 1000,
+  max: 120,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Pārāk daudz pieprasījumu. Lūdzu, uzgaidiet brīdi.' }
@@ -60,19 +60,19 @@ const apiLimiter = rateLimit({
 
 const uploadLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 20, // max 20 failu augšupielādes minūtē
+  max: 20,
   message: { error: 'Pārāk daudz augšupielāžu vienlaikus.' }
 });
 
 app.use('/api/', apiLimiter);
 
-// 3. SOCKET.IO AR PĀRSLĒGŠANĀS UN NOTURĪBAS IESTATĪJUMIEM
+// 3. SOCKET.IO
 const io = new Server(httpServer, {
   cors: {
     origin: (origin, callback) => callback(null, isOriginAllowed(origin)),
     credentials: true
   },
-  pingTimeout: 30000, // 30 sekunžu logs mobilajiem telefoniem pirms atslēgšanas
+  pingTimeout: 30000,
   pingInterval: 10000
 });
 
@@ -184,9 +184,19 @@ const getLocalIpAddress = () => {
   return 'localhost';
 };
 
+// SESIJU STĀVOKĻA MAPES
 const sessions = new Map<string, any>();
 const sessionScores = new Map<string, Map<string, any>>();
 const participants = new Map<string, Set<string>>();
+// TAIMERI TIEK GLABĀTI ĀRPUS SESIJAS DATIEM, LAI NEVEIDOTU CIRCULAR STRUCTURE KĻŪDU
+const sessionTimers = new Map<string, NodeJS.Timeout>();
+
+const clearSessionTimer = (pin: string) => {
+  if (sessionTimers.has(pin)) {
+    clearTimeout(sessionTimers.get(pin)!);
+    sessionTimers.delete(pin);
+  }
+};
 
 const saveSnapshot = (pin: string) => {
   try {
@@ -194,10 +204,14 @@ const saveSnapshot = (pin: string) => {
     const scores = sessionScores.get(pin);
     if (!state) return;
 
+    // Klonējam tīru stāvokli bez taimeriem
+    const cleanState = { ...state };
+    delete (cleanState as any).activeTimerTimeout;
+
     const payload = {
       timestamp: new Date().toISOString(),
       pin,
-      state,
+      state: cleanState,
       scores: Array.from(scores?.entries() || [])
     };
 
@@ -221,7 +235,17 @@ const clearSnapshot = (pin: string) => {
   }
 };
 
-// BALSOŠANAS LOĢIKA AR TAIMERA REŽĪMA PĀRBAUDI
+const resetRoundScores = (pin: string) => {
+  const playersMap = sessionScores.get(pin);
+  if (playersMap) {
+    playersMap.forEach((p) => {
+      p.roundScore = 0;
+      p.roundTimeMs = 0;
+    });
+  }
+};
+
+// BALSOŠANAS LOĢIKA
 const handleVote = (pin: string, answers: string[], playerId: string) => {
   const s = sessions.get(pin);
   const playersMap = sessionScores.get(pin);
@@ -255,12 +279,10 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
 
     io.to(pin).emit('votes-updated', { summary, votedCount: s.votes.length });
 
-    // Pārbaudām, vai projektam ir ieslēgts pilnā laika režīms
     const isFullTimeMode = s.branding?.timerMode === 'FULL_TIME';
 
-    // Pārslēdzam uz STATS uzreiz TIKAI tad, ja NAV ieslēgts FULL_TIME režīms
     if (!isFullTimeMode && activeParticipantsCount > 0 && s.votes.length >= activeParticipantsCount) {
-      if (s.activeTimerTimeout) clearTimeout(s.activeTimerTimeout);
+      clearSessionTimer(pin);
       s.subState = 'STATS';
       if (s.currentScene) s.currentScene.endTime = Date.now();
       io.to(pin).emit('state-update', { ...s.currentScene, subState: 'STATS' });
@@ -271,8 +293,6 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
 };
 
 // --- REST API MARŠRUTI ---
-
-// Sistēmas veselības pārbaude
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
@@ -304,7 +324,6 @@ app.get('/api/check-recovery', (_req, res) => {
   }
 });
 
-// Aizsargātie Admin maršruti
 app.get('/api/current-path', requireAdminAuth, (_req, res) => res.json({ currentPath: currentProjectPath }));
 
 app.post('/api/set-path', requireAdminAuth, (req, res) => {
@@ -400,22 +419,20 @@ app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   }
 });
 
-// GDPR UN SESIJAS DATU TĪRĪŠANAS MARŠRUTS
 app.post('/api/cleanup-session', requireAdminAuth, (req, res) => {
   try {
     const { pin } = req.body;
 
     if (pin) {
-      const s = sessions.get(pin);
-      if (s?.activeTimerTimeout) clearTimeout(s.activeTimerTimeout);
+      clearSessionTimer(pin);
+      io.to(pin).emit('session-ended');
       sessions.delete(pin);
       sessionScores.delete(pin);
       participants.delete(pin);
       clearSnapshot(pin);
     } else {
-      sessions.forEach((s) => {
-        if (s?.activeTimerTimeout) clearTimeout(s.activeTimerTimeout);
-      });
+      sessions.forEach((_, p) => clearSessionTimer(p));
+      io.emit('session-ended');
       sessions.clear();
       sessionScores.clear();
       participants.clear();
@@ -430,7 +447,7 @@ app.post('/api/cleanup-session', requireAdminAuth, (req, res) => {
       }
     });
 
-    console.log(`[GDPR Cleanup] Sesijas un dalībnieku dati veiksmīgi notīrīti.`);
+    console.log(`[Cleanup] Sesijas veiksmīgi dzēstas.`);
     res.json({ success: true, message: 'Dati un sesijas veiksmīgi dzēstas.' });
   } catch (err: any) {
     console.error('Kļūda /api/cleanup-session:', err.message);
@@ -460,8 +477,7 @@ io.on('connection', (socket) => {
       revealReadyToAdvance: false,
       currentPaging: 0,
       finalPodiumStage: 0,
-      questionStartTime: 0,
-      activeTimerTimeout: null
+      questionStartTime: 0
     };
 
     sessions.set(pin, sessionData);
@@ -471,6 +487,20 @@ io.on('connection', (socket) => {
     socket.join(pin);
     socket.emit('session-info', { pin, state: sessionData });
     saveSnapshot(pin);
+  });
+
+  // SESIJAS BEIGŠANA NO HOST PULTS
+  socket.on('host:end-session', (data: { pin: string }) => {
+    const pin = data?.pin;
+    if (!pin) return;
+
+    clearSessionTimer(pin);
+    io.to(pin).emit('session-ended');
+    clearSnapshot(pin);
+    sessions.delete(pin);
+    sessionScores.delete(pin);
+    participants.delete(pin);
+    console.log(`[Host] Sesija ${pin} veiksmīgi noslēgta.`);
   });
 
   socket.on('host:update-connection-url', (data: { pin: string; connectionUrl: string }) => {
@@ -573,12 +603,9 @@ io.on('connection', (socket) => {
     const playersMap = sessionScores.get(pin);
     if (!s) return;
 
-    // Nodzēšam aktīvo taimeri, ja vadītājs pārslēdz ar roku
-    if (s.activeTimerTimeout) {
-      clearTimeout(s.activeTimerTimeout);
-      s.activeTimerTimeout = null;
-    }
+    clearSessionTimer(pin);
 
+    // FINĀLA APBALVOŠANAS PLŪSMA
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
       const activePlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
       const totalPlayers = activePlayers.length;
@@ -621,6 +648,7 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // LEADERBOARD LAPU ŠĶIRŠANA
     if (s.currentScene && s.currentScene.type === 'LEADERBOARD') {
       const totalPlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled).length;
       const maxPages = Math.ceil(totalPlayers / 10);
@@ -628,12 +656,6 @@ io.on('connection', (socket) => {
         s.currentPaging++;
         io.to(pin).emit('leaderboard-page-change', s.currentPaging);
         return;
-      }
-      if (s.currentScene.config?.lbType === 'ROUND') {
-        playersMap?.forEach((p) => {
-          p.roundScore = 0;
-          p.roundTimeMs = 0;
-        });
       }
     }
 
@@ -643,11 +665,17 @@ io.on('connection', (socket) => {
       return;
     }
 
+    // PĀREJA UZ NĀKAMO SLAIDU
     if (
       s.subState === 'IDLE' ||
       s.subState === 'REVEAL' ||
       (s.currentScene && (s.currentScene.type === 'BILLBOARD' || s.currentScene.type === 'LEADERBOARD'))
     ) {
+      // Ja iepriekšējais slaids bija LEADERBOARD, atiestatām kārtas punktus jaunajai kārtai!
+      if (s.currentScene?.type === 'LEADERBOARD') {
+        resetRoundScores(pin);
+      }
+
       s.currentSceneIdx++;
       if (s.currentSceneIdx >= s.scenes.length) {
         clearSnapshot(pin);
@@ -680,9 +708,9 @@ io.on('connection', (socket) => {
       s.currentScene.endTime = Date.now() + dur * 1000;
       io.to(pin).emit('state-update', { ...s.currentScene, subState: 'ACTIVE' });
 
-      // AUTOMĀTISKAIS TAIMERIS: kad beidzas visas sekundes, serveris pats pārslēdz uz STATS
-      if (s.activeTimerTimeout) clearTimeout(s.activeTimerTimeout);
-      s.activeTimerTimeout = setTimeout(() => {
+      // AUTOMĀTISKAIS TAIMERIS
+      clearSessionTimer(pin);
+      const timer = setTimeout(() => {
         const currentSession = sessions.get(pin);
         if (currentSession && currentSession.subState === 'ACTIVE') {
           currentSession.subState = 'STATS';
@@ -692,6 +720,7 @@ io.on('connection', (socket) => {
           saveSnapshot(pin);
         }
       }, dur * 1000);
+      sessionTimers.set(pin, timer);
 
       const options = s.currentScene?.config?.options || [];
       playersMap?.forEach((p, id) => {
@@ -806,10 +835,12 @@ io.on('connection', (socket) => {
   socket.on('host:next-scene', (data: { pin: string; scene: any }) => {
     const s = sessions.get(data.pin);
     if (s) {
-      if (s.activeTimerTimeout) {
-        clearTimeout(s.activeTimerTimeout);
-        s.activeTimerTimeout = null;
+      clearSessionTimer(data.pin);
+
+      if (s.currentScene?.type === 'LEADERBOARD') {
+        resetRoundScores(data.pin);
       }
+
       s.currentScene = { ...data.scene, endTime: null };
       s.subState = 'IDLE';
       s.votes = [];
