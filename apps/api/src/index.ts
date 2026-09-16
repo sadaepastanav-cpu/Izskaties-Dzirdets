@@ -221,7 +221,7 @@ const clearSnapshot = (pin: string) => {
   }
 };
 
-// BALSOŠANAS LOĢIKA AR SPAMA UN DUBULTBALSU AIZSARDZĪBU
+// BALSOŠANAS LOĢIKA AR TAIMERA REŽĪMA PĀRBAUDI
 const handleVote = (pin: string, answers: string[], playerId: string) => {
   const s = sessions.get(pin);
   const playersMap = sessionScores.get(pin);
@@ -234,7 +234,6 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
     const now = Date.now();
     const timeSpentMs = Math.max(0, now - (s.questionStartTime || now));
 
-    // Aizsardzība: Ja balss jau reģistrēta, aizvietojam, saglabājot pirmo laiku
     const existingIndex = s.votes.findIndex((v: any) => v.playerId === playerId);
     if (existingIndex !== -1) {
       s.votes[existingIndex].optionIds = answers;
@@ -256,8 +255,12 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
 
     io.to(pin).emit('votes-updated', { summary, votedCount: s.votes.length });
 
-    // Ja visi aktīvie spēlētāji ir nobalsojuši, uzreiz pārslēdzam uz STATS
-    if (activeParticipantsCount > 0 && s.votes.length >= activeParticipantsCount) {
+    // Pārbaudām, vai projektam ir ieslēgts pilnā laika režīms
+    const isFullTimeMode = s.branding?.timerMode === 'FULL_TIME';
+
+    // Pārslēdzam uz STATS uzreiz TIKAI tad, ja NAV ieslēgts FULL_TIME režīms
+    if (!isFullTimeMode && activeParticipantsCount > 0 && s.votes.length >= activeParticipantsCount) {
+      if (s.activeTimerTimeout) clearTimeout(s.activeTimerTimeout);
       s.subState = 'STATS';
       if (s.currentScene) s.currentScene.endTime = Date.now();
       io.to(pin).emit('state-update', { ...s.currentScene, subState: 'STATS' });
@@ -402,19 +405,22 @@ app.post('/api/cleanup-session', requireAdminAuth, (req, res) => {
   try {
     const { pin } = req.body;
 
-    // 1. Iztīrām atmiņas kartes
     if (pin) {
+      const s = sessions.get(pin);
+      if (s?.activeTimerTimeout) clearTimeout(s.activeTimerTimeout);
       sessions.delete(pin);
       sessionScores.delete(pin);
       participants.delete(pin);
       clearSnapshot(pin);
     } else {
+      sessions.forEach((s) => {
+        if (s?.activeTimerTimeout) clearTimeout(s.activeTimerTimeout);
+      });
       sessions.clear();
       sessionScores.clear();
       participants.clear();
     }
 
-    // 2. Iztīrām visus snapshot failus no diska
     const files = fs.readdirSync(currentProjectPath);
     files.forEach((file) => {
       if (file.includes('snapshot') || file.includes('active_session')) {
@@ -454,7 +460,8 @@ io.on('connection', (socket) => {
       revealReadyToAdvance: false,
       currentPaging: 0,
       finalPodiumStage: 0,
-      questionStartTime: 0
+      questionStartTime: 0,
+      activeTimerTimeout: null
     };
 
     sessions.set(pin, sessionData);
@@ -489,6 +496,7 @@ io.on('connection', (socket) => {
 
   socket.on('host:update-player', (data: { pin: string; playerId: string; name?: string; score?: number; totalTimeMs?: number; isDisabled?: boolean }) => {
     const players = sessionScores.get(data.pin);
+    const s = sessions.get(data.pin);
     if (players && players.has(data.playerId)) {
       const p = players.get(data.playerId);
       if (data.name !== undefined) p.name = data.name;
@@ -496,9 +504,14 @@ io.on('connection', (socket) => {
       if (data.totalTimeMs !== undefined) p.totalTimeMs = Number(data.totalTimeMs);
       if (data.isDisabled !== undefined) p.isDisabled = data.isDisabled;
 
-      const playerList = Array.from(players.values());
-      io.to(data.pin).emit('presence-update', { count: players.size, players: playerList });
-      io.to(data.pin).emit('leaderboard-update', { data: playerList });
+      const isRound = s?.currentScene?.config?.lbType === 'ROUND';
+      const sortedLb = getSortedLeaderboard(players, isRound);
+
+      io.to(data.pin).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+      io.to(data.pin).emit('leaderboard-update', {
+        data: sortedLb,
+        lbType: s?.currentScene?.config?.lbType || 'TOTAL'
+      });
       saveSnapshot(data.pin);
     }
   });
@@ -559,6 +572,12 @@ io.on('connection', (socket) => {
     const s = sessions.get(pin);
     const playersMap = sessionScores.get(pin);
     if (!s) return;
+
+    // Nodzēšam aktīvo taimeri, ja vadītājs pārslēdz ar roku
+    if (s.activeTimerTimeout) {
+      clearTimeout(s.activeTimerTimeout);
+      s.activeTimerTimeout = null;
+    }
 
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
       const activePlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
@@ -661,6 +680,19 @@ io.on('connection', (socket) => {
       s.currentScene.endTime = Date.now() + dur * 1000;
       io.to(pin).emit('state-update', { ...s.currentScene, subState: 'ACTIVE' });
 
+      // AUTOMĀTISKAIS TAIMERIS: kad beidzas visas sekundes, serveris pats pārslēdz uz STATS
+      if (s.activeTimerTimeout) clearTimeout(s.activeTimerTimeout);
+      s.activeTimerTimeout = setTimeout(() => {
+        const currentSession = sessions.get(pin);
+        if (currentSession && currentSession.subState === 'ACTIVE') {
+          currentSession.subState = 'STATS';
+          if (currentSession.currentScene) currentSession.currentScene.endTime = Date.now();
+          io.to(pin).emit('state-update', { ...currentSession.currentScene, subState: 'STATS' });
+          io.to(pin).emit('video-command', 'pause');
+          saveSnapshot(pin);
+        }
+      }, dur * 1000);
+
       const options = s.currentScene?.config?.options || [];
       playersMap?.forEach((p, id) => {
         if (p.isBot && !p.isDisabled) {
@@ -756,7 +788,6 @@ io.on('connection', (socket) => {
         }
       });
 
-      // SVARĪGI: Izsūtam state-update, lai prezentācijas ekrāns un telefoni uzzina par REVEAL fāzi
       io.to(pin).emit('state-update', { ...s.currentScene, subState: 'REVEAL', isRevealed: true });
       io.to(pin).emit('results-revealed', { correctAnswers: correct, correctnessMap });
 
@@ -775,6 +806,10 @@ io.on('connection', (socket) => {
   socket.on('host:next-scene', (data: { pin: string; scene: any }) => {
     const s = sessions.get(data.pin);
     if (s) {
+      if (s.activeTimerTimeout) {
+        clearTimeout(s.activeTimerTimeout);
+        s.activeTimerTimeout = null;
+      }
       s.currentScene = { ...data.scene, endTime: null };
       s.subState = 'IDLE';
       s.votes = [];
@@ -787,7 +822,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // JOIN-SESSION AR AUTOMĀTISKO ATJAUNOŠANOS (RECONNECT NOTURĪBA)
   socket.on('join-session', (data: { pin: string; name: string; playerId: string }) => {
     if (sessions.has(data.pin)) {
       socket.join(data.pin);
@@ -798,7 +832,6 @@ io.on('connection', (socket) => {
         if (!participants.has(data.pin)) participants.set(data.pin, new Set());
         participants.get(data.pin)?.add(socket.id);
 
-        // Ja dalībnieks pieslēdzas pirmo reizi
         if (!playerObj) {
           const deviceNumber = players.size + 1;
           playerObj = {
@@ -814,7 +847,6 @@ io.on('connection', (socket) => {
           };
           players.set(data.playerId, playerObj);
         } else {
-          // Ja dalībnieks atgriežas pēc ekrāna iemigšanas / tīkla pārtraukuma
           if (data.name && data.name !== playerObj.name) {
             playerObj.name = data.name;
           }

@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { socket } from './socket';
 import { BACKEND_URL, ADMIN_API_KEY, getAdminHeaders } from './config';
 
+const formatThinkingTime = (ms?: number): string => {
+  if (ms === undefined || ms === null) return '0.00s';
+  return (ms / 1000).toFixed(2) + 's';
+};
+
 export default function Host() {
   const [pin, setPin] = useState<string | null>(localStorage.getItem('active_pin'));
   const [scenes, setScenes] = useState<any[]>([]);
@@ -605,8 +610,8 @@ export default function Host() {
                           style={{ ...tableInput, width: '90px', color: '#00e5ff' }}
                           title="Laiks milisekundēs"
                         />
-                        <span style={{ fontSize: '0.8rem', color: '#888', marginLeft: '4px' }}>
-                          ({((p.totalTimeMs || 0) / 1000).toFixed(2)}s)
+                        <span style={{ fontSize: '0.8rem', color: '#888', marginLeft: '6px' }}>
+                          ({formatThinkingTime(p.totalTimeMs)})
                         </span>
                       </td>
                       <td style={{ padding: '8px', textAlign: 'center' }}>

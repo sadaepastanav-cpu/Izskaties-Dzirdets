@@ -45,21 +45,44 @@ const getLobbyColor = (count: number) => {
   return '#ff00ff';
 };
 
-// REAKTĪVS MEDIJU ELEMENTS (Video / Audio / Bilde / Teksts)
-const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean }> = ({ el, subState, isRevealed }) => {
+// ⏱️ UNIVERSĀLAIS APDOMAS LAIKA FORMATĒTĀJS
+export const formatThinkingTime = (totalMs: number = 0): string => {
+  if (!totalMs || totalMs <= 0) return '0 sek un 000 ms';
+  
+  const ms = Math.floor(totalMs % 1000);
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60);
+  const msStr = String(ms).padStart(3, '0');
+
+  if (minutes > 0) {
+    return `${minutes} min ${seconds} sek un ${msStr} ms`;
+  }
+  return `${seconds} sek un ${msStr} ms`;
+};
+
+// 🎯 REAKTĪVS MEDIJU ELEMENTS
+const MediaLayoutItem: React.FC<{
+  el: any;
+  subState: string;
+  isRevealed: boolean;
+  onCustomMediaEnded?: () => void;
+}> = ({ el, subState, isRevealed, onCustomMediaEnded }) => {
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const vis = el.visibility || 'ALWAYS';
   const src = `${MEDIA_BASE_URL}/${el.content}`;
 
+  const currentSub = (subState || 'IDLE').toUpperCase();
+
   const isVisible =
     vis === 'ALWAYS' ||
-    (vis === 'DURING_QUESTION' && subState === 'ACTIVE') ||
-    (vis === 'AFTER_REVEAL' && (isRevealed || subState === 'REVEAL'));
+    (vis === 'DURING_QUESTION' && currentSub === 'ACTIVE') ||
+    (vis === 'AFTER_REVEAL' && (isRevealed || currentSub === 'REVEAL'));
 
   const shouldPlay = isVisible && (
-    (vis === 'ALWAYS' && ['READY', 'ACTIVE', 'STATS', 'REVEAL'].includes(subState)) ||
-    (vis === 'DURING_QUESTION' && subState === 'ACTIVE') ||
-    (vis === 'AFTER_REVEAL' && (isRevealed || subState === 'REVEAL'))
+    (vis === 'ALWAYS' && ['READY', 'ACTIVE', 'STATS', 'REVEAL'].includes(currentSub)) ||
+    (vis === 'DURING_QUESTION' && currentSub === 'ACTIVE') ||
+    (vis === 'AFTER_REVEAL' && (isRevealed || currentSub === 'REVEAL'))
   );
 
   useEffect(() => {
@@ -68,14 +91,16 @@ const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean
     m.volume = (el.volume !== undefined ? el.volume : 100) / 100;
 
     if (shouldPlay) {
-      m.currentTime = el.trimStart || 0;
-      m.play().catch(() => {});
+      if (m.paused) {
+        try {
+          m.currentTime = el.trimStart || 0;
+        } catch {}
+        m.play().catch(() => {});
+      }
     } else {
       m.pause();
     }
-  }, [shouldPlay, subState, isRevealed, el.trimStart, el.volume]);
-
-  if (!isVisible) return null;
+  }, [shouldPlay, currentSub, isRevealed, el.trimStart, el.volume]);
 
   const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 80 : 50));
   const style: React.CSSProperties = {
@@ -92,7 +117,7 @@ const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean
     fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal'),
     whiteSpace: 'pre-wrap',
     textAlign: 'center',
-    display: 'flex',
+    display: isVisible ? 'flex' : 'none',
     alignItems: 'center',
     justifyContent: 'center',
     wordBreak: 'break-word',
@@ -121,7 +146,7 @@ const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean
     return (
       <img
         src={src}
-        style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: 'block' }}
+        style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: isVisible ? 'block' : 'none' }}
         alt="Medijs"
       />
     );
@@ -132,7 +157,8 @@ const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean
       <video
         ref={(v) => { mediaRef.current = v; }}
         src={src}
-        style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: 'block' }}
+        preload="auto"
+        style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: isVisible ? 'block' : 'none' }}
         loop={!!el.loop}
         playsInline
         onTimeUpdate={() => {
@@ -143,8 +169,12 @@ const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean
               v.play().catch(() => {});
             } else {
               v.pause();
+              if (onCustomMediaEnded) onCustomMediaEnded();
             }
           }
+        }}
+        onEnded={() => {
+          if (!el.loop && onCustomMediaEnded) onCustomMediaEnded();
         }}
       />
     );
@@ -155,6 +185,7 @@ const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean
       <audio
         ref={(a) => { mediaRef.current = a; }}
         src={src}
+        preload="auto"
         loop={!!el.loop}
         onTimeUpdate={() => {
           const a = mediaRef.current;
@@ -164,8 +195,12 @@ const MediaLayoutItem: React.FC<{ el: any; subState: string; isRevealed: boolean
               a.play().catch(() => {});
             } else {
               a.pause();
+              if (onCustomMediaEnded) onCustomMediaEnded();
             }
           }
+        }}
+        onEnded={() => {
+          if (!el.loop && onCustomMediaEnded) onCustomMediaEnded();
         }}
       />
     );
@@ -283,6 +318,7 @@ export default function Presentation() {
   const { pin: routePin } = useParams<{ pin: string }>();
   const [pin, setPin] = useState<string>('');
   const [scene, setScene] = useState<any>(null);
+  const [subState, setSubState] = useState<string>('IDLE');
   const [voteData, setVoteData] = useState<{ summary: Record<string, number>; votedCount: number }>({
     summary: {},
     votedCount: 0
@@ -299,6 +335,7 @@ export default function Presentation() {
 
   const [branding, setBranding] = useState<any>({
     lobbyMode: 'CIRCLE',
+    optionsRevealTiming: 'ON_ACTIVE',
     appTitle: '',
     appLogo: '',
     welcomeImage: '',
@@ -308,6 +345,27 @@ export default function Presentation() {
 
   const [connectionUrl, setConnectionUrl] = useState<string>('');
   const [testedBuzzerCounts, setTestedBuzzerCounts] = useState<Record<string, number>>({});
+
+  // 🔊 SISTĒMAS AUDIO EFEKTI
+  const audioTimerRef = useRef<HTMLAudioElement | null>(null);
+  const audioTimeUpRef = useRef<HTMLAudioElement | null>(null);
+  const audioRevealRef = useRef<HTMLAudioElement | null>(null);
+  const audioFinalsRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    audioTimerRef.current = new Audio('/sounds/00Time.mp3');
+    audioTimeUpRef.current = new Audio('/sounds/01laiksbeidzas.mp3');
+    audioRevealRef.current = new Audio('/sounds/02atklajatbildi.mp3');
+    audioFinalsRef.current = new Audio('/sounds/04Finals.mp3');
+    audioFinalsRef.current.loop = true;
+
+    return () => {
+      audioTimerRef.current?.pause();
+      audioTimeUpRef.current?.pause();
+      audioRevealRef.current?.pause();
+      audioFinalsRef.current?.pause();
+    };
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -330,11 +388,14 @@ export default function Presentation() {
     const handleJoinSuccess = (data: any) => {
       if (data?.connectionUrl) setConnectionUrl(data.connectionUrl);
       if (data?.currentScene) setScene(data.currentScene);
+      if (data?.subState) setSubState(String(data.subState).toUpperCase());
       if (data?.branding) setBranding((prev: any) => ({ ...prev, ...data.branding }));
     };
 
     const handleSessionInfo = (data: any) => {
       if (data?.state?.connectionUrl) setConnectionUrl(data.state.connectionUrl);
+      if (data?.state?.currentScene) setScene(data.state.currentScene);
+      if (data?.state?.subState) setSubState(String(data.state.subState).toUpperCase());
       if (data?.state?.branding) setBranding((prev: any) => ({ ...prev, ...data.state.branding }));
     };
 
@@ -367,7 +428,9 @@ export default function Presentation() {
         }
         return newScene;
       });
-      if (newScene?.subState === 'REVEAL') {
+      const nextSub = (newScene?.subState || 'READY').toUpperCase();
+      setSubState(nextSub);
+      if (nextSub === 'REVEAL') {
         setIsRevealed(true);
       }
       setPodiumStage(0);
@@ -402,7 +465,7 @@ export default function Presentation() {
         setLeaderboardType('TOTAL');
       } else {
         setLeaderboard(payload?.data || []);
-        setLeaderboardType(payload?.lbType || 'TOTAL');
+        setLeaderboardType((payload?.lbType || 'TOTAL').toUpperCase());
       }
       setLeaderboardPage(0);
       setPodiumStage(0);
@@ -412,7 +475,7 @@ export default function Presentation() {
     socket.on('leaderboard-page-change', (page: number) => setLeaderboardPage(page));
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.key === 'c' || e.key === 'C') && (scene?.subState === 'STATS' || isRevealed)) {
+      if ((e.key === 'c' || e.key === 'C') && (subState === 'STATS' || isRevealed)) {
         e.preventDefault();
         setIsStatsVisible((prev) => !prev);
       }
@@ -436,7 +499,87 @@ export default function Presentation() {
       socket.off('leaderboard-page-change');
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [routePin, scene?.subState, isRevealed]);
+  }, [routePin]);
+
+  // KOPĒJIE MAINĪGIE (Nodefinēti tieši VIENU reizi)
+  const currentSub = (subState || scene?.subState || 'IDLE').toUpperCase();
+  const isQuestionType =
+    scene?.type === 'QUESTION' ||
+    scene?.type === 'QUIZ' ||
+    scene?.type === 'MAJORITY' ||
+    scene?.type === 'VOTE';
+
+  const isRoundLb = (scene?.config?.lbType || leaderboardType) === 'ROUND';
+  const isFinalLb = scene?.type === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
+  const isFullContent = scene?.type === 'BILLBOARD' || scene?.type === 'LEADERBOARD';
+
+  const hasCustomMediaDuringQuestion = !!(scene?.config?.layout || []).some(
+    (el: any) =>
+      (el.type === 'AUDIO' || el.type === 'VIDEO') &&
+      el.content &&
+      (el.visibility === 'ALWAYS' || el.visibility === 'DURING_QUESTION')
+  );
+
+  // 🎵 1. TAIMERA MŪZIKA: 00Time.mp3
+  useEffect(() => {
+    if (!isMediaReady || !audioTimerRef.current) return;
+
+    if (currentSub === 'ACTIVE' && isQuestionType) {
+      if (!hasCustomMediaDuringQuestion) {
+        audioTimerRef.current.currentTime = 0;
+        audioTimerRef.current.play().catch(() => {});
+      }
+    } else {
+      audioTimerRef.current.pause();
+    }
+  }, [currentSub, isQuestionType, hasCustomMediaDuringQuestion, isMediaReady]);
+
+  const handleCustomMediaEnded = () => {
+    if (currentSub === 'ACTIVE' && isQuestionType && audioTimerRef.current) {
+      if (audioTimerRef.current.paused) {
+        audioTimerRef.current.currentTime = 0;
+        audioTimerRef.current.play().catch(() => {});
+      }
+    }
+  };
+
+  // 🎵 2. LAIKS BEIDZAS: 01laiksbeidzas.mp3
+  useEffect(() => {
+    if (!isMediaReady || !audioTimeUpRef.current) return;
+
+    if (currentSub === 'STATS' && isQuestionType) {
+      audioTimerRef.current?.pause();
+      audioTimeUpRef.current.currentTime = 0;
+      audioTimeUpRef.current.play().catch(() => {});
+    }
+  }, [currentSub, isQuestionType, isMediaReady]);
+
+  // 🎵 3. ATKLĀJ ATBILDI: 02atklajatbildi.mp3
+  useEffect(() => {
+    if (!isMediaReady || !audioRevealRef.current) return;
+
+    if (currentSub === 'REVEAL' && isQuestionType) {
+      audioTimerRef.current?.pause();
+      audioTimeUpRef.current?.pause();
+      audioRevealRef.current.currentTime = 0;
+      audioRevealRef.current.play().catch(() => {});
+    }
+  }, [currentSub, isQuestionType, isMediaReady]);
+
+  // 🎵 4. FINĀLS LOOP: 04Finals.mp3
+  useEffect(() => {
+    if (!isMediaReady || !audioFinalsRef.current) return;
+
+    if (isFinalLb) {
+      audioTimerRef.current?.pause();
+      audioTimeUpRef.current?.pause();
+      audioRevealRef.current?.pause();
+      audioFinalsRef.current.currentTime = 0;
+      audioFinalsRef.current.play().catch(() => {});
+    } else {
+      audioFinalsRef.current.pause();
+    }
+  }, [isFinalLb, isMediaReady]);
 
   if (!isMediaReady) {
     return (
@@ -452,7 +595,7 @@ export default function Presentation() {
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
 
-  // 1. LOBBY SKATS (PIRMS 1. JAUTĀJUMA)
+  // 1. LOBBY SKATS
   if (!scene) {
     const lobbyMode = branding?.lobbyMode || 'CIRCLE';
 
@@ -630,7 +773,6 @@ export default function Presentation() {
     );
   }
 
-  const isFullContent = scene.type === 'BILLBOARD' || scene.type === 'LEADERBOARD';
   const containerStyle: React.CSSProperties = {
     ...fullScreen,
     backgroundImage: scene?.config?.backgroundUrl ? `url(${MEDIA_BASE_URL}/${scene.config.backgroundUrl})` : 'none',
@@ -639,21 +781,36 @@ export default function Presentation() {
     transition: 'background 1s ease-in-out'
   };
 
-  const optionsList: string[] = (scene.config?.options || []).filter((opt: string) => opt && opt.trim() !== '');
-  const optLayout = scene.config?.optionsLayout || 'GRID';
-  const optPositions = scene.config?.optionsPositions || {};
+  const optionsList: string[] = (scene?.config?.options || []).filter((opt: string) => opt && opt.trim() !== '');
+  const optLayout = scene?.config?.optionsLayout || 'GRID';
+  const optPositions = scene?.config?.optionsPositions || {};
 
-  const isRoundLb = (scene.config?.lbType || leaderboardType) === 'ROUND';
-  const isFinalLb = (scene.config?.lbType || leaderboardType) === 'FINAL';
+  // 🏆 STINGRA KĀRTOŠANA PĒC PUNKTIEM
+  const sortedLeaderboard = [...leaderboard]
+    .filter((p) => !p.isDisabled)
+    .sort((a, b) => {
+      const scoreA = isRoundLb ? (a.roundScore ?? 0) : (a.score ?? 0);
+      const scoreB = isRoundLb ? (b.roundScore ?? 0) : (b.score ?? 0);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      const timeA = isRoundLb ? (a.roundTimeMs || 0) : (a.totalTimeMs || 0);
+      const timeB = isRoundLb ? (b.roundTimeMs || 0) : (b.totalTimeMs || 0);
+      return timeA - timeB;
+    });
 
-  const totalCount = leaderboard.length;
-  const firstPlace = leaderboard[0];
-  const secondPlace = leaderboard[1];
-  const thirdPlace = totalCount >= 3 ? leaderboard[2] : null;
+  const totalCount = sortedLeaderboard.length;
+  const firstPlace = sortedLeaderboard[0];
+  const secondPlace = sortedLeaderboard[1];
+  const thirdPlace = totalCount >= 3 ? sortedLeaderboard[2] : null;
 
-  const remainingPlayers = totalCount > 3 ? leaderboard.slice(3) : [];
+  const remainingPlayers = totalCount > 3 ? sortedLeaderboard.slice(3) : [];
   const totalRemainingPages = Math.ceil(remainingPlayers.length / 10);
   const currentRemainingPageList = remainingPlayers.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10);
+
+  const optionsRevealTiming = branding?.optionsRevealTiming || 'ON_ACTIVE';
+  const shouldShowOptions =
+    isQuestionType &&
+    optionsList.length > 0 &&
+    (optionsRevealTiming === 'ALWAYS' ? true : ['ACTIVE', 'STATS', 'REVEAL'].includes(currentSub));
 
   return (
     <div style={containerStyle}>
@@ -682,18 +839,19 @@ export default function Presentation() {
           overflow: 'hidden'
         }}
       >
-        {/* STUDIJĀ IZVIETOTIE MEDIJI UN TEKSTI (AUTOMĀTISKA ATSKAŅOŠANA) */}
+        {/* STUDIJĀ IZVIETOTIE MEDIJI */}
         {scene?.config?.layout?.map((el: any, idx: number) => (
           <MediaLayoutItem
             key={el.id || `layout-el-${idx}`}
             el={el}
-            subState={scene?.subState || 'IDLE'}
+            subState={currentSub}
             isRevealed={isRevealed}
+            onCustomMediaEnded={handleCustomMediaEnded}
           />
         ))}
 
-        {/* ATBILŽU POGAS TIKAI JAUTĀJUMU SLAIDIEM */}
-        {optionsList.length > 0 && (
+        {/* 🛑 ATBILŽU VARIANTI TIEK RĀDĪTI TIKAI JAUTĀJUMU SLAIDIEM */}
+        {shouldShowOptions && (
           optLayout === 'INDIVIDUAL' ? (
             optionsList.map((opt: string, i: number) => {
               const pos = optPositions[i] || optPositions[opt] || {
@@ -751,7 +909,7 @@ export default function Presentation() {
                     </span>
                   )}
 
-                  {isStatsVisible && (scene.subState === 'STATS' || isRevealed) && (
+                  {isStatsVisible && (currentSub === 'STATS' || isRevealed) && (
                     <span style={voteBadge}>{count}</span>
                   )}
                 </div>
@@ -812,7 +970,7 @@ export default function Presentation() {
                       </span>
                     )}
 
-                    {isStatsVisible && (scene.subState === 'STATS' || isRevealed) && (
+                    {isStatsVisible && (currentSub === 'STATS' || isRevealed) && (
                       <span style={voteBadge}>{count}</span>
                     )}
                   </div>
@@ -829,7 +987,7 @@ export default function Presentation() {
               {isRoundLb ? '🏆 KĀRTAS REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
             </h1>
             <div>
-              {leaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => {
+              {sortedLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => {
                 const globalIndex = leaderboardPage * 10 + i + 1;
                 const scoreToDisplay = isRoundLb ? (p.roundScore ?? 0) : p.score;
                 const timeToDisplay = isRoundLb ? (p.roundTimeMs || 0) : (p.totalTimeMs || 0);
@@ -839,7 +997,7 @@ export default function Presentation() {
                     <span>{globalIndex}. {p.name}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                       <span style={timeTagStyle}>
-                        ⏱️ {(timeToDisplay / 1000).toFixed(2)}s
+                        ⏱️ {formatThinkingTime(timeToDisplay)}
                       </span>
                       <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
                         {scoreToDisplay} pt
@@ -879,8 +1037,8 @@ export default function Presentation() {
                       <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>
                         {secondPlace.score} pt
                       </span>
-                      <span style={{ fontSize: '1vw', color: '#00e5ff', marginBottom: '8px' }}>
-                        ⏱️ {((secondPlace.totalTimeMs || 0) / 1000).toFixed(2)}s
+                      <span style={{ fontSize: '0.9vw', color: '#00e5ff', marginBottom: '8px' }}>
+                        ⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}
                       </span>
                       <div style={{ width: '180px', height: '180px', background: 'linear-gradient(to top, #7f8c8d, #bdc3c7)', borderRadius: '15px 15px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '3px solid #fff' }}>
                         <span style={{ fontSize: '4.5vw', fontWeight: 'bold', color: '#000' }}>🥈 2</span>
@@ -906,8 +1064,8 @@ export default function Presentation() {
                       <span style={{ fontSize: '1.5vw', color: '#fff', fontWeight: 'bold' }}>
                         {firstPlace.score} pt
                       </span>
-                      <span style={{ fontSize: '1.1vw', color: '#00e5ff', marginBottom: '8px' }}>
-                        ⏱️ {((firstPlace.totalTimeMs || 0) / 1000).toFixed(2)}s
+                      <span style={{ fontSize: '0.95vw', color: '#00e5ff', marginBottom: '8px' }}>
+                        ⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}
                       </span>
                       <div style={{ width: '220px', height: '260px', background: 'linear-gradient(to top, #f39c12, #f1c40f)', borderRadius: '20px 20px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '4px solid #fff', boxShadow: '0 0 40px rgba(241,196,15,0.7)' }}>
                         <span style={{ fontSize: '6vw', fontWeight: 'bold', color: '#000' }}>🥇 1</span>
@@ -932,8 +1090,8 @@ export default function Presentation() {
                       <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>
                         {thirdPlace.score} pt
                       </span>
-                      <span style={{ fontSize: '1vw', color: '#00e5ff', marginBottom: '8px' }}>
-                        ⏱️ {((thirdPlace.totalTimeMs || 0) / 1000).toFixed(2)}s
+                      <span style={{ fontSize: '0.9vw', color: '#00e5ff', marginBottom: '8px' }}>
+                        ⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}
                       </span>
                       <div style={{ width: '180px', height: '130px', background: 'linear-gradient(to top, #8e44ad, #cd7f32)', borderRadius: '15px 15px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '3px solid #fff' }}>
                         <span style={{ fontSize: '4vw', fontWeight: 'bold', color: '#000' }}>🥉 3</span>
@@ -957,7 +1115,7 @@ export default function Presentation() {
                         <span>{globalRank}. {p.name}</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                           <span style={timeTagStyle}>
-                            ⏱️ {((p.totalTimeMs || 0) / 1000).toFixed(2)}s
+                            ⏱️ {formatThinkingTime(p.totalTimeMs)}
                           </span>
                           <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
                             {p.score} pt

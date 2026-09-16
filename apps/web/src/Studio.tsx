@@ -27,6 +27,8 @@ interface MobileBranding {
   welcomeImage?: string;
   appBgColor?: string;
   lobbyMode?: 'CIRCLE' | 'INTERACTIVE_DOTS';
+  optionsRevealTiming?: 'ON_ACTIVE' | 'ALWAYS';
+  timerMode?: 'ALL_VOTED' | 'FULL_TIME'; // <-- JAUNUMS: Taimera globālais režīms
 }
 
 interface CanvasElement {
@@ -90,7 +92,8 @@ export default function Studio() {
     appBgImage: '',
     welcomeImage: '',
     appBgColor: '#121212',
-    lobbyMode: 'CIRCLE'
+    lobbyMode: 'CIRCLE',
+    optionsRevealTiming: 'ON_ACTIVE'
   });
 
   const [slides, setSlides] = useState<Slide[]>([
@@ -1196,6 +1199,28 @@ export default function Studio() {
             >
               <option value="CIRCLE">Klasiskais (Lielais PIN, QR un Aplis)</option>
               <option value="INTERACTIVE_DOTS">Interaktīvais (Bumbiņas ar Pults testu)</option>
+            </select>
+
+            {/* GLOBĀLS IESTATĪJUMS: VARIANTU PARĀDĪŠANĀS LAIKS PREZENTĀCIJĀ */}
+            <label style={labelStyle}>Atbilžu variantu parādīšanās ekrānā:</label>
+            <select
+              style={{ ...selectStyle, borderColor: '#00e5ff' }}
+              value={mobileBranding.optionsRevealTiming || 'ON_ACTIVE'}
+              onChange={(e) => setMobileBranding({ ...mobileBranding, optionsRevealTiming: e.target.value as any })}
+            >
+              <option value="ON_ACTIVE">⏱️ Tikai tad, kad sākas laika atskaite (ACTIVE)</option>
+              <option value="ALWAYS">👁️ Uzreiz, kad parādās jautājums (READY)</option>
+            </select>
+
+            {/* GLOBĀLS IESTATĪJUMS: TAIMERA DARBĪBAS REŽĪMS */}
+            <label style={labelStyle}>⏱️ Taimera režīms visiem jautājumiem:</label>
+            <select
+              style={{ ...selectStyle, borderColor: '#00e5ff' }}
+              value={mobileBranding.timerMode || 'ALL_VOTED'}
+              onChange={(e) => setMobileBranding({ ...mobileBranding, timerMode: e.target.value as any })}
+            >
+              <option value="ALL_VOTED">⚡ Pārtraukt laiku, tiklīdz visi atbildējuši (Ātrais)</option>
+              <option value="FULL_TIME">⏳ Vienmēr skaitīt pilno laiku līdz 0s (Pilnais)</option>
             </select>
 
             <label style={labelStyle}>Sākuma Logo (480 × 120 px PNG):</label>

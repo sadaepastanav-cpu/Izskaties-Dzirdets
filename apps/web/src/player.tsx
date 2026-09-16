@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { BACKEND_URL } from './config';
 
+const formatThinkingTime = (ms?: number): string => {
+  if (ms === undefined || ms === null) return '0.00s';
+  return (ms / 1000).toFixed(2) + 's';
+};
+
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 const BUTTON_COLORS = ['#007bff', '#fd7e14', '#28a745', '#ffc107', '#6f42c1', '#17a2b8'];
 
@@ -24,12 +29,12 @@ export default function Player() {
   const [scene, setScene] = useState<any>(null);
   const [subState, setSubState] = useState<string>('IDLE');
 
-  // Atbilžu izvēles stāvokļi
   const [myChoice, setMyChoice] = useState<string | null>(null);
   const [selectedMultipleOptions, setSelectedMultipleOptions] = useState<string[]>([]);
 
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [leaderboardType, setLeaderboardType] = useState<string>('TOTAL');
+  const [podiumStage, setPodiumStage] = useState<number>(0);
   const [buzzerTestPresses, setBuzzerTestPresses] = useState(0);
 
   const [branding, setBranding] = useState<any>(() => {
@@ -57,7 +62,6 @@ export default function Player() {
     }
   });
 
-  // Screen Wake Lock API — novērš telefona ekrāna iemigšanu
   useEffect(() => {
     let wakeLock: any = null;
     const requestWakeLock = async () => {
@@ -73,7 +77,6 @@ export default function Player() {
     };
   }, []);
 
-  // Automātiski nolasa PIN no URL parametriem
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlPin = params.get('pin');
@@ -83,7 +86,6 @@ export default function Player() {
     }
   }, []);
 
-  // SOCKET.IO SAVIENOJUMS AR RECONNECT NOTURĪBU
   useEffect(() => {
     const s = io(BACKEND_URL, {
       reconnection: true,
@@ -143,6 +145,7 @@ export default function Player() {
       setSubState(newSub);
       setMyChoice(null);
       setSelectedMultipleOptions([]);
+      setPodiumStage(0);
     });
 
     s.on('leaderboard-update', (payload: any) => {
@@ -153,6 +156,11 @@ export default function Player() {
         setLeaderboard(payload?.data || []);
         setLeaderboardType((payload?.lbType || 'TOTAL').toUpperCase());
       }
+      setPodiumStage(0);
+    });
+
+    s.on('podium-stage-change', (stage: number) => {
+      setPodiumStage(stage);
     });
 
     s.on('game-over', () => setIsGameOver(true));
@@ -181,14 +189,15 @@ export default function Player() {
     }
   };
 
+  const correctAnswersList: string[] = scene?.config?.correctAnswers || [];
+  const maxRequiredChoices = correctAnswersList.length > 0 ? correctAnswersList.length : 2;
+
   const isMultiSelectMode =
-    scene?.config?.selectionMode === 'ALL' && (scene?.config?.correctAnswers?.length || 0) > 1;
+    scene?.config?.selectionMode === 'ALL' && correctAnswersList.length > 1;
 
   const handleSingleVoteSubmit = (option: string, letter: string) => {
     if (myChoice || !socket) return;
-    try {
-      if ('vibrate' in navigator) navigator.vibrate(80);
-    } catch {}
+    try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
     setMyChoice(option || letter);
 
     const answers = [option, letter].filter(Boolean);
@@ -197,20 +206,25 @@ export default function Player() {
 
   const toggleMultiSelectOption = (item: string) => {
     if (myChoice) return;
-    try {
-      if ('vibrate' in navigator) navigator.vibrate(40);
-    } catch {}
 
-    setSelectedMultipleOptions((prev) =>
-      prev.includes(item) ? prev.filter((x) => x !== item) : [...prev, item]
-    );
+    setSelectedMultipleOptions((prev) => {
+      if (prev.includes(item)) {
+        try { if ('vibrate' in navigator) navigator.vibrate(30); } catch {}
+        return prev.filter((x) => x !== item);
+      } else {
+        if (prev.length >= maxRequiredChoices) {
+          try { if ('vibrate' in navigator) navigator.vibrate([40, 60, 40]); } catch {}
+          return prev;
+        }
+        try { if ('vibrate' in navigator) navigator.vibrate(50); } catch {}
+        return [...prev, item];
+      }
+    });
   };
 
   const handleMultiVoteSubmit = () => {
-    if (myChoice || !socket || selectedMultipleOptions.length === 0) return;
-    try {
-      if ('vibrate' in navigator) navigator.vibrate(100);
-    } catch {}
+    if (myChoice || !socket || selectedMultipleOptions.length !== maxRequiredChoices) return;
+    try { if ('vibrate' in navigator) navigator.vibrate(100); } catch {}
 
     const chosenStr = selectedMultipleOptions.join(', ');
     setMyChoice(chosenStr);
@@ -225,9 +239,7 @@ export default function Player() {
 
   const handleTestBuzzer = () => {
     if (!socket) return;
-    try {
-      if ('vibrate' in navigator) navigator.vibrate(60);
-    } catch {}
+    try { if ('vibrate' in navigator) navigator.vibrate(60); } catch {}
     setBuzzerTestPresses((prev) => prev + 1);
     socket.emit('participant:test-buzzer', { pin, playerId });
   };
@@ -245,9 +257,24 @@ export default function Player() {
     setPin('');
   };
 
-  const myRankIndex = leaderboard.findIndex((p) => p.id === playerId || p.name === name);
+  // 🏆 KĀRTOJAM ARĪ TELEFONĀ, LAI VIETAS NUMURS BŪTU 100% PRECIZS
+  const isRoundLb = leaderboardType === 'ROUND';
+
+  const sortedLeaderboard = [...leaderboard]
+    .filter((p) => !p.isDisabled)
+    .sort((a, b) => {
+      const scoreA = isRoundLb ? (a.roundScore ?? 0) : (a.score ?? 0);
+      const scoreB = isRoundLb ? (b.roundScore ?? 0) : (b.score ?? 0);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      const timeA = isRoundLb ? (a.roundTimeMs || 0) : (a.totalTimeMs || 0);
+      const timeB = isRoundLb ? (b.roundTimeMs || 0) : (b.totalTimeMs || 0);
+      return timeA - timeB;
+    });
+
+  const totalPlayersCount = sortedLeaderboard.length || 1;
+  const myRankIndex = sortedLeaderboard.findIndex((p) => p.id === playerId || p.name === name);
   const myRank = myRankIndex !== -1 ? myRankIndex + 1 : '-';
-  const myScoreData = myRankIndex !== -1 ? leaderboard[myRankIndex] : null;
+  const myScoreData = myRankIndex !== -1 ? sortedLeaderboard[myRankIndex] : null;
 
   const appBgStyle: React.CSSProperties = {
     ...fullScreenMobile,
@@ -257,7 +284,6 @@ export default function Player() {
     backgroundPosition: 'center'
   };
 
-  // 1. IELOGOŠANĀS SKATS
   if (!isJoined) {
     return (
       <div style={appBgStyle}>
@@ -305,7 +331,6 @@ export default function Player() {
     );
   }
 
-  // 2. SĀKUMA REĢISTRĀCIJAS LOBIJS (RĀDA TIKAI TAD, KAD ŠOVS VĒL NAV SĀKTS — scene === null)
   if (!scene) {
     const isInteractiveLobby = branding.lobbyMode === 'INTERACTIVE_DOTS';
 
@@ -370,7 +395,6 @@ export default function Player() {
     );
   }
 
-  // 3. SPĒLES BEIGAS
   if (isGameOver) {
     return (
       <div style={appBgStyle}>
@@ -387,13 +411,13 @@ export default function Player() {
           <div style={rankBadge}>
             <div style={{ fontSize: '0.9rem', color: '#aaa' }}>Tavs gala rezultāts:</div>
             <div style={{ fontSize: '3.2rem', fontWeight: 'bold', color: '#00ff00', margin: '5px 0' }}>
-              #{myRank}
+              #{myRank} <span style={{ fontSize: '1.4rem', color: '#888' }}>/ {totalPlayersCount}</span>
             </div>
             <div style={{ fontSize: '1.2rem', color: '#fff' }}>
               Punkti: <strong style={{ color: 'gold' }}>{myScoreData?.score ?? 0} pt</strong>
             </div>
             <div style={{ fontSize: '0.95rem', color: '#00e5ff', marginTop: '6px' }}>
-              ⏱️ Kopējais laiks: {(myScoreData?.totalTimeMs ? (myScoreData.totalTimeMs / 1000).toFixed(2) : '0.00')}s
+              ⏱️ Kopējais laiks: {formatThinkingTime(myScoreData?.totalTimeMs)}
             </div>
           </div>
           <button onClick={handleLeaveOrNewGame} style={btnJoin}>
@@ -415,8 +439,9 @@ export default function Player() {
       : []);
 
   const options = rawOptions.length > 0 ? rawOptions : ['A', 'B', 'C', 'D'];
+  const isExactChoicesSelected = selectedMultipleOptions.length === maxRequiredChoices;
+  const isFinalLeaderboard = slideType === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
 
-  // 4. SPĒLES EKRĀNS
   return (
     <div style={appBgStyle}>
       <div style={mobileHeader}>
@@ -454,37 +479,64 @@ export default function Player() {
           </div>
         )}
 
-        {/* B) LĪDERU TABULA */}
+        {/* B) LĪDERU TABULA (KĀRTA, KOPVĒRTĒJUMS UN FINĀLA INTRIGA) */}
         {slideType === 'LEADERBOARD' && (
           <div style={infoCard}>
-            <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🏆</div>
-            <h2 style={{ color: '#ffc107', margin: '0 0 10px 0', fontSize: '1.4rem' }}>
-              {leaderboardType === 'ROUND' ? 'KĀRTAS REZULTĀTI' : 'KOPVĒRTĒJUMS'}
-            </h2>
+            {isFinalLeaderboard && podiumStage < 3 ? (
+              // Fināla intrigas ekrāns, kamēr nav atklāta 1. vieta
+              <div>
+                <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>🥇</div>
+                <h2 style={{ color: '#ffc107', margin: '0 0 12px 0', fontSize: '1.4rem' }}>FINĀLA APBALVOŠANA</h2>
+                <p style={{ color: '#00e5ff', fontSize: '1.05rem', fontWeight: 'bold', lineHeight: 1.5, margin: 0 }}>
+                  Skaties lielo ekrānu! Tūlīt tiks paziņoti uzvarētāji...
+                </p>
+                <div style={{ marginTop: '15px', color: '#aaa', fontSize: '0.9rem' }}>
+                  {podiumStage === 0 && 'Gatavojamies apbalvošanai...'}
+                  {podiumStage === 1 && '🥉 3. vieta atklāta!'}
+                  {podiumStage === 2 && '🥈 2. vieta atklāta!'}
+                </div>
+              </div>
+            ) : (
+              // Parastā līderu tabula vai atklāts fināls
+              <div>
+                <div style={{ fontSize: '3rem', marginBottom: '10px' }}>
+                  {isFinalLeaderboard ? '👑' : leaderboardType === 'ROUND' ? '🏆' : '⭐'}
+                </div>
+                <h2 style={{ color: '#ffc107', margin: '0 0 10px 0', fontSize: '1.4rem' }}>
+                  {isFinalLeaderboard
+                    ? 'FINĀLA REZULTĀTS'
+                    : leaderboardType === 'ROUND'
+                    ? 'KĀRTAS REZULTĀTI'
+                    : 'KOPVĒRTĒJUMS'}
+                </h2>
 
-            <div style={rankBadge}>
-              <div style={{ fontSize: '0.85rem', color: '#aaa' }}>Tava vieta:</div>
-              <div style={{ fontSize: '3rem', fontWeight: 'bold', color: '#00ff00', margin: '4px 0' }}>
-                #{myRank}
+                <div style={rankBadge}>
+                  <div style={{ fontSize: '0.85rem', color: '#aaa' }}>
+                    {leaderboardType === 'ROUND' ? 'Tava vieta šajā kārtā:' : 'Tava vieta kopvērtējumā:'}
+                  </div>
+                  <div style={{ fontSize: '3.2rem', fontWeight: 'bold', color: '#00ff00', margin: '4px 0' }}>
+                    #{myRank} <span style={{ fontSize: '1.5rem', color: '#888' }}>/ {totalPlayersCount}</span>
+                  </div>
+                  <div style={{ fontSize: '1.1rem', color: '#fff' }}>
+                    Punkti:{' '}
+                    <strong style={{ color: 'gold', fontSize: '1.3rem' }}>
+                      {leaderboardType === 'ROUND' ? (myScoreData?.roundScore ?? 0) : (myScoreData?.score ?? 0)} pt
+                    </strong>
+                  </div>
+                  <div style={{ fontSize: '0.9rem', color: '#00e5ff', marginTop: '4px' }}>
+                    ⏱️ Atbildes laiks: {formatThinkingTime(leaderboardType === 'ROUND' ? (myScoreData?.roundTimeMs || 0) : (myScoreData?.totalTimeMs || 0))}
+                  </div>
+                </div>
+                <p style={{ color: '#888', fontSize: '0.8rem', margin: 0 }}>Skatieties lielo ekrānu, lai redzētu visus uzvarētājus!</p>
               </div>
-              <div style={{ fontSize: '1.1rem', color: '#fff' }}>
-                Punkti:{' '}
-                <strong style={{ color: 'gold', fontSize: '1.3rem' }}>
-                  {leaderboardType === 'ROUND' ? (myScoreData?.roundScore ?? 0) : (myScoreData?.score ?? 0)} pt
-                </strong>
-              </div>
-              <div style={{ fontSize: '0.9rem', color: '#00e5ff', marginTop: '4px' }}>
-                ⏱️ Atbildes laiks: {(leaderboardType === 'ROUND' ? myScoreData?.roundTimeMs : myScoreData?.totalTimeMs) ? (((leaderboardType === 'ROUND' ? myScoreData?.roundTimeMs : myScoreData?.totalTimeMs) / 1000).toFixed(2)) : '0.00'}s
-              </div>
-            </div>
-            <p style={{ color: '#888', fontSize: '0.8rem', margin: 0 }}>Skatieties lielo ekrānu, lai redzētu visus uzvarētājus!</p>
+            )}
           </div>
         )}
 
         {/* C) JAUTĀJUMU EKRĀNS */}
         {(slideType === 'QUESTION' || slideType === 'QUIZ' || slideType === 'VOTE' || slideType === 'MAJORITY' || slideType === '') && (
           <>
-            {/* 1. FĀZE: READY (Vadītājs nupat atvēris jautājumu, laiks vēl neiet) */}
+            {/* 1. FĀZE: READY (Vadītājs tikko atvēris jautājumu, laiks vēl neiet) */}
             {currentSub === 'READY' && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>⏳</div>
@@ -523,7 +575,7 @@ export default function Player() {
                   {myChoice
                     ? '✅ ATBILDE NOSŪTĪTA'
                     : isMultiSelectMode
-                    ? '☑️ ATZĪMĒ VISAS PAREIZĀS ATBILDES:'
+                    ? `☑️ ATZĪMĒ TIEŠI ${maxRequiredChoices} VARIANTUS:`
                     : 'SPIED ATBILDI:'}
                 </div>
 
@@ -580,17 +632,21 @@ export default function Player() {
                   })}
                 </div>
 
+                {/* IESNIEGŠANAS POGA */}
                 {isMultiSelectMode && !myChoice && (
                   <button
                     onClick={handleMultiVoteSubmit}
-                    disabled={selectedMultipleOptions.length === 0}
+                    disabled={!isExactChoicesSelected}
                     style={{
                       ...btnSubmitMulti,
-                      opacity: selectedMultipleOptions.length === 0 ? 0.4 : 1,
-                      cursor: selectedMultipleOptions.length === 0 ? 'not-allowed' : 'pointer'
+                      opacity: isExactChoicesSelected ? 1 : 0.4,
+                      cursor: isExactChoicesSelected ? 'pointer' : 'not-allowed',
+                      background: isExactChoicesSelected ? 'linear-gradient(135deg, #28a745, #20c997)' : '#333'
                     }}
                   >
-                    🚀 IESNIEGT ATBILDES ({selectedMultipleOptions.length})
+                    {isExactChoicesSelected
+                      ? `🚀 IESNIEGT ATBILDES (${selectedMultipleOptions.length}/${maxRequiredChoices})`
+                      : `Izvēlies vēl ${maxRequiredChoices - selectedMultipleOptions.length} (${selectedMultipleOptions.length}/${maxRequiredChoices})`}
                   </button>
                 )}
 
@@ -602,7 +658,7 @@ export default function Player() {
               </div>
             )}
 
-            {/* 3. FĀZE: STATS vai REVEAL (Balsošana noslēgusies) */}
+            {/* 3. FĀZE: STATS vai REVEAL */}
             {(currentSub === 'STATS' || currentSub === 'REVEAL') && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3rem', marginBottom: '10px' }}>📊</div>
@@ -627,13 +683,16 @@ const fullScreenMobile: React.CSSProperties = {
   right: 0,
   bottom: 0,
   width: '100vw',
-  height: '100vh',
+  height: '100dvh', // Modernā dinamiskā augstuma kontrole mobilajiem
+  maxHeight: '100dvh',
   color: '#fff',
   fontFamily: 'Segoe UI, Arial, sans-serif',
   display: 'flex',
   flexDirection: 'column',
   zIndex: 999999,
   overflow: 'hidden',
+  overscrollBehavior: 'none',
+  touchAction: 'manipulation',
   boxSizing: 'border-box'
 };
 
@@ -767,7 +826,6 @@ const btnSubmitMulti: React.CSSProperties = {
   width: '100%',
   padding: '12px',
   borderRadius: '10px',
-  background: 'linear-gradient(135deg, #28a745, #20c997)',
   color: '#fff',
   border: '2px solid #fff',
   fontSize: '1.05rem',
