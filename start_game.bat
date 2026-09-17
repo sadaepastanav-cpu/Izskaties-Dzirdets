@@ -1,30 +1,38 @@
 @echo off
 chcp 65001 > nul
-title Viktorīnas Vadības Panelis
+title Event Studio - Pasākumu Dzinējs
 color 0A
 
 echo ===================================================
-echo       VIKTORĪNA "IZSKATIES DZIRDĒTS" TIEK PALAISTA...
+echo       EVENT STUDIO TIEK PALAISTS...
 echo ===================================================
 echo.
 
-:: 1. Atbrīvojam portus 3000 un 5173, ja tie iepriekš palikuši aizņemti
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000 "') do taskkill /f /pid %%a >nul 2>&1
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173 "') do taskkill /f /pid %%a >nul 2>&1
+:: 1. Atbrīvojam portus
+echo [1/3] Pārbaudām un atbrīvojam tīkla portus...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r /c:":3000 .*LISTENING"') do if not "%%a"=="0" taskkill /f /pid %%a >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r /c:":5173 .*LISTENING"') do if not "%%a"=="0" taskkill /f /pid %%a >nul 2>&1
 
-:: 2. Palaižam API / Backend (ports 3000)
-echo [1/3] Palaižam API serveri...
-start "Backend_API" /min cmd /c "cd /d C:\Users\prata\Desktop\Izskaties-Dzirdets\apps\api && npm run dev"
+:: 2. Atrodam pareizo Backend mapi
+set "API_DIR=%~dp0apps\api"
+if not exist "%API_DIR%" set "API_DIR=%~dp0api"
 
-:: 3. Palaižam Web / Frontend (ports 5173)
-echo [2/3] Palaižam Web interfeisu...
-start "Frontend_WEB" /min cmd /c "cd /d C:\Users\prata\Desktop\Izskaties-Dzirdets\apps\web && npm run dev"
+:: 3. Atrodam pareizo Frontend mapi
+set "CLIENT_DIR=%~dp0apps\client"
+if not exist "%CLIENT_DIR%" set "CLIENT_DIR=%~dp0apps\web"
+if not exist "%CLIENT_DIR%" set "CLIENT_DIR=%~dp0client"
+if not exist "%CLIENT_DIR%" set "CLIENT_DIR=%~dp0web"
 
-:: 4. Nogaidām 3 sekundes, kamēr serveri sāk darboties
-echo [3/3] Inicializējam vidi...
-timeout /t 3 /nobreak > nul
+echo [2/3] Palaižam API no: %API_DIR%
+start "Event_Studio_Backend" cmd /k "cd /d "%API_DIR%" && npm run dev"
 
-:: 5. Automātiski atveram vadītāja paneli pārlūkā
+echo [3/3] Palaižam Frontend no: %CLIENT_DIR%
+start "Event_Studio_Frontend" cmd /k "cd /d "%CLIENT_DIR%" && npm run dev"
+
+echo.
+echo Gaidām 5 sekundes serveru startam...
+timeout /t 5 /nobreak > nul
+
 start http://localhost:5173/host
 
 cls
@@ -32,7 +40,7 @@ echo ===================================================
 echo             SPĒLE IR VEIKSMĪGI PALAISTA!
 echo ===================================================
 echo.
-echo   Vadītāja panelis:       http://localhost:5173/host
+echo   Vadītāja panelis:        http://localhost:5173/host
 echo   Dalībnieku pieslēgšanās: http://localhost:5173
 echo.
 echo ===================================================
@@ -44,14 +52,12 @@ echo.
 pause > nul
 
 echo.
-echo [i] Izslēdzam serverus un atbrīvojam atmiņu...
+echo [i] Izslēdzam serverus...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r /c:":3000 .*LISTENING"') do if not "%%a"=="0" taskkill /f /pid %%a >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r /c:":5173 .*LISTENING"') do if not "%%a"=="0" taskkill /f /pid %%a >nul 2>&1
+taskkill /fi "WINDOWTITLE eq Event_Studio_Backend*" /f >nul 2>&1
+taskkill /fi "WINDOWTITLE eq Event_Studio_Frontend*" /f >nul 2>&1
 
-:: Apturam fonā palaistos procesus un atbrīvojam portus
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000 "') do taskkill /f /pid %%a >nul 2>&1
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173 "') do taskkill /f /pid %%a >nul 2>&1
-taskkill /fi "WINDOWTITLE eq Backend_API*" /f >nul 2>&1
-taskkill /fi "WINDOWTITLE eq Frontend_WEB*" /f >nul 2>&1
-
-echo [OK] Viss ir veiksmīgi un tīri aizvērts!
+echo [OK] Viss ir veiksmīgi aizvērts!
 timeout /t 1 /nobreak > nul
 exit

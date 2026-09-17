@@ -108,7 +108,7 @@ const getLocalIpAddress = () => {
 };
 
 // ==========================================
-// 3. MEDIJU SERVĒŠANA UN UPLOAD
+// 3. MEDIJU SERVĒŠANA & MULTER VALIDĀCIJA (5. punkts)
 // ==========================================
 app.use('/project-media', (req, res, next) => {
   if (!currentProjectPath || !fs.existsSync(currentProjectPath)) {
@@ -116,6 +116,12 @@ app.use('/project-media', (req, res, next) => {
   }
   express.static(currentProjectPath)(req, res, next);
 });
+
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+  'video/mp4', 'video/quicktime', 'video/webm',
+  'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg'
+];
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
@@ -131,11 +137,20 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 100 * 1024 * 1024 }
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const isMimeAllowed = ALLOWED_MIME_TYPES.includes(file.mimetype);
+    const isExtAllowed = /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(file.originalname);
+    if (isMimeAllowed || isExtAllowed) {
+      cb(null, true);
+    } else {
+      cb(new Error('Neatļauts faila tips! Drīkst augšupielādēt tikai attēlus, video un audio failus.'));
+    }
+  }
 });
 
 // ==========================================
-// 4. SESIJU GLABĀTUVE UN TAIMERI
+// 4. SESIJU GLABĀTUVE UN DROŠĪBA
 // ==========================================
 interface PlayerState {
   id: string;
@@ -155,6 +170,9 @@ const participants = new Map<string, Set<string>>();
 const sessionHostTokens = new Map<string, string>();
 const sessionTimers = new Map<string, NodeJS.Timeout>();
 
+// 9. PUNKTS: Sasaistām socket.id ar spēlētāja sesiju, lai novērstu uzdošanos par citu
+const socketPlayerMap = new Map<string, { pin: string; playerId: string }>();
+
 const clearSessionTimer = (pin: string) => {
   if (sessionTimers.has(pin)) {
     clearTimeout(sessionTimers.get(pin)!);
@@ -167,7 +185,6 @@ const isHostAuthorized = (pin: string, token?: string): boolean => {
   return sessionHostTokens.get(pin) === token;
 };
 
-// PRET-ŠPIKOŠANA: Spēlētājiem nosūta requiredCount, bet slēpj pareizās atbildes līdz REVEAL
 const sanitizeSceneForPlayer = (scene: any, subState: string) => {
   if (!scene) return null;
   const isReveal = (subState || '').toUpperCase() === 'REVEAL';
@@ -325,7 +342,6 @@ app.get('/api/tunnel-url', (_req, res) => res.json({ tunnelUrl: publicTunnelUrl 
 app.get('/api/network-ip', (_req, res) => res.json({ localIp: getLocalIpAddress(), tunnelUrl: publicTunnelUrl }));
 app.get('/api/current-path', requireAdminAuth, (_req, res) => res.json({ currentPath: currentProjectPath }));
 
-// MAPES IESTATĪŠANA & SKENĒŠANA (AR WINDOWS CEĻU AUTOMĀTISKU SAKĀRTOŠANU)
 app.post('/api/set-path', requireAdminAuth, (req, res) => {
   try {
     const rawPath = req.body?.path;
@@ -367,7 +383,7 @@ app.get('/api/media-list', requireAdminAuth, (_req, res) => {
 });
 
 app.post('/api/upload-media', requireAdminAuth, uploadLimiter, upload.single('mediaFile'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'Nav faila' });
+  if (!req.file) return res.status(400).json({ error: 'Nav faila vai neatļauts formāts' });
   const files = fs.readdirSync(currentProjectPath).filter((f) =>
     /\.(jpg|jpeg|png|gif|webp|svg|mp4|mov|webm|mp3|wav|ogg)$/i.test(f)
   );
@@ -403,12 +419,17 @@ app.post('/api/save-to-file', requireAdminAuth, (req, res) => {
   }
 });
 
+// 2. PUNKTS: check-recovery publiski atgriež TIKAI drošo statusu (BEZ hostToken un state)
 app.get('/api/check-recovery', (_req, res) => {
   const p1 = path.join(SECURE_DATA_DIR, 'active_session.json');
   if (fs.existsSync(p1)) {
     try {
       const data = JSON.parse(fs.readFileSync(p1, 'utf-8'));
-      res.json({ canRecover: true, pin: data.pin, title: data.state?.currentScene?.title || 'Saglabātā Sesija', ...data });
+      res.json({
+        canRecover: true,
+        pin: data.pin,
+        title: data.state?.currentScene?.title || 'Saglabātā Sesija'
+      });
     } catch {
       res.json({ canRecover: false });
     }
@@ -417,6 +438,7 @@ app.get('/api/check-recovery', (_req, res) => {
   }
 });
 
+// Pilno sesijas atjaunošanu ar hostToken drīkst veikt TIKAI autorizēts administrators
 app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   const p1 = path.join(SECURE_DATA_DIR, 'active_session.json');
   if (fs.existsSync(p1)) {
@@ -525,16 +547,31 @@ io.on('connection', (socket: Socket) => {
     socket.emit('tunnel-ready', { url: publicTunnelUrl });
   }
 
-  socket.on('host:start-tunnel', () => {
+  // 4. PUNKTS: host:start-tunnel pieejams tikai vadītājam
+  socket.on('host:start-tunnel', (data?: { pin?: string; hostToken?: string }) => {
+    if (data?.pin && data?.hostToken && !isHostAuthorized(data.pin, data.hostToken)) {
+      return socket.emit('error-message', 'Nav tiesību startēt tuneli.');
+    }
     startCloudflareTunnel((url) => {
       socket.emit('tunnel-ready', { url });
     });
   });
 
+  // 3. PUNKTS: Aizsardzība pret sesijas nolaupīšanu
   socket.on('host:create-session', (data: any) => {
-    const pin = data.existingPin || Math.floor(1000 + Math.random() * 9000).toString();
+    const incomingPin = data.existingPin;
+    
+    // Ja PIN jau eksistē, atļaujam pārrakstīt TIKAI tad, ja atsūtīts derīgs hostToken
+    if (incomingPin && sessions.has(incomingPin)) {
+      const existingToken = sessionHostTokens.get(incomingPin);
+      if (existingToken && data.hostToken !== existingToken) {
+        return socket.emit('error-message', 'Nevar pārrakstīt aktīvu sesiju bez derīga vadītāja marķiera!');
+      }
+    }
+
+    const pin = incomingPin || Math.floor(1000 + Math.random() * 9000).toString();
     const finalUrl = data.connectionUrl || publicTunnelUrl || `http://${getLocalIpAddress()}:5173`;
-    const hostToken = crypto.randomBytes(16).toString('hex');
+    const hostToken = sessionHostTokens.get(pin) || crypto.randomBytes(16).toString('hex');
 
     const sessionData = {
       currentSceneIdx: -1,
@@ -897,6 +934,7 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  // 9. PUNKTS: Reģistrējam spēlētāju un sasaistām viņa socket.id ar playerId
   socket.on('join-session', (data: { pin: string; name: string; playerId: string }) => {
     if (sessions.has(data.pin)) {
       socket.join(data.pin);
@@ -906,6 +944,9 @@ io.on('connection', (socket: Socket) => {
       if (data.name !== 'EKRĀNS') {
         if (!participants.has(data.pin)) participants.set(data.pin, new Set());
         participants.get(data.pin)?.add(socket.id);
+
+        // Sasaistām soketu ar spēlētāju
+        socketPlayerMap.set(socket.id, { pin: data.pin, playerId: data.playerId });
 
         if (!playerObj) {
           playerObj = {
@@ -947,12 +988,18 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  // 9. PUNKTS: Pārbaudām vai balsotājs patiešām ir šis spēlētājs
   socket.on('participant:submit-answer', (data: { pin: string; playerId: string; answers?: string[]; answer?: string }) => {
+    const binding = socketPlayerMap.get(socket.id);
+    if (!binding || binding.pin !== data.pin || binding.playerId !== data.playerId) {
+      return socket.emit('error-message', 'Neautorizēta atbildes iesniegšana!');
+    }
     const answerList = Array.isArray(data.answers) ? data.answers : data.answer ? [data.answer] : [];
     handleVote(data.pin, answerList, data.playerId);
   });
 
   socket.on('disconnect', () => {
+    socketPlayerMap.delete(socket.id);
     participants.forEach((set, pin) => {
       if (set.has(socket.id)) {
         set.delete(socket.id);
