@@ -1,13 +1,23 @@
-# Rīku mapes (ļoti smagas, tās neiet uz GitHub)
+# Rīku un kompilācijas mapes
 node_modules/
 dist/
+dist-ssr/
 
-# Slepenie dati (paroles un DB adreses)
+# Slepenie vides dati (paroles un atslēgas)
 .env
+.env.*
+!.env.example
 
-# Windows sistēmas faili
+# Drošie spēles snapshoti un iekšējie servera dati
+server_data/
+apps/api/server_data/
+
+# Žurnālfaili un sistēmas faili
+*.log
 .DS_Store
 Thumbs.db
 
-# Žurnālfaili
-*.log
+# Redaktora iestatījumi
+.vscode/*
+!.vscode/extensions.json
+.idea/

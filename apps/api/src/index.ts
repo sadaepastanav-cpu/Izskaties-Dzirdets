@@ -108,7 +108,7 @@ const getLocalIpAddress = () => {
 };
 
 // ==========================================
-// 3. MEDIJU SERVĒŠANA & MULTER VALIDĀCIJA (5. punkts)
+// 3. MEDIJU SERVĒŠANA & MULTER VALIDĀCIJA
 // ==========================================
 app.use('/project-media', (req, res, next) => {
   if (!currentProjectPath || !fs.existsSync(currentProjectPath)) {
@@ -170,7 +170,6 @@ const participants = new Map<string, Set<string>>();
 const sessionHostTokens = new Map<string, string>();
 const sessionTimers = new Map<string, NodeJS.Timeout>();
 
-// 9. PUNKTS: Sasaistām socket.id ar spēlētāja sesiju, lai novērstu uzdošanos par citu
 const socketPlayerMap = new Map<string, { pin: string; playerId: string }>();
 
 const clearSessionTimer = (pin: string) => {
@@ -342,12 +341,21 @@ app.get('/api/tunnel-url', (_req, res) => res.json({ tunnelUrl: publicTunnelUrl 
 app.get('/api/network-ip', (_req, res) => res.json({ localIp: getLocalIpAddress(), tunnelUrl: publicTunnelUrl }));
 app.get('/api/current-path', requireAdminAuth, (_req, res) => res.json({ currentPath: currentProjectPath }));
 
+// DROŠS SET-PATH: Ļauj atvērt lietotāja mapes, bet bloķē Windows sistēmas mapes
 app.post('/api/set-path', requireAdminAuth, (req, res) => {
   try {
     const rawPath = req.body?.path;
     if (typeof rawPath === 'string' && rawPath.trim()) {
       const cleaned = rawPath.trim().replace(/^["']|["']$/g, '');
-      currentProjectPath = path.resolve(path.normalize(cleaned));
+      const resolved = path.resolve(path.normalize(cleaned));
+
+      // Drošības barjera pret bīstamām sistēmas mapēm
+      const lower = resolved.toLowerCase();
+      if (lower.startsWith('c:\\windows') || lower.startsWith('c:\\program files') || lower === 'c:\\') {
+        return res.status(403).json({ error: 'Drošības liegums: Sistēmas mapes nav atļauts iestatīt kā projekta mapi.' });
+      }
+
+      currentProjectPath = resolved;
     }
 
     if (!fs.existsSync(currentProjectPath)) {
@@ -419,7 +427,7 @@ app.post('/api/save-to-file', requireAdminAuth, (req, res) => {
   }
 });
 
-// 2. PUNKTS: check-recovery publiski atgriež TIKAI drošo statusu (BEZ hostToken un state)
+// CHECK-RECOVERY (Drošs — bez token noplūdes)
 app.get('/api/check-recovery', (_req, res) => {
   const p1 = path.join(SECURE_DATA_DIR, 'active_session.json');
   if (fs.existsSync(p1)) {
@@ -438,7 +446,6 @@ app.get('/api/check-recovery', (_req, res) => {
   }
 });
 
-// Pilno sesijas atjaunošanu ar hostToken drīkst veikt TIKAI autorizēts administrators
 app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   const p1 = path.join(SECURE_DATA_DIR, 'active_session.json');
   if (fs.existsSync(p1)) {
@@ -457,7 +464,7 @@ app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   }
 });
 
-// CSV EKSPORTS AR UTF-8 BOM
+// CSV EKSPORTS
 app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
   const { pin } = req.params;
   const playersMap = sessionScores.get(pin);
@@ -547,21 +554,24 @@ io.on('connection', (socket: Socket) => {
     socket.emit('tunnel-ready', { url: publicTunnelUrl });
   }
 
-  // 4. PUNKTS: host:start-tunnel pieejams tikai vadītājam
-  socket.on('host:start-tunnel', (data?: { pin?: string; hostToken?: string }) => {
-    if (data?.pin && data?.hostToken && !isHostAuthorized(data.pin, data.hostToken)) {
+  // host:start-tunnel pieejams TIKAI ar derīgu hostToken vai adminKey
+  socket.on('host:start-tunnel', (data?: { pin?: string; hostToken?: string; adminKey?: string }) => {
+    const isAdmin = data?.adminKey === ADMIN_API_KEY;
+    const isHost = !!(data?.pin && data?.hostToken && isHostAuthorized(data.pin, data.hostToken));
+
+    // Ja nav administrators UN nav derīgs vadītājs — bloķējam vienmēr!
+    if (!isAdmin && !isHost) {
       return socket.emit('error-message', 'Nav tiesību startēt tuneli.');
     }
+
     startCloudflareTunnel((url) => {
       socket.emit('tunnel-ready', { url });
     });
   });
 
-  // 3. PUNKTS: Aizsardzība pret sesijas nolaupīšanu
   socket.on('host:create-session', (data: any) => {
     const incomingPin = data.existingPin;
     
-    // Ja PIN jau eksistē, atļaujam pārrakstīt TIKAI tad, ja atsūtīts derīgs hostToken
     if (incomingPin && sessions.has(incomingPin)) {
       const existingToken = sessionHostTokens.get(incomingPin);
       if (existingToken && data.hostToken !== existingToken) {
@@ -934,7 +944,6 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // 9. PUNKTS: Reģistrējam spēlētāju un sasaistām viņa socket.id ar playerId
   socket.on('join-session', (data: { pin: string; name: string; playerId: string }) => {
     if (sessions.has(data.pin)) {
       socket.join(data.pin);
@@ -945,7 +954,6 @@ io.on('connection', (socket: Socket) => {
         if (!participants.has(data.pin)) participants.set(data.pin, new Set());
         participants.get(data.pin)?.add(socket.id);
 
-        // Sasaistām soketu ar spēlētāju
         socketPlayerMap.set(socket.id, { pin: data.pin, playerId: data.playerId });
 
         if (!playerObj) {
@@ -988,7 +996,6 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // 9. PUNKTS: Pārbaudām vai balsotājs patiešām ir šis spēlētājs
   socket.on('participant:submit-answer', (data: { pin: string; playerId: string; answers?: string[]; answer?: string }) => {
     const binding = socketPlayerMap.get(socket.id);
     if (!binding || binding.pin !== data.pin || binding.playerId !== data.playerId) {
