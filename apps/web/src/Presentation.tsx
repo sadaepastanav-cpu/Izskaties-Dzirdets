@@ -6,7 +6,6 @@ import { BACKEND_URL } from './config';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 
-// KRĀŠŅA NEONA KRĀSU PALETE BEZGALĪGAJAM CIKLAM
 const NEON_PALETTE = [
   { base: '#00f0ff', glow: '#00f0ff', dark: '#00838f', text: '#000' },
   { base: '#ff007f', glow: '#ff007f', dark: '#99004d', text: '#fff' },
@@ -45,7 +44,6 @@ const getLobbyColor = (count: number) => {
   return '#ff00ff';
 };
 
-// UNIVERSĀLAIS APDOMAS LAIKA FORMATĒTĀJS
 export const formatThinkingTime = (totalMs: number = 0): string => {
   if (!totalMs || totalMs <= 0) return '0 sek un 000 ms';
   
@@ -61,7 +59,6 @@ export const formatThinkingTime = (totalMs: number = 0): string => {
   return `${seconds} sek un ${msStr} ms`;
 };
 
-// REAKTĪVS MEDIJU ELEMENTS
 const MediaLayoutItem: React.FC<{
   el: any;
   subState: string;
@@ -326,6 +323,8 @@ export default function Presentation() {
   const [participantCount, setParticipantCount] = useState(0);
   const [players, setPlayers] = useState<any[]>([]);
   const [isRevealed, setIsRevealed] = useState(false);
+  const [revealedCorrectAnswers, setRevealedCorrectAnswers] = useState<string[]>([]);
+  const [revealedCorrectnessMap, setRevealedCorrectnessMap] = useState<Record<string, number>>({});
   const [isStatsVisible, setIsStatsVisible] = useState(false);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [leaderboardType, setLeaderboardType] = useState<'ROUND' | 'TOTAL' | 'FINAL'>('TOTAL');
@@ -347,7 +346,6 @@ export default function Presentation() {
   const [connectionUrl, setConnectionUrl] = useState<string>('');
   const [testedBuzzerCounts, setTestedBuzzerCounts] = useState<Record<string, number>>({});
 
-  // SISTĒMAS AUDIO EFEKTI
   const audioTimerRef = useRef<HTMLAudioElement | null>(null);
   const audioTimeUpRef = useRef<HTMLAudioElement | null>(null);
   const audioRevealRef = useRef<HTMLAudioElement | null>(null);
@@ -419,6 +417,8 @@ export default function Presentation() {
         if (!prevScene || prevScene.id !== newScene.id || newScene.subState === 'READY') {
           setVoteData({ summary: {}, votedCount: 0 });
           setIsRevealed(false);
+          setRevealedCorrectAnswers([]);
+          setRevealedCorrectnessMap({});
           setIsStatsVisible(false);
         }
         return newScene;
@@ -431,12 +431,10 @@ export default function Presentation() {
       setPodiumStage(0);
     };
 
-    // SESIJAS BEIGŠANAS APSTRĀDE
     const handleSessionEnded = () => {
       localStorage.removeItem('presentation_pin');
       setIsSessionClosed(true);
       setScene(null);
-      // Mēģinām aizvērt logu, ja tas bija popup
       window.close();
     };
 
@@ -458,7 +456,11 @@ export default function Presentation() {
       if (Array.isArray(data?.players)) setPlayers(data.players);
     });
 
-    socket.on('results-revealed', () => setIsRevealed(true));
+    socket.on('results-revealed', (data: { correctAnswers: string[]; correctnessMap: Record<string, number> }) => {
+      setIsRevealed(true);
+      if (data?.correctAnswers) setRevealedCorrectAnswers(data.correctAnswers);
+      if (data?.correctnessMap) setRevealedCorrectnessMap(data.correctnessMap);
+    });
 
     socket.on('toggle-audience-chart', () => {
       setIsStatsVisible((prev) => !prev);
@@ -812,7 +814,6 @@ export default function Presentation() {
   const optLayout = scene?.config?.optionsLayout || 'GRID';
   const optPositions = scene?.config?.optionsPositions || {};
 
-  // STINGRA KĀRTOŠANA PĒC PUNKTIEM
   const sortedLeaderboard = [...leaderboard]
     .filter((p) => !p.isDisabled)
     .sort((a, b) => {
@@ -838,6 +839,9 @@ export default function Presentation() {
     isQuestionType &&
     optionsList.length > 0 &&
     (optionsRevealTiming === 'ALWAYS' ? true : ['ACTIVE', 'STATS', 'REVEAL'].includes(currentSub));
+
+  const effectiveCorrectAnswers = isRevealed ? (revealedCorrectAnswers.length > 0 ? revealedCorrectAnswers : (scene?.config?.correctAnswers || [])) : [];
+  const effectiveCorrectnessMap = isRevealed ? (Object.keys(revealedCorrectnessMap).length > 0 ? revealedCorrectnessMap : (scene?.config?.answerCorrectness || {})) : {};
 
   return (
     <div style={containerStyle}>
@@ -887,10 +891,10 @@ export default function Presentation() {
                 w: 40,
                 h: 10
               };
-              const isCorrect = isRevealed && (scene.config?.correctAnswers || []).includes(opt);
+              const isCorrect = isRevealed && effectiveCorrectAnswers.includes(opt);
               const letter = String.fromCharCode(65 + i);
               const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
-              const pct = scene.config?.answerCorrectness?.[opt];
+              const pct = effectiveCorrectnessMap[opt];
               const isOnlyLetter = !opt || opt.trim() === '';
 
               return (
@@ -955,10 +959,10 @@ export default function Presentation() {
               }}
             >
               {optionsList.map((opt: string, i: number) => {
-                const isCorrect = isRevealed && (scene.config?.correctAnswers || []).includes(opt);
+                const isCorrect = isRevealed && effectiveCorrectAnswers.includes(opt);
                 const letter = String.fromCharCode(65 + i);
                 const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
-                const pct = scene.config?.answerCorrectness?.[opt];
+                const pct = effectiveCorrectnessMap[opt];
                 const isOnlyLetter = !opt || opt.trim() === '';
 
                 return (

@@ -1,0 +1,548 @@
+{
+  "timestamp": "2026-09-17T05:53:55.102Z",
+  "pin": "6987",
+  "hostToken": "7cb7532e7264c4b05e3dc5bd99780418",
+  "state": {
+    "currentSceneIdx": -1,
+    "scenes": [
+      {
+        "id": "slide-1",
+        "title": "1. Jautājums",
+        "type": "QUESTION",
+        "config": {
+          "duration": 30,
+          "points": 100,
+          "pointsMin": 50,
+          "pointsMax": 100,
+          "scoringMode": "DECREASING",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "Paskaidrojums vadītājam: Rīga dibināta 1201. gadā.",
+          "optionsCount": 4,
+          "options": [
+            "Rīga",
+            "Liepāja",
+            "Daugavpils",
+            "Jelgava"
+          ],
+          "correctAnswers": [
+            "Rīga",
+            "Liepāja"
+          ],
+          "answerCorrectness": {
+            "Rīga": 100,
+            "Liepāja": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "layout": [
+            {
+              "id": "q-box",
+              "type": "QUESTION",
+              "content": "Kura ir Latvijas galvaspilsēta?",
+              "x": 15,
+              "y": 10,
+              "w": 70,
+              "h": 15,
+              "fontSize": 2.2,
+              "fontFamily": "Segoe UI",
+              "color": "#ffffff",
+              "bgColor": "#000000",
+              "bgOpacity": 80,
+              "visibility": "ALWAYS"
+            },
+            {
+              "id": "media-1789382825225",
+              "type": "VIDEO",
+              "content": "video.mp4",
+              "x": 36,
+              "y": 26,
+              "w": 30,
+              "h": 20,
+              "volume": 100,
+              "trimStart": 20,
+              "trimEnd": 50,
+              "isTrimEndCustom": false,
+              "visibility": "DURING_QUESTION"
+            },
+            {
+              "id": "media-1789382844940",
+              "type": "IMAGE",
+              "content": "bilde.jpg",
+              "x": 36,
+              "y": 24,
+              "w": 30,
+              "h": 20,
+              "volume": 100,
+              "trimStart": 0,
+              "trimEnd": 30,
+              "isTrimEndCustom": false,
+              "visibility": "AFTER_REVEAL"
+            }
+          ],
+          "backgroundUrl": "0bb.png"
+        }
+      },
+      {
+        "id": "slide-1789382870192",
+        "title": "1. Jautājums (Kopija)",
+        "type": "QUESTION",
+        "config": {
+          "duration": 30,
+          "points": 100,
+          "pointsMin": 50,
+          "pointsMax": 100,
+          "scoringMode": "DECREASING",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "Paskaidrojums vadītājam: Rīga dibināta 1201. gadā.",
+          "optionsCount": 4,
+          "options": [
+            "Rīga",
+            "Liepāja",
+            "Daugavpils",
+            "Jelgava"
+          ],
+          "correctAnswers": [
+            "Rīga",
+            "Liepāja"
+          ],
+          "answerCorrectness": {
+            "Rīga": 100,
+            "Liepāja": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "layout": [
+            {
+              "id": "q-box",
+              "type": "QUESTION",
+              "content": "Kura ir Latvijas galvaspilsēta?",
+              "x": 15,
+              "y": 10,
+              "w": 70,
+              "h": 15,
+              "fontSize": 2.2,
+              "fontFamily": "Segoe UI",
+              "color": "#ffffff",
+              "bgColor": "#000000",
+              "bgOpacity": 80,
+              "visibility": "ALWAYS"
+            },
+            {
+              "id": "media-1789382825225",
+              "type": "VIDEO",
+              "content": "video.mp4",
+              "x": 36,
+              "y": 26,
+              "w": 30,
+              "h": 20,
+              "volume": 100,
+              "trimStart": 20,
+              "trimEnd": 50,
+              "isTrimEndCustom": false,
+              "visibility": "AFTER_REVEAL"
+            },
+            {
+              "id": "media-1789382844940",
+              "type": "IMAGE",
+              "content": "bilde.jpg",
+              "x": 6,
+              "y": 24,
+              "w": 30,
+              "h": 20,
+              "volume": 100,
+              "trimStart": 0,
+              "trimEnd": 30,
+              "isTrimEndCustom": false,
+              "visibility": "DURING_QUESTION"
+            }
+          ],
+          "backgroundUrl": "0bb.png"
+        }
+      },
+      {
+        "id": "slide-1789382997953",
+        "title": "5. Slaids (Kopija)",
+        "type": "LEADERBOARD",
+        "config": {
+          "duration": 30,
+          "points": 10,
+          "pointsMin": 1,
+          "pointsMax": 10,
+          "scoringMode": "FIXED",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "",
+          "optionsCount": 4,
+          "options": [
+            "Variants A",
+            "Variants B",
+            "Variants C",
+            "Variants D"
+          ],
+          "correctAnswers": [
+            "Variants A"
+          ],
+          "answerCorrectness": {
+            "Variants A": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "backgroundUrl": "0bb.png",
+          "layout": [],
+          "lbType": "TOTAL"
+        }
+      },
+      {
+        "id": "slide-1789382889870",
+        "title": "1. Jautājums (Kopija) (Kopija)",
+        "type": "QUESTION",
+        "config": {
+          "duration": 30,
+          "points": 100,
+          "pointsMin": 50,
+          "pointsMax": 100,
+          "scoringMode": "DECREASING",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "Paskaidrojums vadītājam: Rīga dibināta 1201. gadā.",
+          "optionsCount": 4,
+          "options": [
+            "Rīga",
+            "Liepāja",
+            "Daugavpils",
+            "Jelgava"
+          ],
+          "correctAnswers": [
+            "Rīga",
+            "Liepāja"
+          ],
+          "answerCorrectness": {
+            "Rīga": 100,
+            "Liepāja": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "layout": [
+            {
+              "id": "q-box",
+              "type": "QUESTION",
+              "content": "Kura ir Latvijas galvaspilsēta?",
+              "x": 15,
+              "y": 10,
+              "w": 70,
+              "h": 15,
+              "fontSize": 2.2,
+              "fontFamily": "Segoe UI",
+              "color": "#ffffff",
+              "bgColor": "#000000",
+              "bgOpacity": 80,
+              "visibility": "ALWAYS"
+            },
+            {
+              "id": "media-1789382844940",
+              "type": "IMAGE",
+              "content": "bilde.jpg",
+              "x": 6,
+              "y": 24,
+              "w": 30,
+              "h": 20,
+              "volume": 100,
+              "trimStart": 0,
+              "trimEnd": 30,
+              "isTrimEndCustom": false,
+              "visibility": "DURING_QUESTION"
+            },
+            {
+              "id": "media-1789382901860",
+              "type": "AUDIO",
+              "content": "audio.mp3",
+              "x": 30,
+              "y": 30,
+              "w": 40,
+              "h": 12,
+              "volume": 100,
+              "trimStart": 12.5,
+              "trimEnd": 42.5,
+              "isTrimEndCustom": false,
+              "visibility": "DURING_QUESTION"
+            },
+            {
+              "id": "media-1789382917323",
+              "type": "VIDEO",
+              "content": "video.mp4",
+              "x": 36,
+              "y": 24,
+              "w": 34,
+              "h": 28,
+              "volume": 100,
+              "trimStart": 20,
+              "trimEnd": 50,
+              "isTrimEndCustom": false,
+              "visibility": "AFTER_REVEAL"
+            }
+          ],
+          "backgroundUrl": "0bb.png"
+        }
+      },
+      {
+        "id": "slide-1789383003683",
+        "title": "5. Slaids (Kopija) (Kopija)",
+        "type": "LEADERBOARD",
+        "config": {
+          "duration": 30,
+          "points": 10,
+          "pointsMin": 1,
+          "pointsMax": 10,
+          "scoringMode": "FIXED",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "",
+          "optionsCount": 4,
+          "options": [
+            "Variants A",
+            "Variants B",
+            "Variants C",
+            "Variants D"
+          ],
+          "correctAnswers": [
+            "Variants A"
+          ],
+          "answerCorrectness": {
+            "Variants A": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "backgroundUrl": "0bb.png",
+          "layout": [],
+          "lbType": "ROUND"
+        }
+      },
+      {
+        "id": "slide-1789383030149",
+        "title": "5. Slaids (Kopija) (Kopija) (Kopija)",
+        "type": "LEADERBOARD",
+        "config": {
+          "duration": 30,
+          "points": 10,
+          "pointsMin": 1,
+          "pointsMax": 10,
+          "scoringMode": "FIXED",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "",
+          "optionsCount": 4,
+          "options": [
+            "Variants A",
+            "Variants B",
+            "Variants C",
+            "Variants D"
+          ],
+          "correctAnswers": [
+            "Variants A"
+          ],
+          "answerCorrectness": {
+            "Variants A": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "backgroundUrl": "0bb.png",
+          "layout": [],
+          "lbType": "TOTAL"
+        }
+      },
+      {
+        "id": "slide-1789382935207",
+        "title": "1. Jautājums (Kopija) (Kopija) (Kopija)",
+        "type": "QUESTION",
+        "config": {
+          "duration": 30,
+          "points": 100,
+          "pointsMin": 50,
+          "pointsMax": 100,
+          "scoringMode": "DECREASING",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "Paskaidrojums vadītājam: Rīga dibināta 1201. gadā.",
+          "optionsCount": 4,
+          "options": [
+            "Rīga",
+            "Liepāja",
+            "Daugavpils",
+            "Jelgava"
+          ],
+          "correctAnswers": [
+            "Rīga",
+            "Liepāja"
+          ],
+          "answerCorrectness": {
+            "Rīga": 100,
+            "Liepāja": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "layout": [
+            {
+              "id": "q-box",
+              "type": "QUESTION",
+              "content": "Kura ir Latvijas galvaspilsēta?",
+              "x": 15,
+              "y": 10,
+              "w": 70,
+              "h": 15,
+              "fontSize": 2.2,
+              "fontFamily": "Segoe UI",
+              "color": "#ffffff",
+              "bgColor": "#000000",
+              "bgOpacity": 80,
+              "visibility": "ALWAYS"
+            },
+            {
+              "id": "media-1789382844940",
+              "type": "IMAGE",
+              "content": "bilde.jpg",
+              "x": 6,
+              "y": 24,
+              "w": 30,
+              "h": 20,
+              "volume": 100,
+              "trimStart": 0,
+              "trimEnd": 30,
+              "isTrimEndCustom": false,
+              "visibility": "DURING_QUESTION"
+            },
+            {
+              "id": "media-1789382901860",
+              "type": "AUDIO",
+              "content": "audio.mp3",
+              "x": 30,
+              "y": 30,
+              "w": 40,
+              "h": 12,
+              "volume": 100,
+              "trimStart": 12.5,
+              "trimEnd": 42.5,
+              "isTrimEndCustom": false,
+              "visibility": "DURING_QUESTION"
+            },
+            {
+              "id": "media-1789382917323",
+              "type": "VIDEO",
+              "content": "video.mp4",
+              "x": 36,
+              "y": 24,
+              "w": 34,
+              "h": 28,
+              "volume": 100,
+              "trimStart": 20,
+              "trimEnd": 50,
+              "isTrimEndCustom": false,
+              "visibility": "AFTER_REVEAL"
+            },
+            {
+              "id": "media-1789382951252",
+              "type": "IMAGE",
+              "content": "01rounds.png",
+              "x": 4,
+              "y": 24,
+              "w": 34,
+              "h": 30,
+              "volume": 100,
+              "trimStart": 0,
+              "trimEnd": 30,
+              "isTrimEndCustom": false,
+              "visibility": "AFTER_REVEAL"
+            }
+          ],
+          "backgroundUrl": "0bb.png"
+        }
+      },
+      {
+        "id": "slide-1789382968916",
+        "title": "5. Slaids",
+        "type": "LEADERBOARD",
+        "config": {
+          "duration": 30,
+          "points": 10,
+          "pointsMin": 1,
+          "pointsMax": 10,
+          "scoringMode": "FIXED",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "",
+          "optionsCount": 4,
+          "options": [
+            "Variants A",
+            "Variants B",
+            "Variants C",
+            "Variants D"
+          ],
+          "correctAnswers": [
+            "Variants A"
+          ],
+          "answerCorrectness": {
+            "Variants A": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "backgroundUrl": "0bb.png",
+          "layout": [],
+          "lbType": "FINAL"
+        }
+      },
+      {
+        "id": "slide-1789382995982",
+        "title": "5. Slaids (Kopija)",
+        "type": "LEADERBOARD",
+        "config": {
+          "duration": 30,
+          "points": 10,
+          "pointsMin": 1,
+          "pointsMax": 10,
+          "scoringMode": "FIXED",
+          "speedBonusEnabled": false,
+          "selectionMode": "ALL",
+          "notes": "",
+          "optionsCount": 4,
+          "options": [
+            "Variants A",
+            "Variants B",
+            "Variants C",
+            "Variants D"
+          ],
+          "correctAnswers": [
+            "Variants A"
+          ],
+          "answerCorrectness": {
+            "Variants A": 100
+          },
+          "optionsLayout": "GRID",
+          "optionsPositions": {},
+          "backgroundUrl": "0bb.png",
+          "layout": [],
+          "lbType": "FINAL"
+        }
+      }
+    ],
+    "branding": {
+      "appTitle": "xxxxxxxx",
+      "appLogo": "0bb.png",
+      "appBgImage": "76back.jpg",
+      "welcomeImage": "0bb.png",
+      "appBgColor": "#121212",
+      "lobbyMode": "INTERACTIVE_DOTS",
+      "optionsRevealTiming": "ON_ACTIVE"
+    },
+    "connectionUrl": "https://indices-came-ericsson-configurations.trycloudflare.com",
+    "subState": "IDLE",
+    "votes": [],
+    "currentScene": null,
+    "isRevealed": false,
+    "revealReadyToAdvance": false,
+    "currentPaging": 0,
+    "finalPodiumStage": 0,
+    "questionStartTime": 0
+  },
+  "scores": []
+}

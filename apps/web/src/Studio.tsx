@@ -28,7 +28,7 @@ interface MobileBranding {
   appBgColor?: string;
   lobbyMode?: 'CIRCLE' | 'INTERACTIVE_DOTS';
   optionsRevealTiming?: 'ON_ACTIVE' | 'ALWAYS';
-  timerMode?: 'ALL_VOTED' | 'FULL_TIME'; // <-- JAUNUMS: Taimera globālais režīms
+  timerMode?: 'ALL_VOTED' | 'FULL_TIME';
 }
 
 interface CanvasElement {
@@ -93,7 +93,8 @@ export default function Studio() {
     welcomeImage: '',
     appBgColor: '#121212',
     lobbyMode: 'CIRCLE',
-    optionsRevealTiming: 'ON_ACTIVE'
+    optionsRevealTiming: 'ON_ACTIVE',
+    timerMode: 'ALL_VOTED'
   });
 
   const [slides, setSlides] = useState<Slide[]>([
@@ -226,7 +227,7 @@ export default function Studio() {
     try {
       const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
-        headers: getAdminHeaders(), // <-- ŠAJĀ RINDIŅĀ nosūtām x-admin-key
+        headers: getAdminHeaders(),
         body: JSON.stringify({ path: folderToSet || activeFolder })
       });
       const data = await res.json();
@@ -440,7 +441,7 @@ export default function Studio() {
 
           if (isSnapToGrid) {
             newX = Math.round(newX / 2) * 2;
-            newW = Math.round(newW / 2) * 2;
+            newY = Math.round(newY / 2) * 2;
             newH = Math.round(newH / 2) * 2;
           }
           if (newW >= 8 && newX >= 0) {
@@ -511,7 +512,7 @@ export default function Studio() {
       try {
         const res = await fetch(`${BACKEND_URL}/api/upload-media`, {
           method: 'POST',
-          headers: { 'x-admin-key': ADMIN_API_KEY },
+          headers: getAdminHeaders(),
           body: formData
         });
         const data = await res.json();
@@ -603,7 +604,7 @@ export default function Studio() {
     if (!name) return;
     try {
       const res = await fetch(`${BACKEND_URL}/api/load-project/${name}`, {
-        headers: { 'x-admin-key': ADMIN_API_KEY }
+        headers: getAdminHeaders()
       });
       const data = await res.json();
       if (data.scenes && Array.isArray(data.scenes)) {
@@ -1177,7 +1178,7 @@ export default function Studio() {
 
         {/* LABĀ PUSE: Iestatījumu panelis */}
         <div style={sidebarRight}>
-          {/* MOBILĀS LIETOTNES DIZAINS UN SĀKUMA EKRĀNA IZVĒLE */}
+          {/* MOBILĀS LIETOTNES DIZAINS */}
           <div style={{ background: '#1c2833', border: '1px solid #007bff', borderRadius: '8px', padding: '10px', marginBottom: '15px' }}>
             <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#00ff00', marginBottom: '8px' }}>
               📱 MOBILĀS LIETOTNES DIZAINS
@@ -1201,7 +1202,6 @@ export default function Studio() {
               <option value="INTERACTIVE_DOTS">Interaktīvais (Bumbiņas ar Pults testu)</option>
             </select>
 
-            {/* GLOBĀLS IESTATĪJUMS: VARIANTU PARĀDĪŠANĀS LAIKS PREZENTĀCIJĀ */}
             <label style={labelStyle}>Atbilžu variantu parādīšanās ekrānā:</label>
             <select
               style={{ ...selectStyle, borderColor: '#00e5ff' }}
@@ -1212,7 +1212,6 @@ export default function Studio() {
               <option value="ALWAYS">👁️ Uzreiz, kad parādās jautājums (READY)</option>
             </select>
 
-            {/* GLOBĀLS IESTATĪJUMS: TAIMERA DARBĪBAS REŽĪMS */}
             <label style={labelStyle}>⏱️ Taimera režīms visiem jautājumiem:</label>
             <select
               style={{ ...selectStyle, borderColor: '#00e5ff' }}
@@ -1522,7 +1521,6 @@ export default function Studio() {
                 ))}
               </div>
 
-              {/* JAUNUMS: Vairāku pareizo atbilžu režīma izvēle */}
               {activeSlide.config.correctAnswers.length > 1 && (
                 <div style={{ marginTop: '8px', background: '#1c2833', border: '1px solid #007bff', borderRadius: '6px', padding: '8px' }}>
                   <label style={{ ...labelStyle, color: '#00e5ff', fontWeight: 'bold', marginTop: 0 }}>

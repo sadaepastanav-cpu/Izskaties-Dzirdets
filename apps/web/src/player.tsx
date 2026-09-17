@@ -164,8 +164,7 @@ export default function Player() {
     });
 
     s.on('game-over', () => setIsGameOver(true));
-    
-    // KAD SESIJA TIEK BEIGTA NO VADĪTĀJA PUSES
+
     s.on('session-ended', () => {
       sessionStorage.removeItem('player_active_session');
       localStorage.removeItem('player_pin');
@@ -205,12 +204,13 @@ export default function Player() {
     }
   };
 
-  const correctAnswersList: string[] = scene?.config?.correctAnswers || [];
-  const maxRequiredChoices = correctAnswersList.length > 0 ? correctAnswersList.length : 2;
+  // DAUDZIZVĒLES LOĢIKA:
+  // Serveris nenosūta atbildes, bet nosūta drošu requiredCount
+  const requiredCount = scene?.config?.requiredCount ?? (scene?.config?.correctAnswers?.length || 1);
+  const isMultiSelectMode = scene?.config?.selectionMode === 'ALL' && requiredCount > 1;
+  const maxRequiredChoices = requiredCount > 0 ? requiredCount : 1;
 
-  const isMultiSelectMode =
-    scene?.config?.selectionMode === 'ALL' && correctAnswersList.length > 1;
-
+  // 1. Vienas atbildes jautājums: viens klikšķis, uzreiz bloķējas, atbildi mainīt NEVAR
   const handleSingleVoteSubmit = (option: string, letter: string) => {
     if (myChoice || !socket) return;
     try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
@@ -220,6 +220,7 @@ export default function Player() {
     socket.emit('participant:submit-answer', { pin, answer: option || letter, answers, playerId });
   };
 
+  // 2. Daudzizvēles jautājums: drīkst atzīmēt un pārdomāt līdz brīdim, kad nospiež "IESNIEGT"
   const toggleMultiSelectOption = (item: string) => {
     if (myChoice) return;
 
@@ -645,7 +646,7 @@ export default function Player() {
                   })}
                 </div>
 
-                {/* IESNIEGŠANAS POGA */}
+                {/* IESNIEGŠANAS POGA DAUDZIZVĒLEI */}
                 {isMultiSelectMode && !myChoice && (
                   <button
                     onClick={handleMultiVoteSubmit}

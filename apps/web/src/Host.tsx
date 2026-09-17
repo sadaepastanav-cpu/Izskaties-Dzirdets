@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { socket } from './socket';
-import { BACKEND_URL, ADMIN_API_KEY, getAdminHeaders } from './config';
+import { BACKEND_URL, getAdminHeaders } from './config';
 
 const formatThinkingTime = (ms?: number): string => {
   if (ms === undefined || ms === null) return '0.00s';
@@ -12,7 +12,7 @@ export default function Host() {
   const [hostToken, setHostToken] = useState<string | null>(localStorage.getItem('active_host_token'));
   const [scenes, setScenes] = useState<any[]>([]);
   const [currentScene, setCurrentScene] = useState<any>(null);
-  const [folder, setFolder] = useState(
+  const [folder, setFolder] = useState<string>(
     localStorage.getItem('event_studio_folder') || ''
   );
   const [localProjects, setLocalProjects] = useState<string[]>([]);
@@ -24,8 +24,6 @@ export default function Host() {
   const [playersList, setPlayersList] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER'>('SCENES');
   const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('ORDER');
-
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // TĪKLA UN TUNEĻA IESTATĪJUMI
   const [connectionMode, setConnectionMode] = useState<'LAN' | 'TUNNEL'>(
@@ -92,21 +90,27 @@ export default function Host() {
     try {
       setIsLoading(true);
       const targetFolder = folderPath !== undefined ? folderPath : folder;
+      
       const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
-        headers: getAdminHeaders(),
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAdminHeaders()
+        },
         body: JSON.stringify({ path: targetFolder })
       });
+      
       const data = await res.json();
       if (data.success) {
-        if (Array.isArray(data.projects)) setLocalProjects(data.projects);
+        setLocalProjects(Array.isArray(data.projects) ? data.projects : []);
         setFolder(data.currentPath);
         localStorage.setItem('event_studio_folder', data.currentPath);
       } else {
         setLocalProjects([]);
+        alert(`❌ Kļūda: ${data.error || 'Neizdevās nolasīt mapi'}`);
       }
     } catch {
-      console.error('Kļūda skenējot mapi');
+      alert('❌ Neizdevās sazināties ar serveri! Pārbaudiet vai backend darbojas.');
     } finally {
       setIsLoading(false);
     }
@@ -138,7 +142,10 @@ export default function Host() {
           if (shouldRecover) {
             fetch(`${BACKEND_URL}/api/recover-session`, {
               method: 'POST',
-              headers: getAdminHeaders()
+              headers: {
+                'Content-Type': 'application/json',
+                ...getAdminHeaders()
+              }
             })
               .then((r) => r.json())
               .then((rec) => {
@@ -160,10 +167,10 @@ export default function Host() {
   const startProject = async (fileName: string) => {
     try {
       setIsLoading(true);
-      const res = await fetch(`${BACKEND_URL}/api/load-project/${fileName}`, {
-        headers: { 'x-admin-key': ADMIN_API_KEY }
+      const res = await fetch(`${BACKEND_URL}/api/load-project/${encodeURIComponent(fileName)}`, {
+        headers: getAdminHeaders()
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error('Neizdevās ielādēt failu');
 
       const projectData = await res.json();
       localStorage.setItem('event_conn_mode', connectionMode);
@@ -174,38 +181,10 @@ export default function Host() {
         connectionUrl: activeBaseUrl
       });
     } catch {
-      alert('❌ Neizdevās palaist projektu!');
+      alert(`❌ Neizdevās palaist projektu "${fileName}"!`);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleDirectFileOpen = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const projectData = JSON.parse(event.target?.result as string);
-        if (projectData && (projectData.scenes || Array.isArray(projectData))) {
-          const formattedData = Array.isArray(projectData) ? { scenes: projectData } : projectData;
-
-          localStorage.setItem('event_conn_mode', connectionMode);
-          localStorage.setItem('event_tunnel_url', customTunnelUrl);
-
-          socket.emit('host:create-session', {
-            projectData: formattedData,
-            connectionUrl: activeBaseUrl
-          });
-        } else {
-          alert('❌ Fails nesatur derīgus projekta slaidus!');
-        }
-      } catch {
-        alert('❌ Neizdevās nolasīt .json failu!');
-      }
-    };
-    reader.readAsText(file);
   };
 
   const handleEndSession = () => {
@@ -221,6 +200,31 @@ export default function Host() {
     setPlayersList([]);
     localStorage.removeItem('active_pin');
     localStorage.removeItem('active_host_token');
+  };
+
+  const handleExportCsv = async () => {
+    if (!pin) return;
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/export-csv/${pin}`, {
+        headers: getAdminHeaders()
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        return alert(`❌ Kļūda: ${err.error || 'Neizdevās eksportēt'}`);
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `rezultati_sesija_${pin}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch {
+      alert('❌ Neizdevās lejupielādēt CSV failu!');
+    }
   };
 
   const changeLeaderboardPage = (newPage: number) => {
@@ -302,21 +306,15 @@ export default function Host() {
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
 
-  // SKATS 1: PROJEKTA IZVĒLE
+  // SKATS 1: PROJEKTA IZVĒLE (TIKAI VIENA TĪRA SKENĒŠANAS JOSLA)
   if (!pin) {
     return (
       <div style={panelContainer}>
-        <input
-          type="file"
-          ref={fileInputRef}
-          accept=".json"
-          style={{ display: 'none' }}
-          onChange={handleDirectFileOpen}
-        />
-
-        <h1 style={{ color: '#007bff', marginBottom: '20px' }}>EVENT STUDIO — VADĪTĀJA PANELIS</h1>
+        <h1 style={{ color: '#007bff', textAlign: 'center', marginBottom: '25px', fontSize: '2rem' }}>
+          EVENT STUDIO — VADĪTĀJA PANELIS
+        </h1>
         
-        {/* TĪKLA UN TUNEĻA KONFIGURĀCIJA */}
+        {/* TĪKLA KONFIGURĀCIJA */}
         <div style={{ ...cardBox, border: '1px solid #007bff', marginBottom: '20px', background: '#182430' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <h3 style={{ margin: 0, color: '#00e5ff' }}>📡 KĀ SPĒLĒTĀJI PIESLĒGSIES?</h3>
@@ -366,7 +364,7 @@ export default function Host() {
             <div style={{ ...noticeBox, background: '#1a1025', borderColor: customTunnelUrl ? '#00ff00' : '#d63384' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                 <span style={{ fontSize: '0.85rem', color: customTunnelUrl ? '#00ff00' : '#ff79c6', fontWeight: 'bold' }}>
-                  {customTunnelUrl ? '✓ Cloudflare tunelis aktīvs:' : '⏳ Tunelis nav palaists (nospiediet augšā pogu):'}
+                  {customTunnelUrl ? '✓ Cloudflare tunelis aktīvs:' : '⏳ Tunelis nav palaists:'}
                 </span>
                 {isTunnelAutoDetected && (
                   <span style={{ fontSize: '0.75rem', background: '#28a745', color: '#fff', padding: '2px 6px', borderRadius: '4px' }}>
@@ -390,54 +388,51 @@ export default function Host() {
           )}
         </div>
 
-        {/* PROJEKTU MAPE */}
+        {/* PROJEKTU MAPE — TĪRS, VIENS SKENĒŠANAS BLOKS */}
         <div style={cardBox}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <h3 style={{ margin: 0 }}>📂 AKTUĀLĀ PROJEKTU MAPE</h3>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              style={{ ...btnScan, background: '#28a745' }}
-              title="Atvērt jebkuru .json failu no sava datora"
-            >
-              📄 Pārlūkot failu (.json)
-            </button>
-          </div>
+          <h3 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>📂 AKTUĀLĀ PROJEKTU MAPE</h3>
 
           <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
             <input
               value={folder}
               onChange={(e) => setFolder(e.target.value)}
-              placeholder="C:/ManiSovi vai relatīvais ceļš..."
+              placeholder="C:\ManiProjekti vai mapes ceļš..."
               style={folderInputHost}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') loadProjects(folder);
+              }}
             />
             <button onClick={() => loadProjects(folder)} disabled={isLoading} style={btnScan}>
-              {isLoading ? '...' : '🔍 SKENĒT'}
+              {isLoading ? '⏳...' : '🔍 SKENĒT'}
             </button>
           </div>
 
-          <div style={{ marginTop: '20px', textAlign: 'left' }}>
-            <h4 style={{ color: '#aaa', borderBottom: '1px solid #444', paddingBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
-              <span>Pieejamie projekti mapē ({localProjects.length}):</span>
-              <span style={{ fontSize: '0.8rem', color: '#666' }}>{folder}</span>
+          <div style={{ marginTop: '15px', textAlign: 'left' }}>
+            <h4 style={{ color: '#aaa', borderBottom: '1px solid #444', paddingBottom: '8px', margin: '0 0 10px 0', display: 'flex', justifyContent: 'space-between' }}>
+              <span>Pieejamie projekti ({localProjects.length}):</span>
             </h4>
+
             {localProjects.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '15px 0' }}>
-                <p style={{ color: '#888', fontStyle: 'italic', margin: '0 0 12px 0' }}>
-                  Šajā mapē nav neviena .json projekta faila vai mape vēl nav noskenēta.
+              <div style={{ textAlign: 'center', padding: '20px 0', color: '#888' }}>
+                <p style={{ fontStyle: 'italic', margin: 0 }}>
+                  Šajā mapē nav atrasts neviens <code>.json</code> failiņš.
                 </p>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{ ...btnScan, background: '#007bff' }}
-                >
-                  📂 Atvērt projektu tieši no datora failiem
-                </button>
+                <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '6px' }}>
+                  Ielīmējiet pilno mapes ceļu un nospiediet "🔍 SKENĒT".
+                </div>
               </div>
             ) : (
-              localProjects.map((p) => (
-                <button key={p} onClick={() => startProject(p)} disabled={isLoading} style={projectBtn}>
-                  🚀 Sākt šovu: {p}
-                </button>
-              ))
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {localProjects.map((p) => (
+                  <button key={p} onClick={() => startProject(p)} disabled={isLoading} style={projectBtn}>
+                    <span style={{ fontSize: '1.2rem' }}>🚀</span>
+                    <div style={{ textAlign: 'left' }}>
+                      <div style={{ fontWeight: 'bold', color: '#00ff00' }}>SĀKT ŠOVU: {p}</div>
+                      <div style={{ fontSize: '0.75rem', color: '#aaa' }}>Klikšķini, lai atvērtu spēli ar šo projektu</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -480,11 +475,14 @@ export default function Host() {
           <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas skaitļus ekrānā">
             📊 Statistika [C]
           </button>
+          <button onClick={handleExportCsv} style={{ ...btnGray, background: '#198754' }} title="Lejupielādēt rezultātu CSV failu">
+            📥 Eksportēt CSV
+          </button>
           <button onClick={() => socket.emit('host:simulate-players', { pin, hostToken, count: 20 })} style={btnGray}>
             🤖 +20 Boti
           </button>
           <button onClick={() => window.open(`/present/${pin}`, '_blank')} style={btnBlue}>
-            🖥️ Projektora ekrāns
+            🖥️ Ekrāns
           </button>
           <button onClick={handleEndSession} style={btnRed}>
             ❌ Beigt sesiju
@@ -513,7 +511,7 @@ export default function Host() {
       {currentScene?.config?.notes && currentScene.config.notes.trim() !== '' && (
         <div style={hostNotesCard}>
           <div style={{ fontWeight: 'bold', color: '#ffc107', marginBottom: '5px', fontSize: '0.95rem' }}>
-            📝 VADĪTĀJA PIEZĪMES ŠIM SLAIDAM (Nav redzams skatītājiem):
+            📝 VADĪTĀJA PIEZĪMES ŠIM SLAIDAM:
           </div>
           <div style={{ fontSize: '1.05rem', color: '#fff', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
             {currentScene.config.notes}
@@ -747,7 +745,7 @@ const panelContainer: React.CSSProperties = {
 };
 
 const cardBox: React.CSSProperties = {
-  maxWidth: '550px',
+  maxWidth: '580px',
   margin: '0 auto',
   background: '#1e1e1e',
   padding: '25px',
@@ -777,7 +775,7 @@ const noticeBox: React.CSSProperties = {
 
 const folderInputHost: React.CSSProperties = {
   flex: 1,
-  padding: '10px',
+  padding: '12px',
   background: '#000',
   color: '#0f0',
   border: '1px solid #555',
@@ -786,13 +784,14 @@ const folderInputHost: React.CSSProperties = {
 };
 
 const btnScan: React.CSSProperties = {
-  padding: '10px 18px',
+  padding: '12px 22px',
   background: '#007bff',
   color: '#fff',
   border: 'none',
   borderRadius: '6px',
   cursor: 'pointer',
-  fontWeight: 'bold'
+  fontWeight: 'bold',
+  fontSize: '1rem'
 };
 
 const topBar: React.CSSProperties = {
@@ -835,18 +834,18 @@ const leaderControlBox: React.CSSProperties = {
 };
 
 const projectBtn: React.CSSProperties = {
-  display: 'block',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '12px',
   width: '100%',
-  padding: '14px',
-  margin: '10px 0',
-  background: '#2d2d2d',
+  padding: '14px 18px',
+  background: '#1c2e20',
   color: '#fff',
-  border: '1px solid #444',
+  border: '1px solid #28a745',
   borderRadius: '8px',
-  textAlign: 'left',
   cursor: 'pointer',
-  fontWeight: 'bold',
-  fontSize: '1rem'
+  transition: 'transform 0.1s ease',
+  boxSizing: 'border-box'
 };
 
 const slideRow: React.CSSProperties = {

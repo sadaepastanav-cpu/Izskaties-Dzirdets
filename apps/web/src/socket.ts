@@ -1,11 +1,11 @@
 import { io } from 'socket.io-client';
 import { BACKEND_URL } from './config';
 
-// Dinamiski nosakām pareizo backend adresi, ja spēlētājs pieslēdzies caur tuneli
+// Dinamiski nosakām pareizo backend adresi (lokālais LAN, localhost vai Cloudflare tunelis)
 const getSocketUrl = (): string => {
   if (typeof window !== 'undefined') {
     const origin = window.location.origin;
-    if (origin.includes('trycloudflare.com')) {
+    if (origin.includes('trycloudflare.com') || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
       return origin;
     }
   }
@@ -14,6 +14,7 @@ const getSocketUrl = (): string => {
 
 export const socket = io(getSocketUrl(), {
   autoConnect: true,
+  transports: ['websocket', 'polling'],
   reconnection: true,
   reconnectionAttempts: Infinity,
   reconnectionDelay: 1000,
