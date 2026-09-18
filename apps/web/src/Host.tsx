@@ -22,7 +22,8 @@ export default function Host() {
   const [podiumStage, setPodiumStage] = useState<number>(0);
 
   const [playersList, setPlayersList] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER'>('SCENES');
+  const [teamLeaderboard, setTeamLeaderboard] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER' | 'TEAMS'>('SCENES');
   const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('ORDER');
 
   // TĪKLA UN TUNEĻA IESTATĪJUMI
@@ -60,7 +61,6 @@ export default function Host() {
 
     const handleTunnelReady = (data: { url: string }) => {
       if (data?.url) {
-        console.log('🚀 [Cloudflare] Tunelis gatavs:', data.url);
         setCustomTunnelUrl(data.url);
         setConnectionMode('TUNNEL');
         setIsTunnelAutoDetected(true);
@@ -198,8 +198,25 @@ export default function Host() {
     setLeaderboardPage(0);
     setPodiumStage(0);
     setPlayersList([]);
+    setTeamLeaderboard([]);
     localStorage.removeItem('active_pin');
     localStorage.removeItem('active_host_token');
+  };
+
+  const handlePauseResume = () => {
+    if (!pin || !hostToken) return;
+    if (currentScene?.subState === 'ACTIVE') {
+      socket.emit('host:pause-session', { pin, hostToken });
+    } else if (currentScene?.subState === 'PAUSED') {
+      socket.emit('host:resume-session', { pin, hostToken });
+    }
+  };
+
+  const handleRestartQuestion = () => {
+    if (!pin || !hostToken) return;
+    if (window.confirm('Vai tiešām vēlies sākt šo jautājumu no jauna? Balsis tiks notīrītas.')) {
+      socket.emit('host:restart-scene', { pin, hostToken });
+    }
   };
 
   const handleExportCsv = async () => {
@@ -225,6 +242,46 @@ export default function Host() {
     } catch {
       alert('❌ Neizdevās lejupielādēt CSV failu!');
     }
+  };
+
+  // 1-KLIKŠĶA DIPLOMU DRUKA (Top 3)
+  const handlePrintDiplomas = () => {
+    const sorted = [...playersList].filter((p) => !p.isDisabled).sort((a, b) => (b.score || 0) - (a.score || 0));
+    const top3 = sorted.slice(0, 3);
+    if (top3.length === 0) return alert('Nav spēlētāju diplomu ģenerēšanai!');
+
+    const printWin = window.open('', '_blank');
+    if (!printWin) return;
+
+    printWin.document.write(`
+      <html>
+        <head>
+          <title>Top 3 Diplomi - PIN ${pin}</title>
+          <style>
+            body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #fff; text-align: center; }
+            .diploma { page-break-after: always; height: 95vh; display: flex; flex-direction: column; justify-content: center; align-items: center; border: 15px solid #ffc107; margin: 20px; box-sizing: border-box; }
+            h1 { font-size: 3rem; color: #333; margin: 0; text-transform: uppercase; }
+            h2 { font-size: 2rem; color: #ffc107; margin: 10px 0; }
+            .winner { font-size: 3.5rem; font-weight: bold; color: #007bff; margin: 20px 0; }
+            .score { font-size: 1.8rem; color: #555; }
+            .footer { margin-top: 40px; font-size: 1.2rem; color: #888; }
+          </style>
+        </head>
+        <body>
+          ${top3.map((p, idx) => `
+            <div class="diploma">
+              <h1>🏆 DIPLOMS 🏆</h1>
+              <h2>Par iegūto ${idx + 1}. vietu spēlē</h2>
+              <div class="winner">${p.name}</div>
+              <div class="score">Iegūtie punkti: <strong>${p.score || 0} pt</strong></div>
+              <div class="footer">Event Studio • Spēles PIN: ${pin} • ${new Date().toLocaleDateString('lv-LV')}</div>
+            </div>
+          `).join('')}
+          <script>window.print();</script>
+        </body>
+      </html>
+    `);
+    printWin.document.close();
   };
 
   const changeLeaderboardPage = (newPage: number) => {
@@ -273,10 +330,16 @@ export default function Host() {
       setPlayersList(list);
     };
 
+    const handleTeamLeaderboard = (payload: any) => {
+      const list = Array.isArray(payload) ? payload : (payload?.data || []);
+      setTeamLeaderboard(list);
+    };
+
     socket.on('session-info', handleSessionInfo);
     socket.on('state-update', handleStateUpdate);
     socket.on('presence-update', handlePresence);
     socket.on('leaderboard-update', handleLeaderboard);
+    socket.on('team-leaderboard-update', handleTeamLeaderboard);
     socket.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -284,7 +347,12 @@ export default function Host() {
 
       if (e.code === 'Space' && pin && hostToken) {
         e.preventDefault();
+        // Ja fāze ir ACTIVE, [SPACE] tiek bloķēts, lai nejauši nepārtrauktu laiku!
+        if (currentScene?.subState === 'ACTIVE') return;
         socket.emit('host:advance', { pin, hostToken });
+      } else if ((e.key === 'p' || e.key === 'P') && pin && hostToken) {
+        e.preventDefault();
+        handlePauseResume();
       } else if ((e.key === 'c' || e.key === 'C') && pin) {
         e.preventDefault();
         toggleChart();
@@ -298,15 +366,16 @@ export default function Host() {
       socket.off('state-update', handleStateUpdate);
       socket.off('presence-update', handlePresence);
       socket.off('leaderboard-update', handleLeaderboard);
+      socket.off('team-leaderboard-update', handleTeamLeaderboard);
       socket.off('podium-stage-change');
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [pin, hostToken]);
+  }, [pin, hostToken, currentScene?.subState]);
 
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
 
-  // SKATS 1: PROJEKTA IZVĒLE (TIKAI VIENA TĪRA SKENĒŠANAS JOSLA)
+  // SKATS 1: PROJEKTA IZVĒLE
   if (!pin) {
     return (
       <div style={panelContainer}>
@@ -388,7 +457,7 @@ export default function Host() {
           )}
         </div>
 
-        {/* PROJEKTU MAPE — TĪRS, VIENS SKENĒŠANAS BLOKS */}
+        {/* PROJEKTU MAPE */}
         <div style={cardBox}>
           <h3 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>📂 AKTUĀLĀ PROJEKTU MAPE</h3>
 
@@ -408,18 +477,13 @@ export default function Host() {
           </div>
 
           <div style={{ marginTop: '15px', textAlign: 'left' }}>
-            <h4 style={{ color: '#aaa', borderBottom: '1px solid #444', paddingBottom: '8px', margin: '0 0 10px 0', display: 'flex', justifyContent: 'space-between' }}>
-              <span>Pieejamie projekti ({localProjects.length}):</span>
+            <h4 style={{ color: '#aaa', borderBottom: '1px solid #444', paddingBottom: '8px', margin: '0 0 10px 0' }}>
+              Pieejamie projekti ({localProjects.length}):
             </h4>
 
             {localProjects.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '20px 0', color: '#888' }}>
-                <p style={{ fontStyle: 'italic', margin: 0 }}>
-                  Šajā mapē nav atrasts neviens <code>.json</code> failiņš.
-                </p>
-                <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '6px' }}>
-                  Ielīmējiet pilno mapes ceļu un nospiediet "🔍 SKENĒT".
-                </div>
+                <p style={{ fontStyle: 'italic', margin: 0 }}>Šajā mapē nav atrasts neviens .json projekts.</p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -428,7 +492,7 @@ export default function Host() {
                     <span style={{ fontSize: '1.2rem' }}>🚀</span>
                     <div style={{ textAlign: 'left' }}>
                       <div style={{ fontWeight: 'bold', color: '#00ff00' }}>SĀKT ŠOVU: {p}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#aaa' }}>Klikšķini, lai atvērtu spēli ar šo projektu</div>
+                      <div style={{ fontSize: '0.75rem', color: '#aaa' }}>Klikšķini, lai atvērtu spēli</div>
                     </div>
                   </button>
                 ))}
@@ -450,13 +514,11 @@ export default function Host() {
     return (a.deviceNumber || 0) - (b.deviceNumber || 0);
   });
 
-  const isCurrentMulti =
-    currentScene?.config?.selectionMode === 'ALL' &&
-    (currentScene?.config?.correctAnswers?.length || 0) > 1;
+  const currentIdx = scenes.findIndex((s) => s.id === currentScene?.id);
+  const nextScene = currentIdx !== -1 && currentIdx < scenes.length - 1 ? scenes[currentIdx + 1] : null;
 
-  const isCurrentAnyOne =
-    currentScene?.config?.selectionMode === 'ANY_ONE' &&
-    (currentScene?.config?.correctAnswers?.length || 0) > 1;
+  const isCurrentActive = currentScene?.subState === 'ACTIVE';
+  const isCurrentPaused = currentScene?.subState === 'PAUSED';
 
   return (
     <div style={panelContainer}>
@@ -472,11 +534,32 @@ export default function Host() {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {/* PAUZES POGA */}
+          {(isCurrentActive || isCurrentPaused) && (
+            <button
+              onClick={handlePauseResume}
+              style={{ ...btnPurple, background: isCurrentPaused ? '#28a745' : '#ff9800', color: '#000', fontWeight: 'bold' }}
+              title="Pauze / Turpināt [P]"
+            >
+              {isCurrentPaused ? '▶️ Turpināt laiku [P]' : '⏸️ Iepauzēt [P]'}
+            </button>
+          )}
+
+          {/* JAUTĀJUMA ATKĀRTOŠANAS POGA */}
+          {(isCurrentActive || isCurrentPaused || currentScene?.subState === 'STATS') && (
+            <button onClick={handleRestartQuestion} style={btnGray} title="Sākt šo jautājumu no jauna bez punktiem">
+              🔄 No jauna
+            </button>
+          )}
+
           <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas skaitļus ekrānā">
             📊 Statistika [C]
           </button>
-          <button onClick={handleExportCsv} style={{ ...btnGray, background: '#198754' }} title="Lejupielādēt rezultātu CSV failu">
-            📥 Eksportēt CSV
+          <button onClick={handleExportCsv} style={{ ...btnGray, background: '#198754' }} title="Lejupielādēt CSV">
+            📥 CSV
+          </button>
+          <button onClick={handlePrintDiplomas} style={{ ...btnGray, background: '#d63384' }} title="Ģenerēt diplomus Top 3">
+            🏆 Diplomi
           </button>
           <button onClick={() => socket.emit('host:simulate-players', { pin, hostToken, count: 20 })} style={btnGray}>
             🤖 +20 Boti
@@ -490,20 +573,30 @@ export default function Host() {
         </div>
       </div>
 
-      <div style={instructionBox}>
-        <div style={{ fontSize: '1.3rem', fontWeight: 'bold' }}>⌨️ SPIED [ SPACE ] TAUSTIŅU, LAI VADĪTU ŠOVU</div>
-        <div style={{ marginTop: '5px', opacity: 0.9 }}>
-          Slaids: <strong>{currentScene?.title || 'Nav sākts'}</strong> | Fāze:{' '}
-          <span style={{ color: '#ffc107', fontWeight: 'bold' }}>{currentScene?.subState || 'IDLE'}</span>
-          {isCurrentMulti && (
-            <span style={{ marginLeft: '10px', background: '#007bff', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>
-              ☑️ Daudzizvēle
+      {/* VADĪBAS JOSLA & NĀKAMĀ SLAIDA PRIEKŠSKATĪJUMS */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '15px', marginBottom: '15px' }}>
+        <div style={instructionBox}>
+          <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>
+            {isCurrentActive ? '⏳ LAIKA ATSKAITE RIT (Space nobloķēts. Spied [P], lai pauzētu)' : '⌨️ SPIED [ SPACE ] TAUSTIŅU, LAI VADĪTU ŠOVU'}
+          </div>
+          <div style={{ marginTop: '5px', opacity: 0.9, fontSize: '0.95rem' }}>
+            Slaids: <strong>{currentScene?.title || 'Nav sākts'}</strong> | Fāze:{' '}
+            <span style={{ color: isCurrentPaused ? '#ff5722' : '#ffc107', fontWeight: 'bold' }}>
+              {currentScene?.subState || 'IDLE'}
             </span>
-          )}
-          {isCurrentAnyOne && (
-            <span style={{ marginLeft: '10px', background: '#17a2b8', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>
-              ☝️ Viens no
-            </span>
+          </div>
+        </div>
+
+        {/* NĀKAMAIS SLAIDS (PREVIEW) */}
+        <div style={{ background: '#1c1c1c', border: '1px solid #444', borderRadius: '8px', padding: '10px 15px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <div style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>⏭️ NĀKAMAIS SLAIDS (PREVIEW):</div>
+          <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: 'bold', marginTop: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {nextScene ? `${nextScene.config?.question || nextScene.title} (${nextScene.type})` : '🏁 Spēles noslēgums'}
+          </div>
+          {nextScene?.config?.notes && (
+            <div style={{ fontSize: '0.75rem', color: '#ffc107', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              📝 {nextScene.config.notes}
+            </div>
           )}
         </div>
       </div>
@@ -549,7 +642,7 @@ export default function Host() {
         </div>
       )}
 
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+      <div style={{ maxWidth: '950px', margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #333', marginBottom: '15px' }}>
           <div style={{ display: 'flex', gap: '10px' }}>
             <button
@@ -560,7 +653,7 @@ export default function Host() {
                 color: activeTab === 'SCENES' ? '#fff' : '#888'
               }}
             >
-              📋 Slaidu secība ({scenes.length})
+              📋 Slaidi ({scenes.length})
             </button>
             <button
               onClick={() => setActiveTab('ANALYZER')}
@@ -570,7 +663,17 @@ export default function Host() {
                 color: activeTab === 'ANALYZER' ? '#00e5ff' : '#888'
               }}
             >
-              👥 Spēlētāju vadība & Laiki ({playersList.length})
+              👥 Spēlētāji ({playersList.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('TEAMS')}
+              style={{
+                ...tabButton,
+                borderBottom: activeTab === 'TEAMS' ? '3px solid #ffc107' : 'none',
+                color: activeTab === 'TEAMS' ? '#ffc107' : '#888'
+              }}
+            >
+              🏆 Komandas ({teamLeaderboard.length})
             </button>
           </div>
 
@@ -595,8 +698,6 @@ export default function Host() {
           <div>
             {scenes.map((s, i) => {
               const isActive = currentScene?.id === s.id;
-              const hasMulti = s.config?.selectionMode === 'ALL' && (s.config?.correctAnswers?.length || 0) > 1;
-              const hasAnyOne = s.config?.selectionMode === 'ANY_ONE' && (s.config?.correctAnswers?.length || 0) > 1;
 
               return (
                 <div
@@ -609,25 +710,9 @@ export default function Host() {
                   }}
                 >
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                    <div style={{ fontWeight: 'bold' }}>
                       <span>{i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})</span>
-                      {s.type === 'LEADERBOARD' && <span>[{s.config?.lbType || 'TOTAL'}]</span>}
-                      {hasMulti && (
-                        <span style={{ fontSize: '0.75rem', background: '#007bff', color: '#fff', padding: '1px 6px', borderRadius: '4px' }}>
-                          ☑️ Daudzizvēle
-                        </span>
-                      )}
-                      {hasAnyOne && (
-                        <span style={{ fontSize: '0.75rem', background: '#17a2b8', color: '#fff', padding: '1px 6px', borderRadius: '4px' }}>
-                          ☝️ Viens no
-                        </span>
-                      )}
                     </div>
-                    {s.config?.notes && (
-                      <div style={{ fontSize: '0.8rem', color: '#ffc107', marginTop: '3px' }}>
-                        💬 {s.config.notes}
-                      </div>
-                    )}
                   </div>
                   {isActive && <span style={activeBadge}>{currentScene?.subState || 'IDLE'}</span>}
                 </div>
@@ -639,89 +724,95 @@ export default function Host() {
         {activeTab === 'ANALYZER' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <h4 style={{ margin: 0, color: '#00e5ff' }}>👥 DALĪBNIEKU PĀRVALDĪBA UN REZULTĀTI</h4>
+              <h4 style={{ margin: 0, color: '#00e5ff' }}>👥 DALĪBNIEKU PĀRVALDĪBA</h4>
               <div style={{ display: 'flex', gap: '6px' }}>
-                <button
-                  onClick={() => setSortMode('ORDER')}
-                  style={{ ...btnSmallSort, background: sortMode === 'ORDER' ? '#007bff' : '#333' }}
-                >
+                <button onClick={() => setSortMode('ORDER')} style={{ ...btnSmallSort, background: sortMode === 'ORDER' ? '#007bff' : '#333' }}>
                   Pēc pults #
                 </button>
-                <button
-                  onClick={() => setSortMode('SCORE')}
-                  style={{ ...btnSmallSort, background: sortMode === 'SCORE' ? '#007bff' : '#333' }}
-                >
-                  Pēc punktiem (Līderi)
+                <button onClick={() => setSortMode('SCORE')} style={{ ...btnSmallSort, background: sortMode === 'SCORE' ? '#007bff' : '#333' }}>
+                  Pēc punktiem
                 </button>
               </div>
             </div>
 
-            {sortedPlayers.length === 0 ? (
-              <p style={{ color: '#888', fontStyle: 'italic' }}>Pagaidām nav pieslēdzies neviens spēlētājs.</p>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #444', color: '#aaa' }}>
+                  <th style={{ padding: '8px' }}>Pults</th>
+                  <th style={{ padding: '8px' }}>Vārds</th>
+                  <th style={{ padding: '8px' }}>Komanda</th>
+                  <th style={{ padding: '8px' }}>Punkti</th>
+                  <th style={{ padding: '8px' }}>Laiks</th>
+                  <th style={{ padding: '8px', textAlign: 'center' }}>Darbība</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedPlayers.map((p) => (
+                  <tr key={p.id} style={{ borderBottom: '1px solid #2a2a2a', opacity: p.isDisabled ? 0.4 : 1 }}>
+                    <td style={{ padding: '8px', fontWeight: 'bold', color: '#ffc107' }}>#{p.deviceNumber || 1}</td>
+                    <td style={{ padding: '8px' }}>
+                      <input value={p.name} onChange={(e) => updatePlayer(p.id, { name: e.target.value })} style={tableInput} />
+                      {p.missedQuestionsCount >= 3 && !p.isDisabled && (
+                        <span style={{ fontSize: '0.75rem', color: '#ff9800', marginLeft: '5px' }}>[Kavē: {p.missedQuestionsCount}]</span>
+                      )}
+                      {p.isDisabled && (
+                        <span style={{ fontSize: '0.75rem', color: '#dc3545', marginLeft: '5px', fontWeight: 'bold' }}>[Atslēgts]</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '8px' }}>
+                      <input value={p.teamName || ''} onChange={(e) => updatePlayer(p.id, { teamName: e.target.value })} placeholder="Komanda" style={{ ...tableInput, width: '110px' }} />
+                    </td>
+                    <td style={{ padding: '8px' }}>
+                      <input type="number" value={p.score ?? 0} onChange={(e) => updatePlayer(p.id, { score: Number(e.target.value) })} style={{ ...tableInput, width: '60px', color: 'gold', fontWeight: 'bold' }} />
+                    </td>
+                    <td style={{ padding: '8px', color: '#00e5ff' }}>{formatThinkingTime(p.totalTimeMs)}</td>
+                    <td style={{ padding: '8px', textAlign: 'center' }}>
+                      <button
+                        onClick={() => updatePlayer(p.id, { isDisabled: !p.isDisabled, missedQuestionsCount: 0 })}
+                        style={{
+                          padding: '4px 10px',
+                          background: p.isDisabled ? '#28a745' : '#dc3545',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '0.8rem',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        {p.isDisabled ? 'Ieslēgt' : 'Atslēgt'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* KOMANDU REZULTĀTI */}
+        {activeTab === 'TEAMS' && (
+          <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
+            <h4 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>🏆 KOMANDU KOPVĒRTĒJUMS</h4>
+            {teamLeaderboard.length === 0 ? (
+              <p style={{ color: '#888', fontStyle: 'italic' }}>Nav reģistrēta neviena komanda.</p>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '2px solid #444', color: '#aaa' }}>
-                    <th style={{ padding: '8px' }}>Pults</th>
-                    <th style={{ padding: '8px' }}>Vārds (Rediģējams)</th>
-                    <th style={{ padding: '8px' }}>Punkti</th>
-                    <th style={{ padding: '8px' }}>Apdomas laiks</th>
-                    <th style={{ padding: '8px', textAlign: 'center' }}>Darbība</th>
+                    <th style={{ padding: '8px' }}>Vieta</th>
+                    <th style={{ padding: '8px' }}>Komandas nosaukums</th>
+                    <th style={{ padding: '8px' }}>Dalībnieki</th>
+                    <th style={{ padding: '8px' }}>Vidējais / Kopējais rezultāts</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedPlayers.map((p) => (
-                    <tr key={p.id} style={{ borderBottom: '1px solid #2a2a2a', opacity: p.isDisabled ? 0.4 : 1 }}>
-                      <td style={{ padding: '8px', fontWeight: 'bold', color: '#ffc107' }}>
-                        #{p.deviceNumber || 1}
-                      </td>
-                      <td style={{ padding: '8px' }}>
-                        <input
-                          value={p.name}
-                          onChange={(e) => updatePlayer(p.id, { name: e.target.value })}
-                          style={tableInput}
-                          title="Klikšķini, lai mainītu vārdu"
-                        />
-                      </td>
-                      <td style={{ padding: '8px' }}>
-                        <input
-                          type="number"
-                          value={p.score ?? 0}
-                          onChange={(e) => updatePlayer(p.id, { score: Number(e.target.value) })}
-                          style={{ ...tableInput, width: '60px', color: 'gold', fontWeight: 'bold' }}
-                          title="Klikšķini, lai labotu punktus"
-                        />
-                      </td>
-                      <td style={{ padding: '8px' }}>
-                        <input
-                          type="number"
-                          step="100"
-                          value={p.totalTimeMs ?? 0}
-                          onChange={(e) => updatePlayer(p.id, { totalTimeMs: Number(e.target.value) })}
-                          style={{ ...tableInput, width: '90px', color: '#00e5ff' }}
-                          title="Laiks milisekundēs"
-                        />
-                        <span style={{ fontSize: '0.8rem', color: '#888', marginLeft: '6px' }}>
-                          ({formatThinkingTime(p.totalTimeMs)})
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px', textAlign: 'center' }}>
-                        <button
-                          onClick={() => updatePlayer(p.id, { isDisabled: !p.isDisabled })}
-                          style={{
-                            padding: '4px 10px',
-                            background: p.isDisabled ? '#28a745' : '#dc3545',
-                            color: '#fff',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            fontSize: '0.8rem',
-                            fontWeight: 'bold'
-                          }}
-                        >
-                          {p.isDisabled ? 'Ieslēgt' : 'Atslēgt'}
-                        </button>
-                      </td>
+                  {teamLeaderboard.map((t, idx) => (
+                    <tr key={t.name} style={{ borderBottom: '1px solid #2a2a2a' }}>
+                      <td style={{ padding: '8px', fontWeight: 'bold', color: '#00ff00' }}>#{idx + 1}</td>
+                      <td style={{ padding: '8px', fontWeight: 'bold', color: '#fff', fontSize: '1rem' }}>{t.name}</td>
+                      <td style={{ padding: '8px', color: '#aaa' }}>{t.memberCount} spēlētāji ({t.members?.join(', ')})</td>
+                      <td style={{ padding: '8px', color: 'gold', fontWeight: 'bold', fontSize: '1.1rem' }}>{t.score} pt</td>
                     </tr>
                   ))}
                 </tbody>
@@ -811,7 +902,6 @@ const instructionBox: React.CSSProperties = {
   padding: '12px',
   borderRadius: '8px',
   textAlign: 'center',
-  marginBottom: '15px',
   border: '1px solid #0056b3'
 };
 
@@ -844,7 +934,6 @@ const projectBtn: React.CSSProperties = {
   border: '1px solid #28a745',
   borderRadius: '8px',
   cursor: 'pointer',
-  transition: 'transform 0.1s ease',
   boxSizing: 'border-box'
 };
 

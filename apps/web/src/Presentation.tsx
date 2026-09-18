@@ -59,6 +59,7 @@ export const formatThinkingTime = (totalMs: number = 0): string => {
   return `${seconds} sek un ${msStr} ms`;
 };
 
+// REAKTĪVS MEDIJU ELEMENTS AR PRECIZU PARĀDĪŠANĀS / PAZUŠANAS LOĢIKU
 const MediaLayoutItem: React.FC<{
   el: any;
   subState: string;
@@ -70,16 +71,22 @@ const MediaLayoutItem: React.FC<{
   const src = `${MEDIA_BASE_URL}/${el.content}`;
 
   const currentSub = (subState || 'IDLE').toUpperCase();
+  const isRevealPhase = isRevealed || currentSub === 'REVEAL';
 
+  // REDZAMĪBAS LOĢIKA:
+  // 1. ALWAYS: redzams vienmēr
+  // 2. DURING_QUESTION: redzams jautājuma/balsošanas laikā, bet PAZŪD pie atklāšanas (REVEAL)!
+  // 3. AFTER_REVEAL: parādās TIKAI pie atklāšanas (REVEAL)!
   const isVisible =
     vis === 'ALWAYS' ||
-    (vis === 'DURING_QUESTION' && currentSub === 'ACTIVE') ||
-    (vis === 'AFTER_REVEAL' && (isRevealed || currentSub === 'REVEAL'));
+    (vis === 'DURING_QUESTION' && ['READY', 'ACTIVE', 'PAUSED', 'STATS'].includes(currentSub) && !isRevealPhase) ||
+    (vis === 'AFTER_REVEAL' && isRevealPhase);
 
-  const shouldPlay = isVisible && (
+  // ATSKAŅOŠANAS LOĢIKA
+  const shouldPlay = isVisible && currentSub !== 'PAUSED' && (
     (vis === 'ALWAYS' && ['READY', 'ACTIVE', 'STATS', 'REVEAL'].includes(currentSub)) ||
     (vis === 'DURING_QUESTION' && currentSub === 'ACTIVE') ||
-    (vis === 'AFTER_REVEAL' && (isRevealed || currentSub === 'REVEAL'))
+    (vis === 'AFTER_REVEAL' && isRevealPhase)
   );
 
   useEffect(() => {
@@ -90,14 +97,14 @@ const MediaLayoutItem: React.FC<{
     if (shouldPlay) {
       if (m.paused) {
         try {
-          m.currentTime = el.trimStart || 0;
+          if (m.currentTime === 0 && el.trimStart) m.currentTime = el.trimStart;
         } catch {}
         m.play().catch(() => {});
       }
     } else {
       m.pause();
     }
-  }, [shouldPlay, currentSub, isRevealed, el.trimStart, el.volume]);
+  }, [shouldPlay, currentSub, isRevealPhase, el.trimStart, el.volume]);
 
   const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 80 : 50));
   const style: React.CSSProperties = {
@@ -223,16 +230,19 @@ const TopBar: React.FC<TopBarProps> = ({ pin, scene, participantCount, voteData,
 
   const duration = scene?.config?.duration ?? scene?.config?.timeLimit ?? 0;
   const hasTimer = duration > 0;
+  const isPaused = scene?.subState === 'PAUSED';
 
   const maxPoints = scene?.config?.pointsMax ?? scene?.config?.points ?? 15;
   const minPoints = scene?.config?.pointsMin ?? 1;
   const [currentPoints, setCurrentPoints] = useState(maxPoints);
 
   useEffect(() => {
-    if (!scene?.endTime || scene?.subState !== 'ACTIVE' || !hasTimer) {
+    if (!scene?.endTime || (scene?.subState !== 'ACTIVE' && !isPaused) || !hasTimer) {
       setCurrentPoints(maxPoints);
       return;
     }
+
+    if (isPaused) return;
 
     const interval = setInterval(() => {
       const now = Date.now();
@@ -248,7 +258,7 @@ const TopBar: React.FC<TopBarProps> = ({ pin, scene, participantCount, voteData,
     }, 100);
 
     return () => clearInterval(interval);
-  }, [scene?.endTime, scene?.subState, duration, maxPoints, minPoints, hasTimer]);
+  }, [scene?.endTime, scene?.subState, duration, maxPoints, minPoints, hasTimer, isPaused]);
 
   const getDotStyle = (count: number): React.CSSProperties => {
     let size = 18;
@@ -274,7 +284,11 @@ const TopBar: React.FC<TopBarProps> = ({ pin, scene, participantCount, voteData,
       </div>
 
       <div style={votersBox}>
-        {missingCount > 0 ? (
+        {isPaused ? (
+          <span style={{ color: '#ff9800', fontSize: '1.3vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(255,152,0,0.8)' }}>
+            ⏸️ SPĒLE IEPAUZĒTA
+          </span>
+        ) : missingCount > 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '420px', flexWrap: 'wrap', justifyContent: 'center' }}>
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
               {[...Array(missingCount)].map((_, i) => (
@@ -294,9 +308,13 @@ const TopBar: React.FC<TopBarProps> = ({ pin, scene, participantCount, voteData,
         )}
       </div>
 
-      {hasTimer && scene?.endTime && (
-        <div style={timerBadge}>
-          <Timer endTime={scene.endTime} />
+      {hasTimer && (
+        <div style={{ ...timerBadge, borderColor: isPaused ? '#ff9800' : 'orange' }}>
+          <Timer
+            endTime={scene?.endTime}
+            isPaused={isPaused}
+            pausedRemainingMs={scene?.pausedRemainingMs}
+          />
         </div>
       )}
 
@@ -327,6 +345,8 @@ export default function Presentation() {
   const [revealedCorrectnessMap, setRevealedCorrectnessMap] = useState<Record<string, number>>({});
   const [isStatsVisible, setIsStatsVisible] = useState(false);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [teamLeaderboard, setTeamLeaderboard] = useState<any[]>([]);
+  const [showTeamLeaderboard, setShowTeamLeaderboard] = useState(false);
   const [leaderboardType, setLeaderboardType] = useState<'ROUND' | 'TOTAL' | 'FINAL'>('TOTAL');
   const [leaderboardPage, setLeaderboardPage] = useState(0);
   const [podiumStage, setPodiumStage] = useState(0);
@@ -340,7 +360,8 @@ export default function Presentation() {
     appLogo: '',
     welcomeImage: '',
     appBgImage: '',
-    appBgColor: '#0a0a0a'
+    appBgColor: '#0a0a0a',
+    teamModeEnabled: false
   });
 
   const [connectionUrl, setConnectionUrl] = useState<string>('');
@@ -460,6 +481,15 @@ export default function Presentation() {
       setIsRevealed(true);
       if (data?.correctAnswers) setRevealedCorrectAnswers(data.correctAnswers);
       if (data?.correctnessMap) setRevealedCorrectnessMap(data.correctnessMap);
+
+      // Apturam taimera skaņas un uzreiz atskaņojam atklāšanas skaņu
+      audioTimerRef.current?.pause();
+      audioTimeUpRef.current?.pause();
+
+      if (audioRevealRef.current) {
+        audioRevealRef.current.currentTime = 0;
+        audioRevealRef.current.play().catch((err) => console.log('Reveal audio error:', err));
+      }
     });
 
     socket.on('toggle-audience-chart', () => {
@@ -485,6 +515,11 @@ export default function Presentation() {
       setPodiumStage(0);
     });
 
+    socket.on('team-leaderboard-update', (payload: any) => {
+      const list = Array.isArray(payload) ? payload : (payload?.data || []);
+      setTeamLeaderboard(list);
+    });
+
     socket.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
     socket.on('leaderboard-page-change', (page: number) => setLeaderboardPage(page));
 
@@ -492,6 +527,9 @@ export default function Presentation() {
       if ((e.key === 'c' || e.key === 'C') && (subState === 'STATS' || isRevealed)) {
         e.preventDefault();
         setIsStatsVisible((prev) => !prev);
+      } else if ((e.key === 't' || e.key === 'T') && scene?.type === 'LEADERBOARD') {
+        e.preventDefault();
+        setShowTeamLeaderboard((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -511,6 +549,7 @@ export default function Presentation() {
       socket.off('toggle-audience-chart');
       socket.off('player-buzzer-test');
       socket.off('leaderboard-update');
+      socket.off('team-leaderboard-update');
       socket.off('podium-stage-change');
       socket.off('leaderboard-page-change');
       window.removeEventListener('keydown', handleKeyDown);
@@ -610,10 +649,21 @@ export default function Presentation() {
     );
   }
 
+  const handleStartPresentation = () => {
+    setIsMediaReady(true);
+    // Atbloķējam visus audio failus ar pirmo klikšķi un iestatām pilnu skaļumu
+    [audioTimerRef.current, audioTimeUpRef.current, audioRevealRef.current, audioFinalsRef.current].forEach((a) => {
+      if (a) {
+        a.load();
+        a.volume = 1.0;
+      }
+    });
+  };
+
   if (!isMediaReady) {
     return (
       <div style={fullScreenCenter}>
-        <button onClick={() => setIsMediaReady(true)} style={bigBtn}>
+        <button onClick={handleStartPresentation} style={bigBtn}>
           🚀 SĀKT PREZENTĀCIJU
         </button>
       </div>
@@ -751,6 +801,11 @@ export default function Presentation() {
                     >
                       {p.name}
                     </span>
+                    {p.teamName && (
+                      <span style={{ fontSize: '0.65vw', color: '#00e5ff', marginTop: '2px' }}>
+                        [{p.teamName}]
+                      </span>
+                    )}
                   </div>
                 );
               })
@@ -838,7 +893,7 @@ export default function Presentation() {
   const shouldShowOptions =
     isQuestionType &&
     optionsList.length > 0 &&
-    (optionsRevealTiming === 'ALWAYS' ? true : ['ACTIVE', 'STATS', 'REVEAL'].includes(currentSub));
+    (optionsRevealTiming === 'ALWAYS' ? true : ['ACTIVE', 'PAUSED', 'STATS', 'REVEAL'].includes(currentSub));
 
   const effectiveCorrectAnswers = isRevealed ? (revealedCorrectAnswers.length > 0 ? revealedCorrectAnswers : (scene?.config?.correctAnswers || [])) : [];
   const effectiveCorrectnessMap = isRevealed ? (Object.keys(revealedCorrectnessMap).length > 0 ? revealedCorrectnessMap : (scene?.config?.answerCorrectness || {})) : {};
@@ -870,7 +925,7 @@ export default function Presentation() {
           overflow: 'hidden'
         }}
       >
-        {/* STUDIJĀ IZVIETOTIE MEDIJI */}
+        {/* STUDIJĀ IZVIETOTIE MEDIJI (Pazūd pie REVEAL, ja bijis DURING_QUESTION) */}
         {scene?.config?.layout?.map((el: any, idx: number) => (
           <MediaLayoutItem
             key={el.id || `layout-el-${idx}`}
@@ -1011,37 +1066,56 @@ export default function Presentation() {
           )
         )}
 
-        {/* LĪDERU TABULA */}
+        {/* LĪDERU TABULA (Ar komandu pārslēgšanu ar taustiņu [T]) */}
         {scene.type === 'LEADERBOARD' && !isFinalLb && (
           <div style={leaderboardOverlay}>
-            <h1 style={{ fontSize: '2.6vw', color: '#ffc107', textAlign: 'center', margin: '0 0 20px 0' }}>
-              {isRoundLb ? '🏆 KĀRTAS REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
-            </h1>
-            <div>
-              {sortedLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => {
-                const globalIndex = leaderboardPage * 10 + i + 1;
-                const scoreToDisplay = isRoundLb ? (p.roundScore ?? 0) : p.score;
-                const timeToDisplay = isRoundLb ? (p.roundTimeMs || 0) : (p.totalTimeMs || 0);
-
-                return (
-                  <div key={p.id || globalIndex} style={leaderRow}>
-                    <span>{globalIndex}. {p.name}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                      <span style={timeTagStyle}>
-                        ⏱️ {formatThinkingTime(timeToDisplay)}
-                      </span>
-                      <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
-                        {scoreToDisplay} pt
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+              <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: 0 }}>
+                {showTeamLeaderboard ? '👥 KOMANDU KOPVĒRTĒJUMS' : isRoundLb ? '🏆 KĀRTAS REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
+              </h1>
+              {teamLeaderboard.length > 0 && (
+                <span style={{ fontSize: '1vw', color: '#00e5ff', background: 'rgba(0,229,255,0.15)', padding: '4px 10px', borderRadius: '6px' }}>
+                  Pārslēgt skatu [T]
+                </span>
+              )}
             </div>
+
+            {showTeamLeaderboard ? (
+              <div>
+                {teamLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((t, i) => (
+                  <div key={t.name} style={leaderRow}>
+                    <span>{leaderboardPage * 10 + i + 1}. {t.name} ({t.memberCount} spēlētāji)</span>
+                    <span style={{ fontWeight: 'bold', color: 'gold' }}>{t.score} pt</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div>
+                {sortedLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => {
+                  const globalIndex = leaderboardPage * 10 + i + 1;
+                  const scoreToDisplay = isRoundLb ? (p.roundScore ?? 0) : p.score;
+                  const timeToDisplay = isRoundLb ? (p.roundTimeMs || 0) : (p.totalTimeMs || 0);
+
+                  return (
+                    <div key={p.id || globalIndex} style={leaderRow}>
+                      <span>{globalIndex}. {p.name} {p.teamName && `[${p.teamName}]`}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                        <span style={timeTagStyle}>
+                          ⏱️ {formatThinkingTime(timeToDisplay)}
+                        </span>
+                        <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
+                          {scoreToDisplay} pt
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
-        {/* FINĀLA APBALVOŠANA */}
+        {/* FINĀLA APBALVOŠANA (Podium) */}
         {scene.type === 'LEADERBOARD' && isFinalLb && (
           <div style={{ width: '85vw', height: '80vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
             {podiumStage < 4 && (
@@ -1143,7 +1217,7 @@ export default function Presentation() {
                     const globalRank = 4 + leaderboardPage * 10 + i;
                     return (
                       <div key={p.id || globalRank} style={leaderRow}>
-                        <span>{globalRank}. {p.name}</span>
+                        <span>{globalRank}. {p.name} {p.teamName && `[${p.teamName}]`}</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                           <span style={timeTagStyle}>
                             ⏱️ {formatThinkingTime(p.totalTimeMs)}

@@ -29,6 +29,10 @@ interface MobileBranding {
   lobbyMode?: 'CIRCLE' | 'INTERACTIVE_DOTS';
   optionsRevealTiming?: 'ON_ACTIVE' | 'ALWAYS';
   timerMode?: 'ALL_VOTED' | 'FULL_TIME';
+  teamModeEnabled?: boolean;
+  teamScoringMode?: 'AVG' | 'SUM';
+  predefinedTeams?: string[];
+  maxMissedQuestions?: number;
 }
 
 interface CanvasElement {
@@ -94,8 +98,14 @@ export default function Studio() {
     appBgColor: '#121212',
     lobbyMode: 'CIRCLE',
     optionsRevealTiming: 'ON_ACTIVE',
-    timerMode: 'ALL_VOTED'
+    timerMode: 'ALL_VOTED',
+    teamModeEnabled: false,
+    teamScoringMode: 'AVG',
+    predefinedTeams: ['1. Galdiņš', '2. Galdiņš', '3. Galdiņš', 'VIP Komanda'],
+    maxMissedQuestions: 5
   });
+
+  const [newTeamInput, setNewTeamInput] = useState('');
 
   const [slides, setSlides] = useState<Slide[]>([
     {
@@ -227,7 +237,10 @@ export default function Studio() {
     try {
       const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
-        headers: getAdminHeaders(),
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAdminHeaders()
+        },
         body: JSON.stringify({ path: folderToSet || activeFolder })
       });
       const data = await res.json();
@@ -441,7 +454,7 @@ export default function Studio() {
 
           if (isSnapToGrid) {
             newX = Math.round(newX / 2) * 2;
-            newY = Math.round(newY / 2) * 2;
+            newW = Math.round(newW / 2) * 2;
             newH = Math.round(newH / 2) * 2;
           }
           if (newW >= 8 && newX >= 0) {
@@ -572,7 +585,7 @@ export default function Studio() {
     const cleanFileName = projectFile.trim().endsWith('.json') ? projectFile.trim() : `${projectFile.trim()}.json`;
     if (availableProjects.includes(cleanFileName)) {
       const isConfirmed = window.confirm(
-        `⚠️ UZMANĪBU!\n\nFails "${cleanFileName}" jau eksistē mapē:\n${activeFolder}\n\nVai viss ir pareizi un vēlaties to pārrakstīt?`
+        `⚠️ UZMANĪBU!\n\nFails "${cleanFileName}" jau eksistē mapē:\n${activeFolder}\n\nVai vēlaties to pārrakstīt?`
       );
       if (!isConfirmed) return;
     }
@@ -580,7 +593,10 @@ export default function Studio() {
     try {
       const res = await fetch(`${BACKEND_URL}/api/save-to-file`, {
         method: 'POST',
-        headers: getAdminHeaders(),
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAdminHeaders()
+        },
         body: JSON.stringify({
           fileName: cleanFileName,
           data: {
@@ -603,13 +619,13 @@ export default function Studio() {
   const handleOpenProject = async (name: string) => {
     if (!name) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/api/load-project/${name}`, {
+      const res = await fetch(`${BACKEND_URL}/api/load-project/${encodeURIComponent(name)}`, {
         headers: getAdminHeaders()
       });
       const data = await res.json();
       if (data.scenes && Array.isArray(data.scenes)) {
         setSlides(data.scenes);
-        if (data.branding) setMobileBranding(data.branding);
+        if (data.branding) setMobileBranding((prev) => ({ ...prev, ...data.branding }));
         setProjectFile(name);
         pushToHistory(data.scenes);
         setActiveSlideIdx(0);
@@ -619,6 +635,20 @@ export default function Studio() {
     } catch {
       alert('❌ Neizdevās atvērt projektu!');
     }
+  };
+
+  const handleAddTeam = () => {
+    if (!newTeamInput.trim()) return;
+    const current = mobileBranding.predefinedTeams || [];
+    if (!current.includes(newTeamInput.trim())) {
+      setMobileBranding({ ...mobileBranding, predefinedTeams: [...current, newTeamInput.trim()] });
+    }
+    setNewTeamInput('');
+  };
+
+  const handleRemoveTeam = (teamToRemove: string) => {
+    const current = mobileBranding.predefinedTeams || [];
+    setMobileBranding({ ...mobileBranding, predefinedTeams: current.filter((t) => t !== teamToRemove) });
   };
 
   return (
@@ -730,7 +760,7 @@ export default function Studio() {
           style={folderInput}
           value={activeFolder}
           onChange={(e) => setActiveFolder(e.target.value)}
-          placeholder="C:/ManiSovi"
+          placeholder="C:/ManiProjekti"
         />
         <button
           style={btnSmallFolder}
@@ -1178,10 +1208,10 @@ export default function Studio() {
 
         {/* LABĀ PUSE: Iestatījumu panelis */}
         <div style={sidebarRight}>
-          {/* MOBILĀS LIETOTNES DIZAINS */}
+          {/* MOBILĀS LIETOTNES DIZAINS & KOMANDU REŽĪMS */}
           <div style={{ background: '#1c2833', border: '1px solid #007bff', borderRadius: '8px', padding: '10px', marginBottom: '15px' }}>
             <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#00ff00', marginBottom: '8px' }}>
-              📱 MOBILĀS LIETOTNES DIZAINS
+              📱 MOBILĀS LIETOTNES & SPĒLES IESTATĪJUMI
             </div>
 
             <label style={labelStyle}>Lietotnes nosaukums telefonā:</label>
@@ -1202,16 +1232,6 @@ export default function Studio() {
               <option value="INTERACTIVE_DOTS">Interaktīvais (Bumbiņas ar Pults testu)</option>
             </select>
 
-            <label style={labelStyle}>Atbilžu variantu parādīšanās ekrānā:</label>
-            <select
-              style={{ ...selectStyle, borderColor: '#00e5ff' }}
-              value={mobileBranding.optionsRevealTiming || 'ON_ACTIVE'}
-              onChange={(e) => setMobileBranding({ ...mobileBranding, optionsRevealTiming: e.target.value as any })}
-            >
-              <option value="ON_ACTIVE">⏱️ Tikai tad, kad sākas laika atskaite (ACTIVE)</option>
-              <option value="ALWAYS">👁️ Uzreiz, kad parādās jautājums (READY)</option>
-            </select>
-
             <label style={labelStyle}>⏱️ Taimera režīms visiem jautājumiem:</label>
             <select
               style={{ ...selectStyle, borderColor: '#00e5ff' }}
@@ -1222,6 +1242,84 @@ export default function Studio() {
               <option value="FULL_TIME">⏳ Vienmēr skaitīt pilno laiku līdz 0s (Pilnais)</option>
             </select>
 
+            <label style={labelStyle}>💤 Neaktivitātes (AFK) atslēgšanas limits:</label>
+            <select
+              style={selectStyle}
+              value={mobileBranding.maxMissedQuestions || 5}
+              onChange={(e) => setMobileBranding({ ...mobileBranding, maxMissedQuestions: Number(e.target.value) })}
+            >
+              <option value="3">Pēc 3 neatbildētiem jautājumiem</option>
+              <option value="5">Pēc 5 neatbildētiem jautājumiem (Ieteicams)</option>
+              <option value="10">Pēc 10 neatbildētiem jautājumiem</option>
+              <option value="999">Izslēgt auto-atslēgšanu</option>
+            </select>
+
+            {/* KOMANDU REŽĪMA IESTATĪJUMI */}
+            <div style={{ marginTop: '10px', background: '#15222e', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', color: '#00e5ff', fontSize: '0.85rem' }}>
+                <input
+                  type="checkbox"
+                  checked={!!mobileBranding.teamModeEnabled}
+                  onChange={(e) => setMobileBranding({ ...mobileBranding, teamModeEnabled: e.target.checked })}
+                />
+                👥 Ieslēgt Komandu režīmu
+              </label>
+
+              {mobileBranding.teamModeEnabled && (
+                <div style={{ marginTop: '8px' }}>
+                  <label style={labelStyle}>Komandu punktu aprēķins:</label>
+                  <select
+                    style={selectStyle}
+                    value={mobileBranding.teamScoringMode || 'AVG'}
+                    onChange={(e) => setMobileBranding({ ...mobileBranding, teamScoringMode: e.target.value as any })}
+                  >
+                    <option value="AVG">Vidējais punktu skaits (Taisnīgi dažādiem izmēriem)</option>
+                    <option value="SUM">Kopējā punktu summa</option>
+                  </select>
+
+                  <label style={labelStyle}>Iepriekš sagatavotās komandas / galdiņi:</label>
+                  <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
+                    <input
+                      style={{ ...inputStyle, flex: 1 }}
+                      placeholder="Pievienot komandu..."
+                      value={newTeamInput}
+                      onChange={(e) => setNewTeamInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddTeam()}
+                    />
+                    <button onClick={handleAddTeam} style={{ ...btnSmallAction, width: 'auto', background: '#007bff', margin: 0 }}>
+                      ➕
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: '90px', overflowY: 'auto' }}>
+                    {(mobileBranding.predefinedTeams || []).map((team) => (
+                      <span
+                        key={team}
+                        style={{
+                          background: '#003366',
+                          color: '#fff',
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          fontSize: '0.75rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        {team}
+                        <button
+                          onClick={() => handleRemoveTeam(team)}
+                          style={{ background: 'transparent', border: 'none', color: '#ff4d4d', cursor: 'pointer', padding: 0, fontWeight: 'bold' }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <label style={labelStyle}>Sākuma Logo (480 × 120 px PNG):</label>
             <select
               style={selectStyle}
@@ -1230,18 +1328,6 @@ export default function Studio() {
             >
               <option value="">(Noklusējuma ikona 🎮)</option>
               {mediaList.filter((f) => /\.(png|webp|svg)$/i.test(f)).map((f) => (
-                <option key={f} value={f}>{f}</option>
-              ))}
-            </select>
-
-            <label style={labelStyle}>Sākuma Reklāmas bilde (1080 × 1920 px 9:16):</label>
-            <select
-              style={selectStyle}
-              value={mobileBranding.welcomeImage || ''}
-              onChange={(e) => setMobileBranding({ ...mobileBranding, welcomeImage: e.target.value })}
-            >
-              <option value="">(Nav reklāmas)</option>
-              {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
                 <option key={f} value={f}>{f}</option>
               ))}
             </select>
@@ -1288,7 +1374,7 @@ export default function Studio() {
               style={{ ...inputStyle, minHeight: '60px', resize: 'vertical', fontSize: '0.85rem' }}
               value={activeSlide.config.notes || ''}
               onChange={(e) => updateActiveSlide((s) => (s.config.notes = e.target.value))}
-              placeholder="Ieraksti skaidrojumu vai komentāru vadītājam šeit..."
+              placeholder="Ieraksti skaidrojumu vadītājam..."
             />
           </div>
 
@@ -1302,37 +1388,8 @@ export default function Studio() {
               >
                 <option value="ROUND">🏆 Round Scores (Kārtas punkti)</option>
                 <option value="TOTAL">⭐ Total Scores (Kopējie punkti)</option>
-                <option value="FINAL">🥇 Final Scores (Fināla apbalvošana & beigas)</option>
+                <option value="FINAL">🥇 Final Scores (Fināla apbalvošana)</option>
               </select>
-            </div>
-          )}
-
-          {activeSlide.type === 'BILLBOARD' && (
-            <div style={{ margin: '8px 0', borderTop: '1px solid #333', paddingTop: '8px' }}>
-              <button
-                style={{ ...btnSmallAction, background: '#007bff' }}
-                onClick={() => {
-                  const newTitle: CanvasElement = {
-                    id: `bb-txt-${Date.now()}`,
-                    type: 'TEXT',
-                    content: 'BILLBOARD VIRSRAKSTS',
-                    x: 10,
-                    y: 20,
-                    w: 80,
-                    h: 18,
-                    fontSize: 3.5,
-                    fontFamily: 'Segoe UI',
-                    color: '#ffc107',
-                    bgColor: '#000000',
-                    bgOpacity: 70,
-                    visibility: 'ALWAYS'
-                  };
-                  updateActiveSlide((s) => s.config.layout.push(newTitle));
-                  setSelectedElementIds([newTitle.id]);
-                }}
-              >
-                ➕ Pievienot Billboard tekstu
-              </button>
             </div>
           )}
 
@@ -1355,27 +1412,6 @@ export default function Studio() {
                 </button>
               </div>
 
-              {(selectedElement.type === 'VIDEO' || selectedElement.type === 'AUDIO') && (
-                <div style={{ marginBottom: '8px' }}>
-                  <label style={labelStyle}>🔊 Skaļums ({selectedElement.volume ?? 100}%):</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
-                    value={selectedElement.volume ?? 100}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      updateActiveSlide((s) => {
-                        const el = s.config.layout.find((x) => x.id === selectedElement.id);
-                        if (el) el.volume = val;
-                      });
-                    }}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              )}
-
               <label style={labelStyle}>Rādīt / Atskaņot:</label>
               <select
                 style={selectStyle}
@@ -1388,8 +1424,8 @@ export default function Studio() {
                 }
               >
                 <option value="ALWAYS">Visu laiku (Always)</option>
-                <option value="DURING_QUESTION">Kamēr rit jautājums (During Question)</option>
-                <option value="AFTER_REVEAL">Tikai atklājot pareizo (After Reveal)</option>
+                <option value="DURING_QUESTION">Kamēr rit jautājums (During Question - pazūd pie Reveal)</option>
+                <option value="AFTER_REVEAL">Tikai atklājot atbildi (After Reveal - parādās pie Reveal)</option>
               </select>
 
               {(selectedElement.type === 'VIDEO' || selectedElement.type === 'AUDIO') && (
@@ -1420,9 +1456,6 @@ export default function Studio() {
                         }}
                         style={inputStyle}
                       />
-                      <div style={{ fontSize: '0.75rem', color: '#00ff00', marginTop: '2px' }}>
-                        {secondsToTimeStr(selectedElement.trimStart || 0)}
-                      </div>
                     </div>
 
                     <div style={{ flex: 1 }}>
@@ -1444,9 +1477,6 @@ export default function Studio() {
                         }}
                         style={inputStyle}
                       />
-                      <div style={{ fontSize: '0.75rem', color: '#ffc107', marginTop: '2px' }}>
-                        {secondsToTimeStr(selectedElement.trimEnd || ((selectedElement.trimStart || 0) + 30))}
-                      </div>
                     </div>
                   </div>
 
@@ -1472,29 +1502,13 @@ export default function Studio() {
               onChange={(e) => updateActiveSlide((s) => (s.config.backgroundUrl = e.target.value))}
             >
               <option value="">(Melns fons)</option>
-              {mediaList
-                .filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f))
-                .map((f) => (
-                  <option key={f} value={f}>
-                    {f}
-                  </option>
-                ))}
+              {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
             </select>
-            <button
-              style={btnSmallAction}
-              onClick={() => {
-                const bg = activeSlide.config.backgroundUrl;
-                setSlides((prev) =>
-                  prev.map((sl) => ({ ...sl, config: { ...sl.config, backgroundUrl: bg } }))
-                );
-                alert('🖼️ Fons pielietots visiem slaidiem!');
-              }}
-            >
-              Pielietot šo fonu visiem slaidiem
-            </button>
           </div>
 
-          {/* JAUTĀJUMA / MAJORITY IESTATĪJUMI */}
+          {/* JAUTĀJUMA IESTATĪJUMI */}
           {(activeSlide.type === 'QUESTION' || activeSlide.type === 'MAJORITY') && (
             <div style={{ marginTop: '10px', borderTop: '1px solid #333', paddingTop: '10px' }}>
               <label style={labelStyle}>Atbilšu skaits (2-6):</label>
@@ -1502,10 +1516,7 @@ export default function Studio() {
                 {[2, 3, 4, 5, 6].map((num) => (
                   <button
                     key={num}
-                    style={{
-                      ...btnNumber,
-                      background: activeSlide.config.optionsCount === num ? '#007bff' : '#333'
-                    }}
+                    style={{ ...btnNumber, background: activeSlide.config.optionsCount === num ? '#007bff' : '#333' }}
                     onClick={() => {
                       updateActiveSlide((s) => {
                         s.config.optionsCount = num;
@@ -1534,24 +1545,8 @@ export default function Studio() {
                     <option value="ALL">☑️ Jānorāda visas pareizās (Daudzizvēle)</option>
                     <option value="ANY_ONE">☝️ Pietiek ar vienu pareizo (Viens klikšķis)</option>
                   </select>
-                  <div style={{ fontSize: '0.75rem', color: '#aaa' }}>
-                    {activeSlide.config.selectionMode === 'ANY_ONE'
-                      ? 'Spēlētājs nospiež 1 variantu. Ja tas ir starp pareizajiem, saņem 100% punktu.'
-                      : 'Spēlētājs telefonā ieķeksē vairākas un nospiež pogu "Iesniegt".'}
-                  </div>
                 </div>
               )}
-
-              <label style={labelStyle}>Izkārtojums:</label>
-              <select
-                style={selectStyle}
-                value={activeSlide.config.optionsLayout || 'GRID'}
-                onChange={(e) => updateActiveSlide((s) => (s.config.optionsLayout = e.target.value as any))}
-              >
-                <option value="GRID">Režģī (2 kolonnas)</option>
-                <option value="COLUMN">Stabiņā (1 kolonna)</option>
-                <option value="INDIVIDUAL">Brīvi vilkt (Individuāli)</option>
-              </select>
 
               <label style={labelStyle}>Punktu režīms:</label>
               <select
@@ -1565,7 +1560,7 @@ export default function Studio() {
 
               <div style={{ display: 'flex', gap: '8px' }}>
                 <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>Sākums / Max:</label>
+                  <label style={labelStyle}>Max punkti:</label>
                   <input
                     type="number"
                     style={inputStyle}
@@ -1581,7 +1576,7 @@ export default function Studio() {
                 </div>
                 {activeSlide.config.scoringMode === 'DECREASING' && (
                   <div style={{ flex: 1 }}>
-                    <label style={labelStyle}>Beigās / Min:</label>
+                    <label style={labelStyle}>Min punkti:</label>
                     <input
                       type="number"
                       style={inputStyle}
@@ -1678,7 +1673,7 @@ const sidebarLeft: React.CSSProperties = {
 };
 
 const sidebarRight: React.CSSProperties = {
-  width: '310px',
+  width: '320px',
   background: '#181818',
   borderLeft: '1px solid #333',
   padding: '12px',
@@ -1763,8 +1758,7 @@ const btnAddSlideUnderList: React.CSSProperties = {
   borderRadius: '6px',
   cursor: 'pointer',
   fontWeight: 'bold',
-  fontSize: '0.9rem',
-  boxShadow: '0 4px 10px rgba(0,123,255,0.3)'
+  fontSize: '0.9rem'
 };
 
 const inputStyle: React.CSSProperties = {

@@ -13,6 +13,7 @@ const BUTTON_COLORS = ['#007bff', '#fd7e14', '#28a745', '#ffc107', '#6f42c1', '#
 export default function Player() {
   const [pin, setPin] = useState(localStorage.getItem('player_pin') || '');
   const [name, setName] = useState(localStorage.getItem('player_name') || '');
+  const [teamName, setTeamName] = useState(localStorage.getItem('player_team') || '');
   const [playerId] = useState(() => {
     let id = localStorage.getItem('player_id');
     if (!id) {
@@ -26,6 +27,7 @@ export default function Player() {
   const [deviceNumber, setDeviceNumber] = useState<number | null>(null);
   const [isJoined, setIsJoined] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
+  const [isDisabledAfk, setIsDisabledAfk] = useState(false);
   const [scene, setScene] = useState<any>(null);
   const [subState, setSubState] = useState<string>('IDLE');
 
@@ -33,6 +35,7 @@ export default function Player() {
   const [selectedMultipleOptions, setSelectedMultipleOptions] = useState<string[]>([]);
 
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [teamLeaderboard, setTeamLeaderboard] = useState<any[]>([]);
   const [leaderboardType, setLeaderboardType] = useState<string>('TOTAL');
   const [podiumStage, setPodiumStage] = useState<number>(0);
   const [buzzerTestPresses, setBuzzerTestPresses] = useState(0);
@@ -48,7 +51,9 @@ export default function Player() {
             appBgImage: '',
             welcomeImage: '',
             appBgColor: '#121212',
-            lobbyMode: 'CIRCLE'
+            lobbyMode: 'CIRCLE',
+            teamModeEnabled: false,
+            predefinedTeams: []
           };
     } catch {
       return {
@@ -57,7 +62,9 @@ export default function Player() {
         appBgImage: '',
         welcomeImage: '',
         appBgColor: '#121212',
-        lobbyMode: 'CIRCLE'
+        lobbyMode: 'CIRCLE',
+        teamModeEnabled: false,
+        predefinedTeams: []
       };
     }
   });
@@ -80,9 +87,14 @@ export default function Player() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlPin = params.get('pin');
+    const urlTeam = params.get('team');
     if (urlPin) {
       setPin(urlPin.trim());
       localStorage.setItem('player_pin', urlPin.trim());
+    }
+    if (urlTeam) {
+      setTeamName(urlTeam.trim());
+      localStorage.setItem('player_team', urlTeam.trim());
     }
   }, []);
 
@@ -99,10 +111,11 @@ export default function Player() {
     const tryAutoJoin = () => {
       const savedPin = localStorage.getItem('player_pin');
       const savedName = localStorage.getItem('player_name');
+      const savedTeam = localStorage.getItem('player_team') || '';
       const wasJoined = sessionStorage.getItem('player_active_session') === 'true';
 
       if (wasJoined && savedPin && savedName) {
-        s.emit('join-session', { pin: savedPin.trim(), name: savedName.trim(), playerId });
+        s.emit('join-session', { pin: savedPin.trim(), name: savedName.trim(), teamName: savedTeam, playerId });
       }
     };
 
@@ -113,8 +126,10 @@ export default function Player() {
     s.on('join-success', (data: any) => {
       setIsJoined(true);
       setIsGameOver(false);
+      setIsDisabledAfk(false);
       sessionStorage.setItem('player_active_session', 'true');
       if (data?.deviceNumber) setDeviceNumber(data.deviceNumber);
+      if (data?.teamName) setTeamName(data.teamName);
       if (data?.branding) {
         setBranding((prev: any) => {
           const updated = { ...prev, ...data.branding };
@@ -127,6 +142,7 @@ export default function Player() {
       setSubState(currentSub);
       localStorage.setItem('player_pin', pin.trim());
       localStorage.setItem('player_name', name.trim());
+      if (teamName) localStorage.setItem('player_team', teamName.trim());
     });
 
     s.on('session-branding', (br: any) => {
@@ -159,8 +175,19 @@ export default function Player() {
       setPodiumStage(0);
     });
 
+    s.on('team-leaderboard-update', (payload: any) => {
+      const list = Array.isArray(payload) ? payload : (payload?.data || []);
+      setTeamLeaderboard(list);
+    });
+
     s.on('podium-stage-change', (stage: number) => {
       setPodiumStage(stage);
+    });
+
+    s.on('player-disabled-afk', (data: { playerId: string }) => {
+      if (data.playerId === playerId) {
+        setIsDisabledAfk(true);
+      }
     });
 
     s.on('game-over', () => setIsGameOver(true));
@@ -170,6 +197,7 @@ export default function Player() {
       localStorage.removeItem('player_pin');
       setIsJoined(false);
       setIsGameOver(false);
+      setIsDisabledAfk(false);
       setScene(null);
       setMyChoice(null);
       setSelectedMultipleOptions([]);
@@ -199,20 +227,18 @@ export default function Player() {
 
     localStorage.setItem('player_pin', pin.trim());
     localStorage.setItem('player_name', name.trim());
+    if (teamName) localStorage.setItem('player_team', teamName.trim());
     if (socket) {
-      socket.emit('join-session', { pin: pin.trim(), name: name.trim(), playerId });
+      socket.emit('join-session', { pin: pin.trim(), name: name.trim(), teamName: teamName.trim(), playerId });
     }
   };
 
-  // DAUDZIZVĒLES LOĢIKA:
-  // Serveris nenosūta atbildes, bet nosūta drošu requiredCount
   const requiredCount = scene?.config?.requiredCount ?? (scene?.config?.correctAnswers?.length || 1);
   const isMultiSelectMode = scene?.config?.selectionMode === 'ALL' && requiredCount > 1;
   const maxRequiredChoices = requiredCount > 0 ? requiredCount : 1;
 
-  // 1. Vienas atbildes jautājums: viens klikšķis, uzreiz bloķējas, atbildi mainīt NEVAR
   const handleSingleVoteSubmit = (option: string, letter: string) => {
-    if (myChoice || !socket) return;
+    if (myChoice || !socket || subState === 'PAUSED' || isDisabledAfk) return;
     try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
     setMyChoice(option || letter);
 
@@ -220,19 +246,15 @@ export default function Player() {
     socket.emit('participant:submit-answer', { pin, answer: option || letter, answers, playerId });
   };
 
-  // 2. Daudzizvēles jautājums: drīkst atzīmēt un pārdomāt līdz brīdim, kad nospiež "IESNIEGT"
   const toggleMultiSelectOption = (item: string) => {
-    if (myChoice) return;
+    if (myChoice || subState === 'PAUSED' || isDisabledAfk) return;
 
     setSelectedMultipleOptions((prev) => {
       if (prev.includes(item)) {
         try { if ('vibrate' in navigator) navigator.vibrate(30); } catch {}
         return prev.filter((x) => x !== item);
       } else {
-        if (prev.length >= maxRequiredChoices) {
-          try { if ('vibrate' in navigator) navigator.vibrate([40, 60, 40]); } catch {}
-          return prev;
-        }
+        if (prev.length >= maxRequiredChoices) return prev;
         try { if ('vibrate' in navigator) navigator.vibrate(50); } catch {}
         return [...prev, item];
       }
@@ -240,7 +262,7 @@ export default function Player() {
   };
 
   const handleMultiVoteSubmit = () => {
-    if (myChoice || !socket || selectedMultipleOptions.length !== maxRequiredChoices) return;
+    if (myChoice || !socket || selectedMultipleOptions.length !== maxRequiredChoices || subState === 'PAUSED' || isDisabledAfk) return;
     try { if ('vibrate' in navigator) navigator.vibrate(100); } catch {}
 
     const chosenStr = selectedMultipleOptions.join(', ');
@@ -266,6 +288,7 @@ export default function Player() {
     localStorage.removeItem('player_pin');
     setIsJoined(false);
     setIsGameOver(false);
+    setIsDisabledAfk(false);
     setScene(null);
     setMyChoice(null);
     setSelectedMultipleOptions([]);
@@ -275,7 +298,6 @@ export default function Player() {
   };
 
   const isRoundLb = leaderboardType === 'ROUND';
-
   const sortedLeaderboard = [...leaderboard]
     .filter((p) => !p.isDisabled)
     .sort((a, b) => {
@@ -300,30 +322,34 @@ export default function Player() {
     backgroundPosition: 'center'
   };
 
+  // 1. IELOGOŠANĀS SKATS
   if (!isJoined) {
+    const isTeamMode = branding?.teamModeEnabled;
+    const predefinedTeams: string[] = branding?.predefinedTeams || [];
+
     return (
       <div style={appBgStyle}>
         <div style={loginCard}>
           {branding.appLogo ? (
-            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+            <div style={{ textAlign: 'center', marginBottom: '15px' }}>
               <img
                 src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
                 alt="Logo"
-                style={{ maxHeight: '120px', maxWidth: '90%', objectFit: 'contain', filter: 'drop-shadow(0 4px 15px rgba(0,0,0,0.8))' }}
+                style={{ maxHeight: '110px', maxWidth: '85%', objectFit: 'contain', filter: 'drop-shadow(0 4px 15px rgba(0,0,0,0.8))' }}
               />
             </div>
           ) : (
-            <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>🎮</div>
+            <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🎮</div>
           )}
 
-          <h1 style={{ margin: '0 0 5px 0', fontSize: '1.8rem', color: '#ffc107', fontWeight: '900' }}>
+          <h1 style={{ margin: '0 0 5px 0', fontSize: '1.7rem', color: '#ffc107', fontWeight: '900' }}>
             {branding.appTitle || 'EVENT BUZZER'}
           </h1>
-          <p style={{ color: '#aaa', fontSize: '0.9rem', marginBottom: '20px' }}>
+          <p style={{ color: '#aaa', fontSize: '0.85rem', marginBottom: '15px' }}>
             Ievadiet spēles PIN un savu vārdu
           </p>
 
-          <form onSubmit={handleJoin} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <form onSubmit={handleJoin} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <input
               style={mobileInput}
               placeholder="PIN kods"
@@ -338,6 +364,31 @@ export default function Player() {
               onChange={(e) => setName(e.target.value)}
               maxLength={20}
             />
+
+            {/* KOMANDAS IZVĒLE (JA IESLĒGTS KOMANDU REŽĪMS) */}
+            {isTeamMode && (
+              predefinedTeams.length > 0 ? (
+                <select
+                  style={{ ...mobileInput, color: teamName ? '#00e5ff' : '#aaa' }}
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)}
+                >
+                  <option value="">-- Izvēlies komandu / galdiņu --</option>
+                  {predefinedTeams.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  style={{ ...mobileInput, borderColor: '#00e5ff' }}
+                  placeholder="Komandas nosaukums / Galdiņš"
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)}
+                  maxLength={25}
+                />
+              )
+            )}
+
             <button type="submit" style={btnJoin}>
               SĀKT 🚀
             </button>
@@ -347,6 +398,25 @@ export default function Player() {
     );
   }
 
+  // 2. AFK BRĪDINĀJUMA SKATS
+  if (isDisabledAfk) {
+    return (
+      <div style={appBgStyle}>
+        <div style={infoCard}>
+          <div style={{ fontSize: '3rem', marginBottom: '10px' }}>💤</div>
+          <h2 style={{ color: '#ff9800', margin: '0 0 10px 0' }}>ESI ATSLĒGTS NEAKTIVITĀTES DĒĻ</h2>
+          <p style={{ color: '#ccc', lineHeight: 1.5, margin: '0 0 15px 0' }}>
+            Tu ilgstoši neatbildēji uz jautājumiem. Lai atgrieztos spēlē, lūdzu, pasaki pasākuma vadītājam, lai tevi pieslēdz atpakaļ!
+          </p>
+          <button onClick={() => setIsDisabledAfk(false)} style={btnJoin}>
+            Pārbaudīt statusu 🔄
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. SĀKUMA GAIDĪŠANAS SKATS (LOBBY)
   if (!scene) {
     const isInteractiveLobby = branding.lobbyMode === 'INTERACTIVE_DOTS';
 
@@ -365,7 +435,9 @@ export default function Player() {
       >
         <div style={mobileHeader}>
           <div style={keypadBadge}>📟 Pults #{deviceNumber || 1}</div>
-          <span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#ffc107' }}>{name}</span>
+          <span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#ffc107' }}>
+            {name} {teamName && `[${teamName}]`}
+          </span>
           <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
         </div>
 
@@ -374,6 +446,11 @@ export default function Player() {
             <div style={infoCard}>
               <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>🎯</div>
               <h2 style={{ color: '#00e5ff', margin: '0 0 10px 0', fontSize: '1.4rem' }}>PĀRBAUDI PULTI!</h2>
+              {teamName && (
+                <div style={{ color: '#00ff00', fontWeight: 'bold', marginBottom: '8px' }}>
+                  👥 Komanda: {teamName}
+                </div>
+              )}
               <p style={{ color: '#ccc', fontSize: '0.95rem', lineHeight: 1.4, marginBottom: '20px' }}>
                 Nospiediet pogu, lai pārbaudītu pults darbību. Tava bumbiņa lielajā ekrānā pulsēs un mainīs krāsas!
               </p>
@@ -394,6 +471,11 @@ export default function Player() {
                 )}
                 <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🎧</div>
                 <h2 style={{ color: '#ffc107', margin: '0 0 10px 0' }}>GAIDĀM ŠOVA SĀKUMU!</h2>
+                {teamName && (
+                  <div style={{ color: '#00ff00', fontWeight: 'bold', marginBottom: '8px' }}>
+                    👥 Komanda: {teamName}
+                  </div>
+                )}
                 <p style={{ color: '#ccc', lineHeight: 1.5, margin: 0 }}>
                   Sekojiet līdzi lielajam ekrānam. Tiklīdz vadītājs palaidīs pirmo jautājumu, šeit parādīsies atbilžu pogas!
                 </p>
@@ -411,6 +493,7 @@ export default function Player() {
     );
   }
 
+  // 4. SPĒLES BEIGU SKATS (GAME OVER)
   if (isGameOver) {
     return (
       <div style={appBgStyle}>
@@ -435,6 +518,11 @@ export default function Player() {
             <div style={{ fontSize: '0.95rem', color: '#00e5ff', marginTop: '6px' }}>
               ⏱️ Kopējais laiks: {formatThinkingTime(myScoreData?.totalTimeMs)}
             </div>
+            {teamName && (
+              <div style={{ fontSize: '0.9rem', color: '#00ff00', marginTop: '6px' }}>
+                👥 Komanda: {teamName}
+              </div>
+            )}
           </div>
           <button onClick={handleLeaveOrNewGame} style={btnJoin}>
             🔄 SĀKT JAUNU SPĒLI / CITU PIN
@@ -469,6 +557,7 @@ export default function Player() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {teamName && <span style={{ fontSize: '0.8rem', color: '#00e5ff' }}>[{teamName}]</span>}
           <div style={{ background: '#000', border: '1px solid #00ff00', borderRadius: '6px', padding: '3px 8px', color: '#00ff00', fontWeight: 'bold', fontSize: '0.85rem' }}>
             PIN: {pin}
           </div>
@@ -477,8 +566,19 @@ export default function Player() {
       </div>
 
       <div style={mobileBody}>
-        {/* A) BILLBOARD EKRĀNS */}
-        {slideType === 'BILLBOARD' && (
+        {/* A) PAUZES BRĪDINĀJUMS */}
+        {currentSub === 'PAUSED' && (
+          <div style={{ ...infoCard, borderColor: '#ff9800', marginBottom: '15px' }}>
+            <div style={{ fontSize: '3rem', marginBottom: '8px' }}>⏸️</div>
+            <h2 style={{ color: '#ff9800', margin: '0 0 8px 0', fontSize: '1.4rem' }}>SPĒLE IR IEPAUZĒTA</h2>
+            <p style={{ color: '#ccc', margin: 0, fontSize: '0.95rem' }}>
+              Vadītājs ir iepauzējis laika atskaiti. Pultis īslaicīgi nobloķētas!
+            </p>
+          </div>
+        )}
+
+        {/* B) BILLBOARD EKRĀNS */}
+        {slideType === 'BILLBOARD' && currentSub !== 'PAUSED' && (
           <div style={infoCard}>
             {branding.appLogo && (
               <img
@@ -495,8 +595,8 @@ export default function Player() {
           </div>
         )}
 
-        {/* B) LĪDERU TABULA */}
-        {slideType === 'LEADERBOARD' && (
+        {/* C) LĪDERU TABULA */}
+        {slideType === 'LEADERBOARD' && currentSub !== 'PAUSED' && (
           <div style={infoCard}>
             {isFinalLeaderboard && podiumStage < 3 ? (
               <div>
@@ -540,6 +640,11 @@ export default function Player() {
                   <div style={{ fontSize: '0.9rem', color: '#00e5ff', marginTop: '4px' }}>
                     ⏱️ Atbildes laiks: {formatThinkingTime(leaderboardType === 'ROUND' ? (myScoreData?.roundTimeMs || 0) : (myScoreData?.totalTimeMs || 0))}
                   </div>
+                  {teamName && (
+                    <div style={{ fontSize: '0.85rem', color: '#00ff00', marginTop: '6px' }}>
+                      👥 Komanda: {teamName}
+                    </div>
+                  )}
                 </div>
                 <p style={{ color: '#888', fontSize: '0.8rem', margin: 0 }}>Skatieties lielo ekrānu, lai redzētu visus uzvarētājus!</p>
               </div>
@@ -547,8 +652,8 @@ export default function Player() {
           </div>
         )}
 
-        {/* C) JAUTĀJUMU EKRĀNS */}
-        {(slideType === 'QUESTION' || slideType === 'QUIZ' || slideType === 'VOTE' || slideType === 'MAJORITY' || slideType === '') && (
+        {/* D) JAUTĀJUMU EKRĀNS */}
+        {(slideType === 'QUESTION' || slideType === 'QUIZ' || slideType === 'VOTE' || slideType === 'MAJORITY' || slideType === '') && currentSub !== 'PAUSED' && (
           <>
             {/* 1. FĀZE: READY */}
             {currentSub === 'READY' && (
@@ -774,7 +879,9 @@ const mobileInput: React.CSSProperties = {
   color: '#fff',
   fontSize: '1.1rem',
   textAlign: 'center',
-  outline: 'none'
+  outline: 'none',
+  width: '100%',
+  boxSizing: 'border-box'
 };
 
 const btnJoin: React.CSSProperties = {
