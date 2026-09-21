@@ -38,12 +38,6 @@ const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
   return `rgba(${r}, ${g}, ${b}, ${opacityPercent / 100})`;
 };
 
-const getLobbyColor = (count: number) => {
-  if (count < 10) return '#00ff00';
-  if (count < 50) return '#007bff';
-  return '#ff00ff';
-};
-
 export const formatThinkingTime = (totalMs: number = 0): string => {
   if (!totalMs || totalMs <= 0) return '0 sek un 000 ms';
   
@@ -59,7 +53,6 @@ export const formatThinkingTime = (totalMs: number = 0): string => {
   return `${seconds} sek un ${msStr} ms`;
 };
 
-// REAKTĪVS MEDIJU ELEMENTS AR PRECIZU PARĀDĪŠANĀS / PAZUŠANAS LOĢIKU
 const MediaLayoutItem: React.FC<{
   el: any;
   subState: string;
@@ -73,16 +66,11 @@ const MediaLayoutItem: React.FC<{
   const currentSub = (subState || 'IDLE').toUpperCase();
   const isRevealPhase = isRevealed || currentSub === 'REVEAL';
 
-  // REDZAMĪBAS LOĢIKA:
-  // 1. ALWAYS: redzams vienmēr
-  // 2. DURING_QUESTION: redzams jautājuma/balsošanas laikā, bet PAZŪD pie atklāšanas (REVEAL)!
-  // 3. AFTER_REVEAL: parādās TIKAI pie atklāšanas (REVEAL)!
   const isVisible =
     vis === 'ALWAYS' ||
     (vis === 'DURING_QUESTION' && ['READY', 'ACTIVE', 'PAUSED', 'STATS'].includes(currentSub) && !isRevealPhase) ||
     (vis === 'AFTER_REVEAL' && isRevealPhase);
 
-  // ATSKAŅOŠANAS LOĢIKA
   const shouldPlay = isVisible && currentSub !== 'PAUSED' && (
     (vis === 'ALWAYS' && ['READY', 'ACTIVE', 'STATS', 'REVEAL'].includes(currentSub)) ||
     (vis === 'DURING_QUESTION' && currentSub === 'ACTIVE') ||
@@ -482,7 +470,6 @@ export default function Presentation() {
       if (data?.correctAnswers) setRevealedCorrectAnswers(data.correctAnswers);
       if (data?.correctnessMap) setRevealedCorrectnessMap(data.correctnessMap);
 
-      // Apturam taimera skaņas un uzreiz atskaņojam atklāšanas skaņu
       audioTimerRef.current?.pause();
       audioTimeUpRef.current?.pause();
 
@@ -527,7 +514,7 @@ export default function Presentation() {
       if ((e.key === 'c' || e.key === 'C') && (subState === 'STATS' || isRevealed)) {
         e.preventDefault();
         setIsStatsVisible((prev) => !prev);
-      } else if ((e.key === 't' || e.key === 'T') && scene?.type === 'LEADERBOARD') {
+      } else if ((e.key === 't' || e.key === 'T') && scene?.type === 'LEADERBOARD' && branding?.teamModeEnabled) {
         e.preventDefault();
         setShowTeamLeaderboard((prev) => !prev);
       }
@@ -554,8 +541,9 @@ export default function Presentation() {
       socket.off('leaderboard-page-change');
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [routePin]);
+  }, [routePin, subState, isRevealed, scene?.type, branding?.teamModeEnabled]);
 
+  const isTeamMode = !!branding?.teamModeEnabled;
   const currentSub = (subState || scene?.subState || 'IDLE').toUpperCase();
   const isQuestionType =
     scene?.type === 'QUESTION' ||
@@ -574,7 +562,6 @@ export default function Presentation() {
       (el.visibility === 'ALWAYS' || el.visibility === 'DURING_QUESTION')
   );
 
-  // 1. TAIMERA MŪZIKA: 00Time.mp3
   useEffect(() => {
     if (!isMediaReady || !audioTimerRef.current) return;
 
@@ -597,7 +584,6 @@ export default function Presentation() {
     }
   };
 
-  // 2. LAIKS BEIDZAS: 01laiksbeidzas.mp3
   useEffect(() => {
     if (!isMediaReady || !audioTimeUpRef.current) return;
 
@@ -608,7 +594,6 @@ export default function Presentation() {
     }
   }, [currentSub, isQuestionType, isMediaReady]);
 
-  // 3. ATKLĀJ ATBILDI: 02atklajatbildi.mp3
   useEffect(() => {
     if (!isMediaReady || !audioRevealRef.current) return;
 
@@ -620,7 +605,6 @@ export default function Presentation() {
     }
   }, [currentSub, isQuestionType, isMediaReady]);
 
-  // 4. FINĀLS LOOP: 04Finals.mp3
   useEffect(() => {
     if (!isMediaReady || !audioFinalsRef.current) return;
 
@@ -651,7 +635,6 @@ export default function Presentation() {
 
   const handleStartPresentation = () => {
     setIsMediaReady(true);
-    // Atbloķējam visus audio failus ar pirmo klikšķi un iestatām pilnu skaļumu
     [audioTimerRef.current, audioTimeUpRef.current, audioRevealRef.current, audioFinalsRef.current].forEach((a) => {
       if (a) {
         a.load();
@@ -674,21 +657,20 @@ export default function Presentation() {
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
 
-  // 1. LOBBY SKATS
+  // 1. LOBBY SKATS (ABI REŽĪMI)
   if (!scene) {
     const lobbyMode = branding?.lobbyMode || 'CIRCLE';
 
+    // A) REŽĪMS AR BUMBIŅĀM (INTERACTIVE_DOTS)
     if (lobbyMode === 'INTERACTIVE_DOTS') {
       const orbCfg = getDynamicOrbConfig(players.length);
 
       return (
         <div style={{ ...fullScreen, backgroundColor: branding.appBgColor || '#0a0a0a', padding: '25px 35px', boxSizing: 'border-box' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-              <div style={{ border: '4px solid #00ff00', padding: '8px 26px', borderRadius: '18px', boxShadow: '0 0 35px rgba(0,255,0,0.35)', background: '#000' }}>
-                <span style={{ fontSize: '1.4vw', color: '#888' }}>PIN: </span>
-                <span style={{ fontSize: '3.2vw', color: '#00ff00', fontWeight: 'bold' }}>{pin}</span>
-              </div>
+            <div style={{ border: '4px solid #00ff00', padding: '8px 26px', borderRadius: '18px', boxShadow: '0 0 35px rgba(0,255,0,0.35)', background: '#000' }}>
+              <span style={{ fontSize: '1.4vw', color: '#888' }}>PIN: </span>
+              <span style={{ fontSize: '3.2vw', color: '#00ff00', fontWeight: 'bold' }}>{pin}</span>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 18px', borderRadius: '15px', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
@@ -705,7 +687,7 @@ export default function Presentation() {
               🎮 PIESLĒGUŠIES DALĪBNIEKI ({participantCount}):
             </h2>
             <span style={{ fontSize: '1.1vw', color: '#aaa', marginTop: '4px', display: 'inline-block' }}>
-              Spiediet telefonā "Pārbaudīt pulti", lai mainītu krāsas un bumbiņa uzsprāgtu! 💥
+              Spiediet telefonā "Pārbaudīt pulti", lai mainītu krāsas un bumbiņa pulsētu! 💥
             </span>
           </div>
 
@@ -801,7 +783,7 @@ export default function Presentation() {
                     >
                       {p.name}
                     </span>
-                    {p.teamName && (
+                    {isTeamMode && p.teamName && (
                       <span style={{ fontSize: '0.65vw', color: '#00e5ff', marginTop: '2px' }}>
                         [{p.teamName}]
                       </span>
@@ -815,7 +797,7 @@ export default function Presentation() {
       );
     }
 
-    const circleColor = getLobbyColor(participantCount);
+    // B) KLASISKAIS REŽĪMS AR LIELO SKAITLI UN APLI (CIRCLE)
     const circleSize = `${Math.min(14 + participantCount * 0.2, 32)}vw`;
 
     return (
@@ -837,14 +819,14 @@ export default function Presentation() {
           style={{
             width: circleSize,
             height: circleSize,
-            border: `0.8vw solid ${circleColor}`,
+            border: '0.8vw solid #00ff00',
             borderRadius: '50%',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             transition: 'all 0.5s ease',
-            boxShadow: `0 0 50px ${circleColor}`,
+            boxShadow: '0 0 50px #00ff00',
             marginTop: '0.5vw'
           }}
         >
@@ -925,7 +907,6 @@ export default function Presentation() {
           overflow: 'hidden'
         }}
       >
-        {/* STUDIJĀ IZVIETOTIE MEDIJI (Pazūd pie REVEAL, ja bijis DURING_QUESTION) */}
         {scene?.config?.layout?.map((el: any, idx: number) => (
           <MediaLayoutItem
             key={el.id || `layout-el-${idx}`}
@@ -936,7 +917,6 @@ export default function Presentation() {
           />
         ))}
 
-        {/* ATBILŽU VARIANTI */}
         {shouldShowOptions && (
           optLayout === 'INDIVIDUAL' ? (
             optionsList.map((opt: string, i: number) => {
@@ -1066,21 +1046,20 @@ export default function Presentation() {
           )
         )}
 
-        {/* LĪDERU TABULA (Ar komandu pārslēgšanu ar taustiņu [T]) */}
         {scene.type === 'LEADERBOARD' && !isFinalLb && (
           <div style={leaderboardOverlay}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
               <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: 0 }}>
-                {showTeamLeaderboard ? '👥 KOMANDU KOPVĒRTĒJUMS' : isRoundLb ? '🏆 KĀRTAS REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
+                {isTeamMode && showTeamLeaderboard ? '👥 KOMANDU KOPVĒRTĒJUMS' : isRoundLb ? '🏆 KĀRTAS REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
               </h1>
-              {teamLeaderboard.length > 0 && (
+              {isTeamMode && teamLeaderboard.length > 0 && (
                 <span style={{ fontSize: '1vw', color: '#00e5ff', background: 'rgba(0,229,255,0.15)', padding: '4px 10px', borderRadius: '6px' }}>
                   Pārslēgt skatu [T]
                 </span>
               )}
             </div>
 
-            {showTeamLeaderboard ? (
+            {isTeamMode && showTeamLeaderboard ? (
               <div>
                 {teamLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((t, i) => (
                   <div key={t.name} style={leaderRow}>
@@ -1098,11 +1077,11 @@ export default function Presentation() {
 
                   return (
                     <div key={p.id || globalIndex} style={leaderRow}>
-                      <span>{globalIndex}. {p.name} {p.teamName && `[${p.teamName}]`}</span>
+                      <span>
+                        {globalIndex}. {p.name} {isTeamMode && p.teamName && `[${p.teamName}]`}
+                      </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                        <span style={timeTagStyle}>
-                          ⏱️ {formatThinkingTime(timeToDisplay)}
-                        </span>
+                        <span style={timeTagStyle}>⏱️ {formatThinkingTime(timeToDisplay)}</span>
                         <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
                           {scoreToDisplay} pt
                         </span>
@@ -1115,7 +1094,6 @@ export default function Presentation() {
           </div>
         )}
 
-        {/* FINĀLA APBALVOŠANA (Podium) */}
         {scene.type === 'LEADERBOARD' && isFinalLb && (
           <div style={{ width: '85vw', height: '80vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
             {podiumStage < 4 && (
@@ -1137,11 +1115,9 @@ export default function Presentation() {
                       }}
                     >
                       <span style={{ fontSize: '2vw', fontWeight: 'bold', color: '#fff', marginBottom: '4px' }}>
-                        {secondPlace.name}
+                        {secondPlace.name} {isTeamMode && secondPlace.teamName && `[${secondPlace.teamName}]`}
                       </span>
-                      <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>
-                        {secondPlace.score} pt
-                      </span>
+                      <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>{secondPlace.score} pt</span>
                       <span style={{ fontSize: '0.9vw', color: '#00e5ff', marginBottom: '8px' }}>
                         ⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}
                       </span>
@@ -1164,11 +1140,9 @@ export default function Presentation() {
                     >
                       <div style={{ fontSize: '2.5vw', marginBottom: '4px' }}>👑</div>
                       <span style={{ fontSize: '2.5vw', fontWeight: 'bold', color: '#ffd700', marginBottom: '4px', textShadow: '0 0 15px #ffd700' }}>
-                        {firstPlace.name}
+                        {firstPlace.name} {isTeamMode && firstPlace.teamName && `[${firstPlace.teamName}]`}
                       </span>
-                      <span style={{ fontSize: '1.5vw', color: '#fff', fontWeight: 'bold' }}>
-                        {firstPlace.score} pt
-                      </span>
+                      <span style={{ fontSize: '1.5vw', color: '#fff', fontWeight: 'bold' }}>{firstPlace.score} pt</span>
                       <span style={{ fontSize: '0.95vw', color: '#00e5ff', marginBottom: '8px' }}>
                         ⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}
                       </span>
@@ -1190,11 +1164,9 @@ export default function Presentation() {
                       }}
                     >
                       <span style={{ fontSize: '2vw', fontWeight: 'bold', color: '#fff', marginBottom: '4px' }}>
-                        {thirdPlace.name}
+                        {thirdPlace.name} {isTeamMode && thirdPlace.teamName && `[${thirdPlace.teamName}]`}
                       </span>
-                      <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>
-                        {thirdPlace.score} pt
-                      </span>
+                      <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>{thirdPlace.score} pt</span>
                       <span style={{ fontSize: '0.9vw', color: '#00e5ff', marginBottom: '8px' }}>
                         ⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}
                       </span>
@@ -1217,11 +1189,11 @@ export default function Presentation() {
                     const globalRank = 4 + leaderboardPage * 10 + i;
                     return (
                       <div key={p.id || globalRank} style={leaderRow}>
-                        <span>{globalRank}. {p.name} {p.teamName && `[${p.teamName}]`}</span>
+                        <span>
+                          {globalRank}. {p.name} {isTeamMode && p.teamName && `[${p.teamName}]`}
+                        </span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                          <span style={timeTagStyle}>
-                            ⏱️ {formatThinkingTime(p.totalTimeMs)}
-                          </span>
+                          <span style={timeTagStyle}>⏱️ {formatThinkingTime(p.totalTimeMs)}</span>
                           <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
                             {p.score} pt
                           </span>

@@ -6,17 +6,20 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
-    allowedHosts: true, // ŠĪ RINDIŅA ATĻAUJ CLOUDFLARE UN JEBKURU TUNELI!
+    allowedHosts: true, // Atļauj Cloudflare un citus tuneļus
     proxy: {
-      '/socket.io': {
-        target: 'http://localhost:3000',
-        ws: true
-      },
       '/api': {
-        target: 'http://localhost:3000'
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true
       },
       '/project-media': {
-        target: 'http://localhost:3000'
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true
+      },
+      '/socket.io': {
+        target: 'http://127.0.0.1:3000',
+        ws: true,
+        changeOrigin: true
       }
     }
   }

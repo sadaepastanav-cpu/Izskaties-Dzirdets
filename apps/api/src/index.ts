@@ -17,7 +17,7 @@ const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 3000;
 
-// Droša ADMIN atslēgas inicializācija: ja .env nav definēta atslēga, tiek uzģenerēta nejauša pagaidu atslēga
+// Droša ADMIN atslēgas inicializācija
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY || crypto.randomBytes(8).toString('hex');
 if (!process.env.ADMIN_API_KEY) {
   console.log(`🔑 [Drošība] Izveidota pagaidu ADMIN atslēga šai sesijai: ${ADMIN_API_KEY}`);
@@ -176,7 +176,6 @@ const sessionScores = new Map<string, Map<string, PlayerState>>();
 const participants = new Map<string, Set<string>>();
 const sessionHostTokens = new Map<string, string>();
 const sessionTimers = new Map<string, NodeJS.Timeout>();
-
 const socketPlayerMap = new Map<string, { pin: string; playerId: string }>();
 
 const clearSessionTimer = (pin: string) => {
@@ -313,7 +312,7 @@ const getSortedTeamLeaderboard = (playersMap: Map<string, PlayerState>, scoringM
 };
 
 // ==========================================
-// 5. CLOUDFLARE TUNELIS
+// 5. CLOUDFLARE TUNELIS (AUTOMĀTISKS)
 // ==========================================
 function startCloudflareTunnel(onReady?: (url: string) => void) {
   if (publicTunnelUrl) {
@@ -326,10 +325,10 @@ function startCloudflareTunnel(onReady?: (url: string) => void) {
     return;
   }
 
-  console.log('[Cloudflare] Startējam tuneli pēc pieprasījuma...');
+  console.log('[Cloudflare] ⏳ Automātiski startējam Cloudflare tuneli uz http://127.0.0.1:5173...');
 
   try {
-    tunnelProcess = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5173'], {
+    tunnelProcess = spawn('cloudflared', ['tunnel', '--url', 'http://127.0.0.1:5173'], {
       shell: true
     });
 
@@ -339,7 +338,7 @@ function startCloudflareTunnel(onReady?: (url: string) => void) {
       if (match && !publicTunnelUrl) {
         publicTunnelUrl = match[0];
         console.log(`\n=========================================`);
-        console.log(`🚀 DINAMISKAIS CLOUDFLARE LINKS: ${publicTunnelUrl}`);
+        console.log(`🚀 CLOUDFLARE TUNELIS GATAVS: ${publicTunnelUrl}`);
         console.log(`=========================================\n`);
 
         io.emit('tunnel-ready', { url: publicTunnelUrl });
@@ -385,6 +384,16 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/tunnel-url', (_req, res) => res.json({ tunnelUrl: publicTunnelUrl }));
 app.get('/api/network-ip', (_req, res) => res.json({ localIp: getLocalIpAddress(), tunnelUrl: publicTunnelUrl }));
+
+// Tūlītējs zīmola un komandu režīma nolasīšanas maršruts telefonam
+app.get('/api/session-branding/:pin', (req, res) => {
+  const session = sessions.get(req.params.pin);
+  if (session && session.branding) {
+    return res.json({ success: true, branding: session.branding, connectionUrl: session.connectionUrl || publicTunnelUrl });
+  }
+  res.status(404).json({ success: false, error: 'Sesija nav atrasta' });
+});
+
 app.get('/api/current-path', requireAdminAuth, (_req, res) => res.json({ currentPath: currentProjectPath }));
 
 app.post('/api/set-path', requireAdminAuth, (req, res) => {
@@ -505,9 +514,12 @@ app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   }
 });
 
+// CSV EKSPORTS
 app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
   const { pin } = req.params;
   const playersMap = sessionScores.get(pin);
+  const session = sessions.get(pin);
+  const isTeamMode = !!session?.branding?.teamModeEnabled;
 
   if (!playersMap || playersMap.size === 0) {
     return res.status(404).json({ error: 'Šai sesijai nav atrasti spēlētāju dati.' });
@@ -516,14 +528,23 @@ app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
   const sortedList = getSortedLeaderboard(playersMap, false);
 
   let csvContent = '\uFEFF';
-  csvContent += 'Vieta;Pults #;Vārds;Komanda;Kopējie Punkti;Kārtas Punkti;Apdomas Laiks (s);Milisekundes;Statuss\n';
+  if (isTeamMode) {
+    csvContent += 'Vieta;Pults #;Vārds;Komanda;Kopējie Punkti;Kārtas Punkti;Apdomas Laiks (s);Milisekundes;Statuss\n';
+  } else {
+    csvContent += 'Vieta;Pults #;Vārds;Kopējie Punkti;Kārtas Punkti;Apdomas Laiks (s);Milisekundes;Statuss\n';
+  }
 
   sortedList.forEach((p, idx) => {
     const seconds = ((p.totalTimeMs || 0) / 1000).toFixed(2);
     const status = p.isDisabled ? 'Atslēgts' : p.isBot ? 'Bots' : 'Aktīvs';
     const escapedName = `"${(p.name || '').replace(/"/g, '""')}"`;
-    const escapedTeam = `"${(p.teamName || 'Individuāli').replace(/"/g, '""')}"`;
-    csvContent += `${idx + 1};${p.deviceNumber || '-'};${escapedName};${escapedTeam};${p.score || 0};${p.roundScore || 0};${seconds};${p.totalTimeMs || 0};${status}\n`;
+    const escapedTeam = `"${(p.teamName || '').replace(/"/g, '""')}"`;
+
+    if (isTeamMode) {
+      csvContent += `${idx + 1};${p.deviceNumber || '-'};${escapedName};${escapedTeam};${p.score || 0};${p.roundScore || 0};${seconds};${p.totalTimeMs || 0};${status}\n`;
+    } else {
+      csvContent += `${idx + 1};${p.deviceNumber || '-'};${escapedName};${p.score || 0};${p.roundScore || 0};${seconds};${p.totalTimeMs || 0};${status}\n`;
+    }
   });
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -729,13 +750,9 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // 1. DROŠI LABOTS NOTIKUMS: pārbauda, vai konkrētā ligzda atbilst spēlētājam
   socket.on('participant:test-buzzer', (data: { pin: string; playerId: string }) => {
     const binding = socketPlayerMap.get(socket.id);
-    if (!binding || binding.pin !== data.pin || binding.playerId !== data.playerId) {
-      return socket.emit('error-message', 'Neautorizēta pīkstiena darbība!');
-    }
-
+    if (!binding || binding.pin !== data.pin || binding.playerId !== data.playerId) return;
     io.to(data.pin).emit('player-buzzer-test', { playerId: data.playerId });
   });
 
@@ -762,14 +779,13 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // 2. DROŠI LABOTS NOTIKUMS: stingra hostToken pārbaude
   socket.on('host:simulate-players', (data: { pin: string; hostToken: string; count: number }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) {
-      return socket.emit('error-message', 'Nav tiesību veikt botu simulāciju.');
-    }
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const players = sessionScores.get(data.pin);
+    const session = sessions.get(data.pin);
     if (!players) return;
 
+    const isTeamMode = !!session?.branding?.teamModeEnabled;
     const sampleTeams = ['1. Galdiņš', '2. Galdiņš', '3. Galdiņš', 'VIP Komanda'];
 
     for (let i = 0; i < data.count; i++) {
@@ -785,7 +801,7 @@ io.on('connection', (socket: Socket) => {
           roundTimeMs: 0,
           isDisabled: false,
           isBot: true,
-          teamName: sampleTeams[i % sampleTeams.length],
+          teamName: isTeamMode ? sampleTeams[i % sampleTeams.length] : '',
           missedQuestionsCount: 0
         });
       }
@@ -824,6 +840,7 @@ io.on('connection', (socket: Socket) => {
 
     clearSessionTimer(pin);
 
+    // FINĀLA APBALVOŠANA
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
       const activePlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
       const totalPlayers = activePlayers.length;
@@ -1085,9 +1102,13 @@ io.on('connection', (socket: Socket) => {
   socket.on('join-session', (data: { pin: string; name: string; playerId: string; teamName?: string; isCaptain?: boolean }) => {
     if (sessions.has(data.pin)) {
       socket.join(data.pin);
+      const session = sessions.get(data.pin);
       const players = sessionScores.get(data.pin)!;
+      const isTeamMode = !!session?.branding?.teamModeEnabled;
 
       let playerObj = players.get(data.playerId);
+      const sanitizedTeam = isTeamMode && data.teamName ? data.teamName.trim() : '';
+
       if (data.name !== 'EKRĀNS') {
         if (!participants.has(data.pin)) participants.set(data.pin, new Set());
         participants.get(data.pin)?.add(socket.id);
@@ -1097,9 +1118,9 @@ io.on('connection', (socket: Socket) => {
         if (!playerObj) {
           playerObj = {
             id: data.playerId,
-            name: data.name,
-            teamName: data.teamName || '',
-            isCaptain: !!data.isCaptain,
+            name: data.name.trim(),
+            teamName: sanitizedTeam,
+            isCaptain: isTeamMode ? !!data.isCaptain : false,
             deviceNumber: players.size + 1,
             score: 0,
             roundScore: 0,
@@ -1111,8 +1132,9 @@ io.on('connection', (socket: Socket) => {
           };
           players.set(data.playerId, playerObj);
         } else {
-          if (data.name && data.name !== playerObj.name) playerObj.name = data.name;
-          if (data.teamName !== undefined) playerObj.teamName = data.teamName;
+          if (data.name) playerObj.name = data.name.trim();
+          playerObj.teamName = sanitizedTeam;
+          if (isTeamMode && data.isCaptain !== undefined) playerObj.isCaptain = !!data.isCaptain;
         }
       }
 
@@ -1121,7 +1143,6 @@ io.on('connection', (socket: Socket) => {
         players: Array.from(players.values())
       });
 
-      const session = sessions.get(data.pin);
       const sanitizedScene = sanitizeSceneForPlayer(session?.currentScene, session?.subState);
 
       socket.emit('join-success', {
@@ -1132,7 +1153,8 @@ io.on('connection', (socket: Socket) => {
         connectionUrl: session?.connectionUrl || publicTunnelUrl || '',
         currentScene: sanitizedScene,
         subState: session?.subState,
-        teamName: playerObj?.teamName || ''
+        teamName: playerObj?.teamName || '',
+        isCaptain: !!playerObj?.isCaptain
       });
     } else {
       socket.emit('error-message', 'Sesija ar šādu PIN kodu nav atrasta.');
@@ -1167,4 +1189,6 @@ httpServer.listen(PORT, () => {
   console.log(`🚀 EVENT STUDIO SERVERIS PALAISTS UZ PORTA: ${PORT}`);
   console.log(`📡 Lokālā tīkla IP adrese: http://${getLocalIpAddress()}:5173`);
   console.log(`🔒 Snapshoti tiek droši glabāti: ${SECURE_DATA_DIR}`);
+
+  startCloudflareTunnel();
 });

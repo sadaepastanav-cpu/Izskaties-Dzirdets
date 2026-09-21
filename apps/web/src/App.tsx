@@ -5,7 +5,7 @@ import Host from './host';
 import Presentation from './presentation';
 import Studio from './studio';
 
-// Drošs un vizuāli pievilcīgs aizsardzības komponents
+// Droša un vizuāli pievilcīga administrācijas aizsardzība
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     return localStorage.getItem('isAdminAuthorized') === 'true';
@@ -17,7 +17,6 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     e.preventDefault();
     const savedKey = localStorage.getItem('admin_api_key') || 'izskaties_dzirdets_super_secret_key_2026';
     
-    // Pārbauda ievadīto paroli vai atslēgu
     if (passwordInput === 'admin123' || passwordInput === savedKey) {
       localStorage.setItem('isAdminAuthorized', 'true');
       setIsAdmin(true);
@@ -51,14 +50,14 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 
             {errorMsg && (
               <span style={{ color: '#ff4d4d', fontSize: '0.85rem', fontWeight: 'bold' }}>
-                ❌ Nepareiza parole!
+                ❌ Nepareiza parole! (Noklusējuma: admin123)
               </span>
             )}
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
               <button
                 type="button"
-                onClick={() => window.location.href = '/'}
+                onClick={() => (window.location.href = '/')}
                 style={{ ...lockBtnStyle, background: '#444' }}
               >
                 Atpakaļ
@@ -80,7 +79,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Publiskie maršruti */}
+        {/* Publiskie maršruti spēlētājiem un ekrānam */}
         <Route path="/" element={<Player />} />
         <Route path="/player" element={<Player />} />
         <Route path="/present/:pin" element={<Presentation />} />
@@ -103,14 +102,13 @@ export default function App() {
           }
         />
 
-        {/* 404 novirzīšana (novērš balto ekrānu pie nepareiza URL) */}
+        {/* 404 pāradresācija uz sākumlapu */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );
 }
 
-// Stili aizsardzības logam
 const lockScreenStyle: React.CSSProperties = {
   height: '100vh',
   width: '100vw',

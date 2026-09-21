@@ -11,9 +11,16 @@ const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 const BUTTON_COLORS = ['#007bff', '#fd7e14', '#28a745', '#ffc107', '#6f42c1', '#17a2b8'];
 
 export default function Player() {
-  const [pin, setPin] = useState(localStorage.getItem('player_pin') || '');
+  const params = new URLSearchParams(window.location.search);
+  const urlPin = params.get('pin') || '';
+  const urlTeam = params.get('team') || '';
+
+  const [pin, setPin] = useState(urlPin || localStorage.getItem('player_pin') || '');
   const [name, setName] = useState(localStorage.getItem('player_name') || '');
-  const [teamName, setTeamName] = useState(localStorage.getItem('player_team') || '');
+  const [teamName, setTeamName] = useState(urlTeam || localStorage.getItem('player_team') || '');
+  const [isCaptain, setIsCaptain] = useState(urlTeam ? false : localStorage.getItem('player_is_captain') === 'true');
+  const [isTeamFromQr] = useState(Boolean(urlTeam));
+
   const [playerId] = useState(() => {
     let id = localStorage.getItem('player_id');
     if (!id) {
@@ -34,6 +41,7 @@ export default function Player() {
   const [myChoice, setMyChoice] = useState<string | null>(null);
   const [selectedMultipleOptions, setSelectedMultipleOptions] = useState<string[]>([]);
 
+  const [playersList, setPlayersList] = useState<any[]>([]);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [teamLeaderboard, setTeamLeaderboard] = useState<any[]>([]);
   const [leaderboardType, setLeaderboardType] = useState<string>('TOTAL');
@@ -52,8 +60,7 @@ export default function Player() {
             welcomeImage: '',
             appBgColor: '#121212',
             lobbyMode: 'CIRCLE',
-            teamModeEnabled: false,
-            predefinedTeams: []
+            teamModeEnabled: Boolean(urlTeam)
           };
     } catch {
       return {
@@ -63,11 +70,12 @@ export default function Player() {
         welcomeImage: '',
         appBgColor: '#121212',
         lobbyMode: 'CIRCLE',
-        teamModeEnabled: false,
-        predefinedTeams: []
+        teamModeEnabled: Boolean(urlTeam)
       };
     }
   });
+
+  const [serverBaseUrl, setServerBaseUrl] = useState<string>('');
 
   useEffect(() => {
     let wakeLock: any = null;
@@ -84,20 +92,35 @@ export default function Player() {
     };
   }, []);
 
+  // 1. Zibenīgi nolasām zīmolu un sesijas datus
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlPin = params.get('pin');
-    const urlTeam = params.get('team');
     if (urlPin) {
-      setPin(urlPin.trim());
-      localStorage.setItem('player_pin', urlPin.trim());
-    }
-    if (urlTeam) {
-      setTeamName(urlTeam.trim());
-      localStorage.setItem('player_team', urlTeam.trim());
-    }
-  }, []);
+      const cleanP = urlPin.trim();
+      setPin(cleanP);
+      localStorage.setItem('player_pin', cleanP);
 
+      fetch(`${BACKEND_URL}/api/session-branding/${cleanP}`)
+        .then((r) => r.json())
+        .then((res) => {
+          if (res.success && res.branding) {
+            setBranding(res.branding);
+            localStorage.setItem('cached_branding', JSON.stringify(res.branding));
+            if (res.connectionUrl) setServerBaseUrl(res.connectionUrl);
+          }
+        })
+        .catch(() => {});
+    }
+
+    if (urlTeam) {
+      const cleanT = urlTeam.trim();
+      setTeamName(cleanT);
+      setIsCaptain(false);
+      localStorage.setItem('player_team', cleanT);
+      localStorage.setItem('player_is_captain', 'false');
+    }
+  }, [urlPin, urlTeam]);
+
+  // 2. Socket savienojums
   useEffect(() => {
     const s = io(BACKEND_URL, {
       reconnection: true,
@@ -109,13 +132,24 @@ export default function Player() {
     setSocket(s);
 
     const tryAutoJoin = () => {
-      const savedPin = localStorage.getItem('player_pin');
+      const savedPin = urlPin || localStorage.getItem('player_pin');
       const savedName = localStorage.getItem('player_name');
-      const savedTeam = localStorage.getItem('player_team') || '';
+      const savedTeam = urlTeam || localStorage.getItem('player_team') || '';
+      const savedCaptain = urlTeam ? false : localStorage.getItem('player_is_captain') === 'true';
       const wasJoined = sessionStorage.getItem('player_active_session') === 'true';
 
+      if (savedPin) {
+        s.emit('get-branding', { pin: savedPin.trim() });
+      }
+
       if (wasJoined && savedPin && savedName) {
-        s.emit('join-session', { pin: savedPin.trim(), name: savedName.trim(), teamName: savedTeam, playerId });
+        s.emit('join-session', {
+          pin: savedPin.trim(),
+          name: savedName.trim(),
+          teamName: savedTeam,
+          isCaptain: savedCaptain,
+          playerId
+        });
       }
     };
 
@@ -130,6 +164,8 @@ export default function Player() {
       sessionStorage.setItem('player_active_session', 'true');
       if (data?.deviceNumber) setDeviceNumber(data.deviceNumber);
       if (data?.teamName) setTeamName(data.teamName);
+      if (data?.isCaptain !== undefined) setIsCaptain(data.isCaptain);
+      if (data?.connectionUrl) setServerBaseUrl(data.connectionUrl);
       if (data?.branding) {
         setBranding((prev: any) => {
           const updated = { ...prev, ...data.branding };
@@ -142,6 +178,7 @@ export default function Player() {
       setSubState(currentSub);
       localStorage.setItem('player_pin', pin.trim());
       localStorage.setItem('player_name', name.trim());
+      localStorage.setItem('player_is_captain', String(isCaptain));
       if (teamName) localStorage.setItem('player_team', teamName.trim());
     });
 
@@ -152,6 +189,12 @@ export default function Player() {
           localStorage.setItem('cached_branding', JSON.stringify(updated));
           return updated;
         });
+      }
+    });
+
+    s.on('presence-update', (data: any) => {
+      if (Array.isArray(data?.players)) {
+        setPlayersList(data.players);
       }
     });
 
@@ -176,18 +219,14 @@ export default function Player() {
     });
 
     s.on('team-leaderboard-update', (payload: any) => {
-      const list = Array.isArray(payload) ? payload : (payload?.data || []);
+      const list = Array.isArray(payload) ? payload : payload?.data || [];
       setTeamLeaderboard(list);
     });
 
-    s.on('podium-stage-change', (stage: number) => {
-      setPodiumStage(stage);
-    });
+    s.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
 
     s.on('player-disabled-afk', (data: { playerId: string }) => {
-      if (data.playerId === playerId) {
-        setIsDisabledAfk(true);
-      }
+      if (data.playerId === playerId) setIsDisabledAfk(true);
     });
 
     s.on('game-over', () => setIsGameOver(true));
@@ -212,7 +251,7 @@ export default function Player() {
     return () => {
       s.disconnect();
     };
-  }, [playerId]);
+  }, [playerId, urlPin, urlTeam]);
 
   useEffect(() => {
     if (socket && pin && pin.trim().length >= 4) {
@@ -220,16 +259,36 @@ export default function Player() {
     }
   }, [pin, socket]);
 
+  // Ja saite satur komandu VAI projektā ir ieslēgts komandu režīms -> tas ir komandu režīms!
+  const isTeamMode = Boolean(branding?.teamModeEnabled || urlTeam || isTeamFromQr);
+
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
     if (!pin.trim()) return alert('Lūdzu ievadiet PIN kodu!');
     if (!name.trim()) return alert('Lūdzu ievadiet savu vārdu!');
 
+    if (isTeamMode) {
+      if (isCaptain && !teamName.trim()) {
+        return alert('Lūdzu ievadiet savas komandas nosaukumu!');
+      }
+      if (!isCaptain && !teamName.trim()) {
+        return alert('Lūdzu noskenējiet sava kapteiņa QR kodu!');
+      }
+    }
+
     localStorage.setItem('player_pin', pin.trim());
     localStorage.setItem('player_name', name.trim());
-    if (teamName) localStorage.setItem('player_team', teamName.trim());
+    localStorage.setItem('player_is_captain', String(isCaptain));
+    if (isTeamMode && teamName) localStorage.setItem('player_team', teamName.trim());
+
     if (socket) {
-      socket.emit('join-session', { pin: pin.trim(), name: name.trim(), teamName: teamName.trim(), playerId });
+      socket.emit('join-session', {
+        pin: pin.trim(),
+        name: name.trim(),
+        teamName: isTeamMode ? teamName.trim() : '',
+        isCaptain: isTeamMode ? isCaptain : false,
+        playerId
+      });
     }
   };
 
@@ -286,6 +345,8 @@ export default function Player() {
   const handleLeaveOrNewGame = () => {
     sessionStorage.removeItem('player_active_session');
     localStorage.removeItem('player_pin');
+    localStorage.removeItem('player_team');
+    localStorage.removeItem('player_is_captain');
     setIsJoined(false);
     setIsGameOver(false);
     setIsDisabledAfk(false);
@@ -301,11 +362,11 @@ export default function Player() {
   const sortedLeaderboard = [...leaderboard]
     .filter((p) => !p.isDisabled)
     .sort((a, b) => {
-      const scoreA = isRoundLb ? (a.roundScore ?? 0) : (a.score ?? 0);
-      const scoreB = isRoundLb ? (b.roundScore ?? 0) : (b.score ?? 0);
+      const scoreA = isRoundLb ? a.roundScore ?? 0 : a.score ?? 0;
+      const scoreB = isRoundLb ? b.roundScore ?? 0 : b.score ?? 0;
       if (scoreB !== scoreA) return scoreB - scoreA;
-      const timeA = isRoundLb ? (a.roundTimeMs || 0) : (a.totalTimeMs || 0);
-      const timeB = isRoundLb ? (b.roundTimeMs || 0) : (b.totalTimeMs || 0);
+      const timeA = isRoundLb ? a.roundTimeMs || 0 : a.totalTimeMs || 0;
+      const timeB = isRoundLb ? b.roundTimeMs || 0 : b.totalTimeMs || 0;
       return timeA - timeB;
     });
 
@@ -322,31 +383,36 @@ export default function Player() {
     backgroundPosition: 'center'
   };
 
+  const myTeammates = isTeamMode && teamName
+    ? playersList.filter((p) => p.teamName?.trim().toLowerCase() === teamName.trim().toLowerCase())
+    : [];
+
+  const baseHost = serverBaseUrl && serverBaseUrl.trim() !== '' ? serverBaseUrl.trim() : window.location.origin;
+  const captainJoinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}&team=${encodeURIComponent(teamName)}`;
+  const captainQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(captainJoinUrl)}`;
+
   // 1. IELOGOŠANĀS SKATS
   if (!isJoined) {
-    const isTeamMode = branding?.teamModeEnabled;
-    const predefinedTeams: string[] = branding?.predefinedTeams || [];
-
     return (
       <div style={appBgStyle}>
         <div style={loginCard}>
           {branding.appLogo ? (
-            <div style={{ textAlign: 'center', marginBottom: '15px' }}>
+            <div style={{ textAlign: 'center', marginBottom: '12px' }}>
               <img
                 src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
                 alt="Logo"
-                style={{ maxHeight: '110px', maxWidth: '85%', objectFit: 'contain', filter: 'drop-shadow(0 4px 15px rgba(0,0,0,0.8))' }}
+                style={{ maxHeight: '90px', maxWidth: '85%', objectFit: 'contain' }}
               />
             </div>
           ) : (
-            <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🎮</div>
+            <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>🎮</div>
           )}
 
-          <h1 style={{ margin: '0 0 5px 0', fontSize: '1.7rem', color: '#ffc107', fontWeight: '900' }}>
+          <h1 style={{ margin: '0 0 4px 0', fontSize: '1.5rem', color: '#ffc107', fontWeight: '900' }}>
             {branding.appTitle || 'EVENT BUZZER'}
           </h1>
           <p style={{ color: '#aaa', fontSize: '0.85rem', marginBottom: '15px' }}>
-            Ievadiet spēles PIN un savu vārdu
+            {isTeamMode ? (isTeamFromQr ? '👥 Pievienošanās komandai' : '👑 Komandu spēle: Izveido komandu') : 'Individuālā spēle'}
           </p>
 
           <form onSubmit={handleJoin} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -357,40 +423,51 @@ export default function Player() {
               onChange={(e) => setPin(e.target.value)}
               maxLength={6}
             />
+
             <input
               style={mobileInput}
               placeholder="Tavs Vārds"
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={20}
+              autoFocus
             />
 
-            {/* KOMANDAS IZVĒLE (JA IESLĒGTS KOMANDU REŽĪMS) */}
+            {/* KOMANDU LOĢIKA: Nav vairs nekādu "1. galdiņš" */}
             {isTeamMode && (
-              predefinedTeams.length > 0 ? (
-                <select
-                  style={{ ...mobileInput, color: teamName ? '#00e5ff' : '#aaa' }}
-                  value={teamName}
-                  onChange={(e) => setTeamName(e.target.value)}
-                >
-                  <option value="">-- Izvēlies komandu / galdiņu --</option>
-                  {predefinedTeams.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
+              isTeamFromQr ? (
+                // Dalībnieks noskenējis kapteiņa QR
+                <div style={{ background: '#1c2833', border: '1px solid #00e5ff', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#aaa' }}>Pievienojies komandai:</div>
+                  <div style={{ fontSize: '1.2rem', color: '#00ff00', fontWeight: 'bold', marginTop: '2px' }}>
+                    {teamName}
+                  </div>
+                </div>
               ) : (
-                <input
-                  style={{ ...mobileInput, borderColor: '#00e5ff' }}
-                  placeholder="Komandas nosaukums / Galdiņš"
-                  value={teamName}
-                  onChange={(e) => setTeamName(e.target.value)}
-                  maxLength={25}
-                />
+                // Kapteinis veido komandu no lielā ekrāna
+                <div style={{ background: '#261c02', border: '1px solid #ffc107', padding: '10px', borderRadius: '8px' }}>
+                  <label style={{ display: 'block', fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold', marginBottom: '4px', textAlign: 'left' }}>
+                    👑 Ievadi Komandas nosaukumu (Kapteinis):
+                  </label>
+                  <input
+                    style={{ ...mobileInput, borderColor: '#ffc107', color: '#ffc107', fontWeight: 'bold' }}
+                    placeholder="Piemēram: Zelta Bulta"
+                    value={teamName}
+                    onChange={(e) => {
+                      setTeamName(e.target.value);
+                      setIsCaptain(true);
+                    }}
+                    maxLength={25}
+                  />
+                  <div style={{ fontSize: '0.7rem', color: '#aaa', marginTop: '6px', textAlign: 'left' }}>
+                    💡 Biedri pievienosies, noskenējot tavu QR kodu nākamajā solī!
+                  </div>
+                </div>
               )
             )}
 
             <button type="submit" style={btnJoin}>
-              SĀKT 🚀
+              {isTeamMode && !isTeamFromQr ? 'IZVEIDOT KOMANDU 👑' : 'SĀKT SPĒLI 🚀'}
             </button>
           </form>
         </div>
@@ -398,7 +475,7 @@ export default function Player() {
     );
   }
 
-  // 2. AFK BRĪDINĀJUMA SKATS
+  // 2. AFK BRĪDINĀJUMS
   if (isDisabledAfk) {
     return (
       <div style={appBgStyle}>
@@ -406,7 +483,7 @@ export default function Player() {
           <div style={{ fontSize: '3rem', marginBottom: '10px' }}>💤</div>
           <h2 style={{ color: '#ff9800', margin: '0 0 10px 0' }}>ESI ATSLĒGTS NEAKTIVITĀTES DĒĻ</h2>
           <p style={{ color: '#ccc', lineHeight: 1.5, margin: '0 0 15px 0' }}>
-            Tu ilgstoši neatbildēji uz jautājumiem. Lai atgrieztos spēlē, lūdzu, pasaki pasākuma vadītājam, lai tevi pieslēdz atpakaļ!
+            Tu ilgstoši neatbildēji uz jautājumiem. Pasaki pasākuma vadītājam, lai tevi pieslēdz atpakaļ!
           </p>
           <button onClick={() => setIsDisabledAfk(false)} style={btnJoin}>
             Pārbaudīt statusu 🔄
@@ -416,95 +493,87 @@ export default function Player() {
     );
   }
 
-  // 3. SĀKUMA GAIDĪŠANAS SKATS (LOBBY)
+  // 3. LOBBY (Kapteinim rāda QR kodu, biedriem parasto gaidīšanu)
   if (!scene) {
-    const isInteractiveLobby = branding.lobbyMode === 'INTERACTIVE_DOTS';
-
     return (
-      <div
-        style={{
-          ...fullScreenMobile,
-          backgroundColor: '#000',
-          backgroundImage: branding.welcomeImage ? `url(${MEDIA_BASE_URL}/${branding.welcomeImage})` : 'none',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'space-between'
-        }}
-      >
+      <div style={{ ...fullScreenMobile, backgroundColor: '#000', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
         <div style={mobileHeader}>
-          <div style={keypadBadge}>📟 Pults #{deviceNumber || 1}</div>
+          <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
           <span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#ffc107' }}>
-            {name} {teamName && `[${teamName}]`}
+            {name} {isTeamMode && teamName && `[${teamName}]`}
           </span>
           <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
         </div>
 
-        <div style={{ margin: 'auto', textAlign: 'center', padding: '20px', width: '90%', maxWidth: '360px' }}>
-          {isInteractiveLobby ? (
-            <div style={infoCard}>
-              <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>🎯</div>
-              <h2 style={{ color: '#00e5ff', margin: '0 0 10px 0', fontSize: '1.4rem' }}>PĀRBAUDI PULTI!</h2>
-              {teamName && (
-                <div style={{ color: '#00ff00', fontWeight: 'bold', marginBottom: '8px' }}>
-                  👥 Komanda: {teamName}
-                </div>
-              )}
-              <p style={{ color: '#ccc', fontSize: '0.95rem', lineHeight: 1.4, marginBottom: '20px' }}>
-                Nospiediet pogu, lai pārbaudītu pults darbību. Tava bumbiņa lielajā ekrānā pulsēs un mainīs krāsas!
+        <div style={{ margin: 'auto', textAlign: 'center', padding: '15px', width: '90%', maxWidth: '380px', overflowY: 'auto' }}>
+          {isTeamMode && isCaptain && (
+            <div style={{ ...infoCard, border: '2px solid #ffc107', marginBottom: '15px', background: '#1c1705' }}>
+              <div style={{ fontSize: '0.9rem', color: '#ffc107', fontWeight: 'bold' }}>👑 TAVA KOMANDA: {teamName}</div>
+              <p style={{ margin: '6px 0 10px 0', fontSize: '1.1rem', color: '#fff', fontWeight: 'bold' }}>
+                Parādi šo QR kodu savam galdiņam!
               </p>
-
-              <button onClick={handleTestBuzzer} style={testBuzzerBtn}>
-                🔴 PĀRBAUDĪT PULTI ({buzzerTestPresses > 0 ? `Spiediens #${buzzerTestPresses} 💥` : 'SPIED ŠEIT 🎯'})
-              </button>
-            </div>
-          ) : (
-            !branding.welcomeImage && (
-              <div style={infoCard}>
-                {branding.appLogo && (
-                  <img
-                    src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
-                    alt="Logo"
-                    style={{ maxHeight: '110px', maxWidth: '85%', marginBottom: '15px', objectFit: 'contain' }}
-                  />
-                )}
-                <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🎧</div>
-                <h2 style={{ color: '#ffc107', margin: '0 0 10px 0' }}>GAIDĀM ŠOVA SĀKUMU!</h2>
-                {teamName && (
-                  <div style={{ color: '#00ff00', fontWeight: 'bold', marginBottom: '8px' }}>
-                    👥 Komanda: {teamName}
-                  </div>
-                )}
-                <p style={{ color: '#ccc', lineHeight: 1.5, margin: 0 }}>
-                  Sekojiet līdzi lielajam ekrānam. Tiklīdz vadītājs palaidīs pirmo jautājumu, šeit parādīsies atbilžu pogas!
-                </p>
+              
+              <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
+                <img
+                  src={captainQrUrl}
+                  alt="Captain QR"
+                  style={{ width: '160px', height: '160px', borderRadius: '10px', border: '3px solid #ffc107', background: '#fff', padding: '6px' }}
+                />
               </div>
-            )
+
+              <div style={{ fontSize: '0.85rem', color: '#00ff00', fontWeight: 'bold', marginBottom: '6px' }}>
+                👥 Pieslēgušies biedri ({myTeammates.length}):
+              </div>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', justifyContent: 'center', maxHeight: '80px', overflowY: 'auto' }}>
+                {myTeammates.map((m) => (
+                  <span key={m.id} style={{ background: '#332700', border: '1px solid #ffc107', padding: '3px 8px', borderRadius: '4px', fontSize: '0.8rem', color: '#fff' }}>
+                    {m.name} {m.isCaptain && '👑'}
+                  </span>
+                ))}
+              </div>
+            </div>
           )}
+
+          <div style={infoCard}>
+            {branding.appLogo && (
+              <img
+                src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
+                alt="Logo"
+                style={{ maxHeight: '80px', maxWidth: '80%', marginBottom: '10px', objectFit: 'contain' }}
+              />
+            )}
+            <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>🎯</div>
+            <h2 style={{ color: '#00e5ff', margin: '0 0 8px 0', fontSize: '1.3rem' }}>PĀRBAUDI PULTI!</h2>
+            {isTeamMode && teamName && (
+              <div style={{ color: '#00ff00', fontWeight: 'bold', marginBottom: '8px' }}>
+                👥 Komanda: {teamName}
+              </div>
+            )}
+            <p style={{ color: '#ccc', fontSize: '0.85rem', lineHeight: 1.4, marginBottom: '15px' }}>
+              Spied pogu, lai pārbaudītu darbību — tava bumbiņa lielajā ekrānā pulsēs!
+            </p>
+
+            <button onClick={handleTestBuzzer} style={testBuzzerBtn}>
+              🔴 PĀRBAUDĪT PULTI ({buzzerTestPresses > 0 ? `#${buzzerTestPresses} 💥` : 'SPIED ŠEIT 🎯'})
+            </button>
+          </div>
         </div>
 
         <div style={darkStatusStrip}>
-          <span style={{ color: '#00ff00', fontWeight: 'bold' }}>
-            ✅ Esi veiksmīgi pieslēdzies! Gaidi vadītāja startu...
+          <span style={{ color: '#00ff00', fontWeight: 'bold', fontSize: '0.85rem' }}>
+            ✅ Esi pieslēdzies! Gaidi vadītāja startu...
           </span>
         </div>
       </div>
     );
   }
 
-  // 4. SPĒLES BEIGU SKATS (GAME OVER)
+  // 4. GAME OVER
   if (isGameOver) {
     return (
       <div style={appBgStyle}>
         <div style={infoCard}>
-          {branding.appLogo && (
-            <img
-              src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
-              alt="Logo"
-              style={{ maxHeight: '90px', maxWidth: '85%', marginBottom: '15px', objectFit: 'contain' }}
-            />
-          )}
           <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>🎉</div>
           <h2 style={{ color: '#ffc107', margin: '0 0 10px 0' }}>SPĒLE IR NOSLĒGUSIES!</h2>
           <div style={rankBadge}>
@@ -518,14 +587,14 @@ export default function Player() {
             <div style={{ fontSize: '0.95rem', color: '#00e5ff', marginTop: '6px' }}>
               ⏱️ Kopējais laiks: {formatThinkingTime(myScoreData?.totalTimeMs)}
             </div>
-            {teamName && (
+            {isTeamMode && teamName && (
               <div style={{ fontSize: '0.9rem', color: '#00ff00', marginTop: '6px' }}>
                 👥 Komanda: {teamName}
               </div>
             )}
           </div>
           <button onClick={handleLeaveOrNewGame} style={btnJoin}>
-            🔄 SĀKT JAUNU SPĒLI / CITU PIN
+            🔄 SĀKT JAUNU SPĒLI
           </button>
         </div>
       </div>
@@ -550,14 +619,14 @@ export default function Player() {
     <div style={appBgStyle}>
       <div style={mobileHeader}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={keypadBadge}>📟 Pults #{deviceNumber || 1}</div>
+          <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
           <span style={{ fontWeight: 'bold', fontSize: '0.95rem', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {name}
           </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {teamName && <span style={{ fontSize: '0.8rem', color: '#00e5ff' }}>[{teamName}]</span>}
+          {isTeamMode && teamName && <span style={{ fontSize: '0.8rem', color: '#00e5ff' }}>[{teamName}]</span>}
           <div style={{ background: '#000', border: '1px solid #00ff00', borderRadius: '6px', padding: '3px 8px', color: '#00ff00', fontWeight: 'bold', fontSize: '0.85rem' }}>
             PIN: {pin}
           </div>
@@ -566,7 +635,6 @@ export default function Player() {
       </div>
 
       <div style={mobileBody}>
-        {/* A) PAUZES BRĪDINĀJUMS */}
         {currentSub === 'PAUSED' && (
           <div style={{ ...infoCard, borderColor: '#ff9800', marginBottom: '15px' }}>
             <div style={{ fontSize: '3rem', marginBottom: '8px' }}>⏸️</div>
@@ -577,16 +645,8 @@ export default function Player() {
           </div>
         )}
 
-        {/* B) BILLBOARD EKRĀNS */}
         {slideType === 'BILLBOARD' && currentSub !== 'PAUSED' && (
           <div style={infoCard}>
-            {branding.appLogo && (
-              <img
-                src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
-                alt="Logo"
-                style={{ maxHeight: '80px', maxWidth: '80%', marginBottom: '10px', objectFit: 'contain' }}
-              />
-            )}
             <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>👀</div>
             <h2 style={{ color: '#ffc107', margin: '0 0 10px 0', fontSize: '1.4rem' }}>SEKOJIET EKRĀNAM!</h2>
             <p style={{ color: '#fff', fontSize: '1.05rem', lineHeight: 1.5, margin: 0, fontWeight: 'bold' }}>
@@ -595,7 +655,6 @@ export default function Player() {
           </div>
         )}
 
-        {/* C) LĪDERU TABULA */}
         {slideType === 'LEADERBOARD' && currentSub !== 'PAUSED' && (
           <div style={infoCard}>
             {isFinalLeaderboard && podiumStage < 3 ? (
@@ -605,11 +664,6 @@ export default function Player() {
                 <p style={{ color: '#00e5ff', fontSize: '1.05rem', fontWeight: 'bold', lineHeight: 1.5, margin: 0 }}>
                   Skaties lielo ekrānu! Tūlīt tiks paziņoti uzvarētāji...
                 </p>
-                <div style={{ marginTop: '15px', color: '#aaa', fontSize: '0.9rem' }}>
-                  {podiumStage === 0 && 'Gatavojamies apbalvošanai...'}
-                  {podiumStage === 1 && '🥉 3. vieta atklāta!'}
-                  {podiumStage === 2 && '🥈 2. vieta atklāta!'}
-                </div>
               </div>
             ) : (
               <div>
@@ -640,22 +694,19 @@ export default function Player() {
                   <div style={{ fontSize: '0.9rem', color: '#00e5ff', marginTop: '4px' }}>
                     ⏱️ Atbildes laiks: {formatThinkingTime(leaderboardType === 'ROUND' ? (myScoreData?.roundTimeMs || 0) : (myScoreData?.totalTimeMs || 0))}
                   </div>
-                  {teamName && (
+                  {isTeamMode && teamName && (
                     <div style={{ fontSize: '0.85rem', color: '#00ff00', marginTop: '6px' }}>
                       👥 Komanda: {teamName}
                     </div>
                   )}
                 </div>
-                <p style={{ color: '#888', fontSize: '0.8rem', margin: 0 }}>Skatieties lielo ekrānu, lai redzētu visus uzvarētājus!</p>
               </div>
             )}
           </div>
         )}
 
-        {/* D) JAUTĀJUMU EKRĀNS */}
         {(slideType === 'QUESTION' || slideType === 'QUIZ' || slideType === 'VOTE' || slideType === 'MAJORITY' || slideType === '') && currentSub !== 'PAUSED' && (
           <>
-            {/* 1. FĀZE: READY */}
             {currentSub === 'READY' && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>⏳</div>
@@ -663,33 +714,11 @@ export default function Player() {
                 <p style={{ color: '#fff', fontSize: '1.1rem', lineHeight: 1.5, margin: 0, fontWeight: 'bold' }}>
                   Uzgaidi, tūlīt startēs laiks un parādīsies atbilžu varianti!
                 </p>
-                <p style={{ color: '#888', fontSize: '0.85rem', marginTop: '12px' }}>
-                  Seko līdzi jautājumam uz lielā ekrāna.
-                </p>
               </div>
             )}
 
-            {/* 2. FĀZE: ACTIVE */}
             {currentSub === 'ACTIVE' && (
               <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', boxSizing: 'border-box', padding: '5px 0' }}>
-                {branding.appLogo ? (
-                  <div style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', maxHeight: '14vh', minHeight: '50px', marginBottom: '4px' }}>
-                    <img
-                      src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
-                      alt="Logo"
-                      style={{
-                        maxHeight: '12vh',
-                        maxWidth: '85vw',
-                        height: 'auto',
-                        objectFit: 'contain',
-                        filter: 'drop-shadow(0 4px 15px rgba(0,0,0,0.9))'
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <div style={{ height: '6px' }} />
-                )}
-
                 <div style={textHeaderBadge}>
                   {myChoice
                     ? '✅ ATBILDE NOSŪTĪTA'
@@ -751,7 +780,6 @@ export default function Player() {
                   })}
                 </div>
 
-                {/* IESNIEGŠANAS POGA DAUDZIZVĒLEI */}
                 {isMultiSelectMode && !myChoice && (
                   <button
                     onClick={handleMultiVoteSubmit}
@@ -777,7 +805,6 @@ export default function Player() {
               </div>
             )}
 
-            {/* 3. FĀZE: STATS vai REVEAL */}
             {(currentSub === 'STATS' || currentSub === 'REVEAL') && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3rem', marginBottom: '10px' }}>📊</div>
@@ -833,8 +860,7 @@ const keypadBadge: React.CSSProperties = {
   fontWeight: 'bold',
   padding: '3px 8px',
   borderRadius: '6px',
-  fontSize: '0.85rem',
-  boxShadow: '0 0 8px rgba(255, 193, 7, 0.5)'
+  fontSize: '0.85rem'
 };
 
 const btnExitSmall: React.CSSProperties = {
@@ -863,7 +889,7 @@ const loginCard: React.CSSProperties = {
   background: 'rgba(20, 20, 20, 0.92)',
   border: '1px solid rgba(255, 255, 255, 0.15)',
   borderRadius: '16px',
-  padding: '25px 20px',
+  padding: '20px 18px',
   width: '85%',
   maxWidth: '360px',
   textAlign: 'center',
@@ -872,12 +898,12 @@ const loginCard: React.CSSProperties = {
 };
 
 const mobileInput: React.CSSProperties = {
-  padding: '12px',
+  padding: '10px',
   borderRadius: '8px',
   background: 'rgba(0, 0, 0, 0.8)',
   border: '1px solid #555',
   color: '#fff',
-  fontSize: '1.1rem',
+  fontSize: '1rem',
   textAlign: 'center',
   outline: 'none',
   width: '100%',
@@ -885,15 +911,14 @@ const mobileInput: React.CSSProperties = {
 };
 
 const btnJoin: React.CSSProperties = {
-  padding: '14px',
+  padding: '12px',
   borderRadius: '8px',
   background: '#28a745',
   color: '#fff',
   border: 'none',
-  fontSize: '1.05rem',
+  fontSize: '1rem',
   fontWeight: 'bold',
-  cursor: 'pointer',
-  boxShadow: '0 4px 12px rgba(40,167,69,0.4)'
+  cursor: 'pointer'
 };
 
 const infoCard: React.CSSProperties = {
@@ -901,7 +926,7 @@ const infoCard: React.CSSProperties = {
   background: 'rgba(20, 20, 20, 0.9)',
   border: '1px solid rgba(255, 255, 255, 0.15)',
   borderRadius: '16px',
-  padding: '25px 15px',
+  padding: '20px 15px',
   width: '90%',
   maxWidth: '360px',
   boxShadow: '0 10px 30px rgba(0,0,0,0.9)',
@@ -918,7 +943,6 @@ const rankBadge: React.CSSProperties = {
 
 const textHeaderBadge: React.CSSProperties = {
   background: 'rgba(0, 0, 0, 0.85)',
-  backdropFilter: 'blur(8px)',
   padding: '6px 14px',
   borderRadius: '8px',
   border: '1px solid rgba(255, 255, 255, 0.15)',
@@ -926,13 +950,11 @@ const textHeaderBadge: React.CSSProperties = {
   color: '#ffc107',
   fontWeight: 'bold',
   fontSize: '0.95rem',
-  margin: '0 auto 4px auto',
-  display: 'inline-block'
+  margin: '0 auto 4px auto'
 };
 
 const voteConfirmedBadge: React.CSSProperties = {
   background: 'rgba(0, 0, 0, 0.85)',
-  backdropFilter: 'blur(8px)',
   padding: '6px 14px',
   borderRadius: '8px',
   border: '1px solid #28a745',
@@ -951,15 +973,13 @@ const btnSubmitMulti: React.CSSProperties = {
   border: '2px solid #fff',
   fontSize: '1.05rem',
   fontWeight: 'bold',
-  boxShadow: '0 0 15px rgba(40, 167, 69, 0.6)',
   marginTop: '8px'
 };
 
 const darkStatusStrip: React.CSSProperties = {
   background: 'rgba(0, 0, 0, 0.9)',
-  padding: '14px',
+  padding: '12px',
   textAlign: 'center',
-  backdropFilter: 'blur(8px)',
   borderTop: '1px solid rgba(255, 255, 255, 0.1)'
 };
 
@@ -972,22 +992,18 @@ const buzzerBtnCompact: React.CSSProperties = {
   justifyContent: 'center',
   padding: '0 15px',
   cursor: 'pointer',
-  transition: 'transform 0.1s ease',
   boxSizing: 'border-box',
-  userSelect: 'none',
-  WebkitTapHighlightColor: 'transparent'
+  userSelect: 'none'
 };
 
 const testBuzzerBtn: React.CSSProperties = {
   width: '100%',
-  padding: '16px',
+  padding: '14px',
   borderRadius: '12px',
   background: 'linear-gradient(135deg, #e63946, #d90429)',
   color: '#fff',
   border: '2px solid #fff',
-  fontSize: '1.1rem',
+  fontSize: '1rem',
   fontWeight: 'bold',
-  cursor: 'pointer',
-  boxShadow: '0 0 25px rgba(217, 4, 41, 0.6)',
-  transition: 'transform 0.1s ease'
+  cursor: 'pointer'
 };

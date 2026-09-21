@@ -12,6 +12,7 @@ export default function Host() {
   const [hostToken, setHostToken] = useState<string | null>(localStorage.getItem('active_host_token'));
   const [scenes, setScenes] = useState<any[]>([]);
   const [currentScene, setCurrentScene] = useState<any>(null);
+  const [branding, setBranding] = useState<any>({});
   const [folder, setFolder] = useState<string>(
     localStorage.getItem('event_studio_folder') || ''
   );
@@ -31,9 +32,7 @@ export default function Host() {
     (localStorage.getItem('event_conn_mode') as any) || 'TUNNEL'
   );
   const [localIp, setLocalIp] = useState<string>('localhost');
-  const [customTunnelUrl, setCustomTunnelUrl] = useState<string>(
-    localStorage.getItem('event_tunnel_url') || ''
-  );
+  const [customTunnelUrl, setCustomTunnelUrl] = useState<string>('');
   const [isTunnelAutoDetected, setIsTunnelAutoDetected] = useState(false);
 
   useEffect(() => {
@@ -54,7 +53,8 @@ export default function Host() {
           setCustomTunnelUrl(d.tunnelUrl);
           setConnectionMode('TUNNEL');
           setIsTunnelAutoDetected(true);
-          localStorage.setItem('event_tunnel_url', d.tunnelUrl);
+        } else {
+          setCustomTunnelUrl('');
         }
       })
       .catch(() => {});
@@ -154,6 +154,7 @@ export default function Host() {
                   setHostToken(rec.hostToken);
                   setCurrentScene(rec.state?.currentScene);
                   setScenes(rec.state?.scenes || []);
+                  if (rec.state?.branding) setBranding(rec.state.branding);
                   localStorage.setItem('active_pin', rec.pin);
                   if (rec.hostToken) localStorage.setItem('active_host_token', rec.hostToken);
                 }
@@ -173,6 +174,7 @@ export default function Host() {
       if (!res.ok) throw new Error('Neizdevās ielādēt failu');
 
       const projectData = await res.json();
+      setBranding(projectData.branding || {});
       localStorage.setItem('event_conn_mode', connectionMode);
       localStorage.setItem('event_tunnel_url', customTunnelUrl);
 
@@ -272,7 +274,7 @@ export default function Host() {
             <div class="diploma">
               <h1>🏆 DIPLOMS 🏆</h1>
               <h2>Par iegūto ${idx + 1}. vietu spēlē</h2>
-              <div class="winner">${p.name}</div>
+              <div class="winner">${p.name} ${branding?.teamModeEnabled && p.teamName ? `(${p.teamName})` : ''}</div>
               <div class="score">Iegūtie punkti: <strong>${p.score || 0} pt</strong></div>
               <div class="footer">Event Studio • Spēles PIN: ${pin} • ${new Date().toLocaleDateString('lv-LV')}</div>
             </div>
@@ -308,6 +310,7 @@ export default function Host() {
       }
       setScenes(data.state?.scenes || []);
       setCurrentScene(data.state?.currentScene);
+      if (data.state?.branding) setBranding(data.state.branding);
       localStorage.setItem('active_pin', data.pin);
     };
 
@@ -347,7 +350,6 @@ export default function Host() {
 
       if (e.code === 'Space' && pin && hostToken) {
         e.preventDefault();
-        // Ja fāze ir ACTIVE, [SPACE] tiek bloķēts, lai nejauši nepārtrauktu laiku!
         if (currentScene?.subState === 'ACTIVE') return;
         socket.emit('host:advance', { pin, hostToken });
       } else if ((e.key === 'p' || e.key === 'P') && pin && hostToken) {
@@ -372,6 +374,7 @@ export default function Host() {
     };
   }, [pin, hostToken, currentScene?.subState]);
 
+  const isTeamMode = !!branding?.teamModeEnabled;
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
 
@@ -534,7 +537,6 @@ export default function Host() {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {/* PAUZES POGA */}
           {(isCurrentActive || isCurrentPaused) && (
             <button
               onClick={handlePauseResume}
@@ -545,7 +547,6 @@ export default function Host() {
             </button>
           )}
 
-          {/* JAUTĀJUMA ATKĀRTOŠANAS POGA */}
           {(isCurrentActive || isCurrentPaused || currentScene?.subState === 'STATS') && (
             <button onClick={handleRestartQuestion} style={btnGray} title="Sākt šo jautājumu no jauna bez punktiem">
               🔄 No jauna
@@ -587,7 +588,6 @@ export default function Host() {
           </div>
         </div>
 
-        {/* NĀKAMAIS SLAIDS (PREVIEW) */}
         <div style={{ background: '#1c1c1c', border: '1px solid #444', borderRadius: '8px', padding: '10px 15px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <div style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>⏭️ NĀKAMAIS SLAIDS (PREVIEW):</div>
           <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: 'bold', marginTop: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -665,16 +665,18 @@ export default function Host() {
             >
               👥 Spēlētāji ({playersList.length})
             </button>
-            <button
-              onClick={() => setActiveTab('TEAMS')}
-              style={{
-                ...tabButton,
-                borderBottom: activeTab === 'TEAMS' ? '3px solid #ffc107' : 'none',
-                color: activeTab === 'TEAMS' ? '#ffc107' : '#888'
-              }}
-            >
-              🏆 Komandas ({teamLeaderboard.length})
-            </button>
+            {isTeamMode && (
+              <button
+                onClick={() => setActiveTab('TEAMS')}
+                style={{
+                  ...tabButton,
+                  borderBottom: activeTab === 'TEAMS' ? '3px solid #ffc107' : 'none',
+                  color: activeTab === 'TEAMS' ? '#ffc107' : '#888'
+                }}
+              >
+                🏆 Komandas ({teamLeaderboard.length})
+              </button>
+            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -740,7 +742,7 @@ export default function Host() {
                 <tr style={{ borderBottom: '2px solid #444', color: '#aaa' }}>
                   <th style={{ padding: '8px' }}>Pults</th>
                   <th style={{ padding: '8px' }}>Vārds</th>
-                  <th style={{ padding: '8px' }}>Komanda</th>
+                  {isTeamMode && <th style={{ padding: '8px' }}>Komanda</th>}
                   <th style={{ padding: '8px' }}>Punkti</th>
                   <th style={{ padding: '8px' }}>Laiks</th>
                   <th style={{ padding: '8px', textAlign: 'center' }}>Darbība</th>
@@ -759,9 +761,11 @@ export default function Host() {
                         <span style={{ fontSize: '0.75rem', color: '#dc3545', marginLeft: '5px', fontWeight: 'bold' }}>[Atslēgts]</span>
                       )}
                     </td>
-                    <td style={{ padding: '8px' }}>
-                      <input value={p.teamName || ''} onChange={(e) => updatePlayer(p.id, { teamName: e.target.value })} placeholder="Komanda" style={{ ...tableInput, width: '110px' }} />
-                    </td>
+                    {isTeamMode && (
+                      <td style={{ padding: '8px' }}>
+                        <input value={p.teamName || ''} onChange={(e) => updatePlayer(p.id, { teamName: e.target.value })} placeholder="Komanda" style={{ ...tableInput, width: '110px' }} />
+                      </td>
+                    )}
                     <td style={{ padding: '8px' }}>
                       <input type="number" value={p.score ?? 0} onChange={(e) => updatePlayer(p.id, { score: Number(e.target.value) })} style={{ ...tableInput, width: '60px', color: 'gold', fontWeight: 'bold' }} />
                     </td>
@@ -790,8 +794,7 @@ export default function Host() {
           </div>
         )}
 
-        {/* KOMANDU REZULTĀTI */}
-        {activeTab === 'TEAMS' && (
+        {isTeamMode && activeTab === 'TEAMS' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
             <h4 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>🏆 KOMANDU KOPVĒRTĒJUMS</h4>
             {teamLeaderboard.length === 0 ? (
