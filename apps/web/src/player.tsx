@@ -92,7 +92,6 @@ export default function Player() {
     };
   }, []);
 
-  // 1. Zibenīgi nolasām zīmolu un sesijas datus
   useEffect(() => {
     if (urlPin) {
       const cleanP = urlPin.trim();
@@ -120,7 +119,6 @@ export default function Player() {
     }
   }, [urlPin, urlTeam]);
 
-  // 2. Socket savienojums
   useEffect(() => {
     const s = io(BACKEND_URL, {
       reconnection: true,
@@ -251,7 +249,7 @@ export default function Player() {
     return () => {
       s.disconnect();
     };
-  }, [playerId, urlPin, urlTeam]);
+  }, [playerId, urlPin, urlTeam, pin, name, isCaptain, teamName]);
 
   useEffect(() => {
     if (socket && pin && pin.trim().length >= 4) {
@@ -259,7 +257,6 @@ export default function Player() {
     }
   }, [pin, socket]);
 
-  // Ja saite satur komandu VAI projektā ir ieslēgts komandu režīms -> tas ir komandu režīms!
   const isTeamMode = Boolean(branding?.teamModeEnabled || urlTeam || isTeamFromQr);
 
   const handleJoin = (e: React.FormEvent) => {
@@ -268,17 +265,17 @@ export default function Player() {
     if (!name.trim()) return alert('Lūdzu ievadiet savu vārdu!');
 
     if (isTeamMode) {
-      if (isCaptain && !teamName.trim()) {
+      if (!isTeamFromQr && !teamName.trim()) {
         return alert('Lūdzu ievadiet savas komandas nosaukumu!');
       }
-      if (!isCaptain && !teamName.trim()) {
-        return alert('Lūdzu noskenējiet sava kapteiņa QR kodu!');
+      if (isTeamFromQr && !teamName.trim()) {
+        return alert('Kļūda komandas saitē. Noskenējiet kapteiņa QR kodu vēlreiz.');
       }
     }
 
     localStorage.setItem('player_pin', pin.trim());
     localStorage.setItem('player_name', name.trim());
-    localStorage.setItem('player_is_captain', String(isCaptain));
+    localStorage.setItem('player_is_captain', String(!isTeamFromQr));
     if (isTeamMode && teamName) localStorage.setItem('player_team', teamName.trim());
 
     if (socket) {
@@ -286,7 +283,7 @@ export default function Player() {
         pin: pin.trim(),
         name: name.trim(),
         teamName: isTeamMode ? teamName.trim() : '',
-        isCaptain: isTeamMode ? isCaptain : false,
+        isCaptain: isTeamMode ? !isTeamFromQr : false,
         playerId
       });
     }
@@ -375,6 +372,11 @@ export default function Player() {
   const myRank = myRankIndex !== -1 ? myRankIndex + 1 : '-';
   const myScoreData = myRankIndex !== -1 ? sortedLeaderboard[myRankIndex] : null;
 
+  const myTeamData = isTeamMode && teamName ? teamLeaderboard.find((t) => t.name?.toLowerCase() === teamName.toLowerCase()) : null;
+  const myTeamRankIndex = isTeamMode && teamName ? teamLeaderboard.findIndex((t) => t.name?.toLowerCase() === teamName.toLowerCase()) : -1;
+  const myTeamRank = myTeamRankIndex !== -1 ? myTeamRankIndex + 1 : '-';
+  const totalTeamsCount = teamLeaderboard.length || 1;
+
   const appBgStyle: React.CSSProperties = {
     ...fullScreenMobile,
     backgroundColor: branding.appBgColor || '#121212',
@@ -391,7 +393,6 @@ export default function Player() {
   const captainJoinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}&team=${encodeURIComponent(teamName)}`;
   const captainQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(captainJoinUrl)}`;
 
-  // 1. IELOGOŠANĀS SKATS
   if (!isJoined) {
     return (
       <div style={appBgStyle}>
@@ -433,10 +434,8 @@ export default function Player() {
               autoFocus
             />
 
-            {/* KOMANDU LOĢIKA: Nav vairs nekādu "1. galdiņš" */}
             {isTeamMode && (
               isTeamFromQr ? (
-                // Dalībnieks noskenējis kapteiņa QR
                 <div style={{ background: '#1c2833', border: '1px solid #00e5ff', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
                   <div style={{ fontSize: '0.75rem', color: '#aaa' }}>Pievienojies komandai:</div>
                   <div style={{ fontSize: '1.2rem', color: '#00ff00', fontWeight: 'bold', marginTop: '2px' }}>
@@ -444,7 +443,6 @@ export default function Player() {
                   </div>
                 </div>
               ) : (
-                // Kapteinis veido komandu no lielā ekrāna
                 <div style={{ background: '#261c02', border: '1px solid #ffc107', padding: '10px', borderRadius: '8px' }}>
                   <label style={{ display: 'block', fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold', marginBottom: '4px', textAlign: 'left' }}>
                     👑 Ievadi Komandas nosaukumu (Kapteinis):
@@ -475,7 +473,6 @@ export default function Player() {
     );
   }
 
-  // 2. AFK BRĪDINĀJUMS
   if (isDisabledAfk) {
     return (
       <div style={appBgStyle}>
@@ -493,7 +490,6 @@ export default function Player() {
     );
   }
 
-  // 3. LOBBY (Kapteinim rāda QR kodu, biedriem parasto gaidīšanu)
   if (!scene) {
     return (
       <div style={{ ...fullScreenMobile, backgroundColor: '#000', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -569,30 +565,38 @@ export default function Player() {
     );
   }
 
-  // 4. GAME OVER
   if (isGameOver) {
     return (
       <div style={appBgStyle}>
         <div style={infoCard}>
           <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>🎉</div>
           <h2 style={{ color: '#ffc107', margin: '0 0 10px 0' }}>SPĒLE IR NOSLĒGUSIES!</h2>
-          <div style={rankBadge}>
-            <div style={{ fontSize: '0.9rem', color: '#aaa' }}>Tavs gala rezultāts:</div>
-            <div style={{ fontSize: '3.2rem', fontWeight: 'bold', color: '#00ff00', margin: '5px 0' }}>
-              #{myRank} <span style={{ fontSize: '1.4rem', color: '#888' }}>/ {totalPlayersCount}</span>
-            </div>
-            <div style={{ fontSize: '1.2rem', color: '#fff' }}>
-              Punkti: <strong style={{ color: 'gold' }}>{myScoreData?.score ?? 0} pt</strong>
-            </div>
-            <div style={{ fontSize: '0.95rem', color: '#00e5ff', marginTop: '6px' }}>
-              ⏱️ Kopējais laiks: {formatThinkingTime(myScoreData?.totalTimeMs)}
-            </div>
-            {isTeamMode && teamName && (
-              <div style={{ fontSize: '0.9rem', color: '#00ff00', marginTop: '6px' }}>
-                👥 Komanda: {teamName}
+
+          {isTeamMode && teamName && (
+            <div style={{ ...rankBadge, borderColor: '#00e5ff', background: '#0a1d2e', marginBottom: '10px' }}>
+              <div style={{ fontSize: '0.85rem', color: '#00e5ff', fontWeight: 'bold' }}>👥 KOMANDAS REZULTĀTS ({teamName}):</div>
+              <div style={{ fontSize: '2.4rem', fontWeight: 'bold', color: '#00ff00', margin: '3px 0' }}>
+                #{myTeamRank} <span style={{ fontSize: '1.2rem', color: '#888' }}>/ {totalTeamsCount}</span>
               </div>
-            )}
+              <div style={{ fontSize: '1.05rem', color: '#fff' }}>
+                Komandas punkti: <strong style={{ color: 'gold' }}>{myTeamData?.score ?? 0} pt</strong>
+              </div>
+            </div>
+          )}
+
+          <div style={rankBadge}>
+            <div style={{ fontSize: '0.85rem', color: '#aaa' }}>👤 Tavs individuālais ieguldījums:</div>
+            <div style={{ fontSize: '2.2rem', fontWeight: 'bold', color: '#ffc107', margin: '3px 0' }}>
+              #{myRank} <span style={{ fontSize: '1.2rem', color: '#888' }}>/ {totalPlayersCount}</span>
+            </div>
+            <div style={{ fontSize: '1.1rem', color: '#fff' }}>
+              Individuālie punkti: <strong style={{ color: 'gold' }}>{myScoreData?.score ?? 0} pt</strong>
+            </div>
+            <div style={{ fontSize: '0.9rem', color: '#00e5ff', marginTop: '4px' }}>
+              ⏱️ Atbildes laiks: {formatThinkingTime(myScoreData?.totalTimeMs)}
+            </div>
           </div>
+
           <button onClick={handleLeaveOrNewGame} style={btnJoin}>
             🔄 SĀKT JAUNU SPĒLI
           </button>
@@ -667,38 +671,50 @@ export default function Player() {
               </div>
             ) : (
               <div>
-                <div style={{ fontSize: '3rem', marginBottom: '10px' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: '6px' }}>
                   {isFinalLeaderboard ? '👑' : leaderboardType === 'ROUND' ? '🏆' : '⭐'}
                 </div>
-                <h2 style={{ color: '#ffc107', margin: '0 0 10px 0', fontSize: '1.4rem' }}>
+                <h2 style={{ color: '#ffc107', margin: '0 0 8px 0', fontSize: '1.3rem' }}>
                   {isFinalLeaderboard
-                    ? 'FINĀLA REZULTĀTS'
+                    ? 'FINĀLA REZULTĀTI'
                     : leaderboardType === 'ROUND'
                     ? 'KĀRTAS REZULTĀTI'
                     : 'KOPVĒRTĒJUMS'}
                 </h2>
 
-                <div style={rankBadge}>
-                  <div style={{ fontSize: '0.85rem', color: '#aaa' }}>
-                    {leaderboardType === 'ROUND' ? 'Tava vieta šajā kārtā:' : 'Tava vieta kopvērtējumā:'}
+                {/* 1. Komandas rādītājs */}
+                {isTeamMode && teamName && (
+                  <div style={{ ...rankBadge, borderColor: '#00e5ff', background: '#0a1d2e', padding: '8px', margin: '6px 0' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>
+                      👥 Komanda: {teamName}
+                    </div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#00ff00', margin: '2px 0' }}>
+                      #{myTeamRank} <span style={{ fontSize: '1rem', color: '#888' }}>/ {totalTeamsCount} komandām</span>
+                    </div>
+                    <div style={{ fontSize: '0.95rem', color: '#fff' }}>
+                      {leaderboardType === 'ROUND' ? 'Kārtas komandas punkti:' : 'Kopējie komandas punkti:'}{' '}
+                      <strong style={{ color: 'gold' }}>{myTeamData?.score ?? 0} pt</strong>
+                    </div>
                   </div>
-                  <div style={{ fontSize: '3.2rem', fontWeight: 'bold', color: '#00ff00', margin: '4px 0' }}>
-                    #{myRank} <span style={{ fontSize: '1.5rem', color: '#888' }}>/ {totalPlayersCount}</span>
+                )}
+
+                {/* 2. Individuālais rādītājs */}
+                <div style={{ ...rankBadge, padding: '8px', margin: '6px 0' }}>
+                  <div style={{ fontSize: '0.8rem', color: '#aaa' }}>
+                    👤 Tavs individuālais sniegums:
                   </div>
-                  <div style={{ fontSize: '1.1rem', color: '#fff' }}>
-                    Punkti:{' '}
-                    <strong style={{ color: 'gold', fontSize: '1.3rem' }}>
+                  <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#ffc107', margin: '2px 0' }}>
+                    #{myRank} <span style={{ fontSize: '1rem', color: '#888' }}>/ {totalPlayersCount} spēlētājiem</span>
+                  </div>
+                  <div style={{ fontSize: '0.95rem', color: '#fff' }}>
+                    {leaderboardType === 'ROUND' ? 'Kārtas punkti:' : 'Kopējie punkti:'}{' '}
+                    <strong style={{ color: 'gold' }}>
                       {leaderboardType === 'ROUND' ? (myScoreData?.roundScore ?? 0) : (myScoreData?.score ?? 0)} pt
                     </strong>
                   </div>
-                  <div style={{ fontSize: '0.9rem', color: '#00e5ff', marginTop: '4px' }}>
-                    ⏱️ Atbildes laiks: {formatThinkingTime(leaderboardType === 'ROUND' ? (myScoreData?.roundTimeMs || 0) : (myScoreData?.totalTimeMs || 0))}
+                  <div style={{ fontSize: '0.85rem', color: '#00e5ff', marginTop: '2px' }}>
+                    ⏱️ Laiks: {formatThinkingTime(leaderboardType === 'ROUND' ? (myScoreData?.roundTimeMs || 0) : (myScoreData?.totalTimeMs || 0))}
                   </div>
-                  {isTeamMode && teamName && (
-                    <div style={{ fontSize: '0.85rem', color: '#00ff00', marginTop: '6px' }}>
-                      👥 Komanda: {teamName}
-                    </div>
-                  )}
                 </div>
               </div>
             )}
@@ -805,12 +821,20 @@ export default function Player() {
               </div>
             )}
 
-            {(currentSub === 'STATS' || currentSub === 'REVEAL') && (
+            {(currentSub === 'STATS' || currentSub === 'SUMMARY' || currentSub === 'REVEAL') && (
               <div style={infoCard}>
-                <div style={{ fontSize: '3rem', marginBottom: '10px' }}>📊</div>
-                <h2 style={{ color: '#28a745', margin: '0 0 10px 0' }}>BALSOŠANA NOSLĒGUSIES!</h2>
+                <div style={{ fontSize: '3rem', marginBottom: '10px' }}>
+                  {currentSub === 'SUMMARY' ? '⏳' : '📊'}
+                </div>
+                <h2 style={{ color: currentSub === 'SUMMARY' ? '#ffc107' : '#28a745', margin: '0 0 10px 0' }}>
+                  {currentSub === 'SUMMARY' ? 'APKOPO REZULTĀTUS...' : 'BALSOŠANA NOSLĒGUSIES!'}
+                </h2>
                 <p style={{ color: '#ccc', fontSize: '1rem', margin: 0 }}>
-                  {currentSub === 'REVEAL' ? 'Pareizā atbilde atklāta lielajā ekrānā!' : 'Skaties rezultātus lielajā ekrānā!'}
+                  {currentSub === 'REVEAL'
+                    ? 'Pareizā atbilde atklāta lielajā ekrānā!'
+                    : currentSub === 'SUMMARY'
+                    ? 'Skaties rezultātu apkopojumu lielajā ekrānā!'
+                    : 'Gaidiet rezultātu apkopojumu...'}
                 </p>
               </div>
             )}
@@ -821,7 +845,7 @@ export default function Player() {
   );
 }
 
-// --- STILI ---
+// STILI
 const fullScreenMobile: React.CSSProperties = {
   position: 'fixed',
   top: 0,

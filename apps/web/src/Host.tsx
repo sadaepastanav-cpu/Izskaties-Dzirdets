@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { socket } from './socket';
 import { BACKEND_URL, getAdminHeaders } from './config';
 
@@ -27,13 +27,15 @@ export default function Host() {
   const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER' | 'TEAMS'>('SCENES');
   const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('ORDER');
 
-  // TĪKLA UN TUNEĻA IESTATĪJUMI
   const [connectionMode, setConnectionMode] = useState<'LAN' | 'TUNNEL'>(
     (localStorage.getItem('event_conn_mode') as any) || 'TUNNEL'
   );
   const [localIp, setLocalIp] = useState<string>('localhost');
   const [customTunnelUrl, setCustomTunnelUrl] = useState<string>('');
   const [isTunnelAutoDetected, setIsTunnelAutoDetected] = useState(false);
+
+  // Aizsargfiltrs dubultajiem nospiedieniem (Debounce)
+  const lastSpacePress = useRef<number>(0);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -246,7 +248,6 @@ export default function Host() {
     }
   };
 
-  // 1-KLIKŠĶA DIPLOMU DRUKA (Top 3)
   const handlePrintDiplomas = () => {
     const sorted = [...playersList].filter((p) => !p.isDisabled).sort((a, b) => (b.score || 0) - (a.score || 0));
     const top3 = sorted.slice(0, 3);
@@ -294,6 +295,12 @@ export default function Host() {
 
   const toggleChart = () => {
     if (pin && hostToken) socket.emit('host:toggle-chart', { pin, hostToken });
+  };
+
+  const toggleTeamView = () => {
+    if (pin && hostToken) {
+      socket.emit('host:toggle-team-view', { pin, hostToken });
+    }
   };
 
   const updatePlayer = (playerId: string, updates: any) => {
@@ -350,6 +357,11 @@ export default function Host() {
 
       if (e.code === 'Space' && pin && hostToken) {
         e.preventDefault();
+        const now = Date.now();
+        // Aizsardzība pret nejaušu dubulto spiedienu uz skatuves (350ms Debounce)
+        if (now - lastSpacePress.current < 350) return;
+        lastSpacePress.current = now;
+
         if (currentScene?.subState === 'ACTIVE') return;
         socket.emit('host:advance', { pin, hostToken });
       } else if ((e.key === 'p' || e.key === 'P') && pin && hostToken) {
@@ -358,6 +370,9 @@ export default function Host() {
       } else if ((e.key === 'c' || e.key === 'C') && pin) {
         e.preventDefault();
         toggleChart();
+      } else if ((e.key === 't' || e.key === 'T') && pin && hostToken) {
+        e.preventDefault();
+        toggleTeamView();
       }
     };
 
@@ -375,10 +390,24 @@ export default function Host() {
   }, [pin, hostToken, currentScene?.subState]);
 
   const isTeamMode = !!branding?.teamModeEnabled;
+  const isFinalLb = currentScene?.type === 'LEADERBOARD' && currentScene?.config?.lbType === 'FINAL';
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
 
-  // SKATS 1: PROJEKTA IZVĒLE
+  const sortedPlayers = [...playersList].sort((a, b) => {
+    if (sortMode === 'SCORE') {
+      if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
+      return (a.totalTimeMs || 0) - (b.totalTimeMs || 0);
+    }
+    return (a.deviceNumber || 0) - (b.deviceNumber || 0);
+  });
+
+  const currentIdx = scenes.findIndex((s) => s.id === currentScene?.id);
+  const nextScene = currentIdx !== -1 && currentIdx < scenes.length - 1 ? scenes[currentIdx + 1] : null;
+
+  const isCurrentActive = currentScene?.subState === 'ACTIVE';
+  const isCurrentPaused = currentScene?.subState === 'PAUSED';
+
   if (!pin) {
     return (
       <div style={panelContainer}>
@@ -386,7 +415,6 @@ export default function Host() {
           EVENT STUDIO — VADĪTĀJA PANELIS
         </h1>
         
-        {/* TĪKLA KONFIGURĀCIJA */}
         <div style={{ ...cardBox, border: '1px solid #007bff', marginBottom: '20px', background: '#182430' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <h3 style={{ margin: 0, color: '#00e5ff' }}>📡 KĀ SPĒLĒTĀJI PIESLĒGSIES?</h3>
@@ -460,7 +488,6 @@ export default function Host() {
           )}
         </div>
 
-        {/* PROJEKTU MAPE */}
         <div style={cardBox}>
           <h3 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>📂 AKTUĀLĀ PROJEKTU MAPE</h3>
 
@@ -507,22 +534,6 @@ export default function Host() {
     );
   }
 
-  const isFinalLb = currentScene?.type === 'LEADERBOARD' && currentScene?.config?.lbType === 'FINAL';
-
-  const sortedPlayers = [...playersList].sort((a, b) => {
-    if (sortMode === 'SCORE') {
-      if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
-      return (a.totalTimeMs || 0) - (b.totalTimeMs || 0);
-    }
-    return (a.deviceNumber || 0) - (b.deviceNumber || 0);
-  });
-
-  const currentIdx = scenes.findIndex((s) => s.id === currentScene?.id);
-  const nextScene = currentIdx !== -1 && currentIdx < scenes.length - 1 ? scenes[currentIdx + 1] : null;
-
-  const isCurrentActive = currentScene?.subState === 'ACTIVE';
-  const isCurrentPaused = currentScene?.subState === 'PAUSED';
-
   return (
     <div style={panelContainer}>
       <div style={topBar}>
@@ -536,7 +547,7 @@ export default function Host() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           {(isCurrentActive || isCurrentPaused) && (
             <button
               onClick={handlePauseResume}
@@ -553,28 +564,60 @@ export default function Host() {
             </button>
           )}
 
-          <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas skaitļus ekrānā">
+          <button onClick={toggleChart} style={btnPurple} title="Ieslēgt / Izslēgt balsošanas skaitļus ekrānā [C]">
             📊 Statistika [C]
           </button>
+
+          {isTeamMode && (
+            <button onClick={toggleTeamView} style={{ ...btnPurple, background: '#17a2b8' }} title="Pārslēgt Komandu / Individuālo rangu ekrānā [T]">
+              👥/👤 Komandu skats [T]
+            </button>
+          )}
+
           <button onClick={handleExportCsv} style={{ ...btnGray, background: '#198754' }} title="Lejupielādēt CSV">
             📥 CSV
           </button>
+          
           <button onClick={handlePrintDiplomas} style={{ ...btnGray, background: '#d63384' }} title="Ģenerēt diplomus Top 3">
             🏆 Diplomi
           </button>
-          <button onClick={() => socket.emit('host:simulate-players', { pin, hostToken, count: 20 })} style={btnGray}>
-            🤖 +20 Boti
+
+          <button
+            onClick={() => socket.emit('host:simulate-players', { pin, hostToken, count: 500 })}
+            style={{ ...btnGray, background: '#6f42c1', color: '#fff', fontWeight: 'bold' }}
+            title="Pieslēgt 500 virtuālos spēlētājus slodzes testam"
+          >
+            🤖 +500 Boti
           </button>
+
+          <button
+            onClick={() => socket.emit('host:simulate-players', { pin, hostToken, count: 20 })}
+            style={btnGray}
+            title="Pieslēgt 20 botus"
+          >
+            +20
+          </button>
+
+          {playersList.some((p) => p.isBot) && (
+            <button
+              onClick={() => socket.emit('host:clear-bots', { pin, hostToken })}
+              style={{ ...btnGray, background: '#dc3545' }}
+              title="Notīrīt visus botus"
+            >
+              🗑️ Dzēst botus
+            </button>
+          )}
+
           <button onClick={() => window.open(`/present/${pin}`, '_blank')} style={btnBlue}>
             🖥️ Ekrāns
           </button>
+          
           <button onClick={handleEndSession} style={btnRed}>
             ❌ Beigt sesiju
           </button>
         </div>
       </div>
 
-      {/* VADĪBAS JOSLA & NĀKAMĀ SLAIDA PRIEKŠSKATĪJUMS */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '15px', marginBottom: '15px' }}>
         <div style={instructionBox}>
           <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>
@@ -726,7 +769,7 @@ export default function Host() {
         {activeTab === 'ANALYZER' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <h4 style={{ margin: 0, color: '#00e5ff' }}>👥 DALĪBNIEKU PĀRVALDĪBA</h4>
+              <h4 style={{ margin: 0, color: '#00e5ff' }}>👥 DALĪBNIEKU PĀRVALDĪBA ({playersList.length})</h4>
               <div style={{ display: 'flex', gap: '6px' }}>
                 <button onClick={() => setSortMode('ORDER')} style={{ ...btnSmallSort, background: sortMode === 'ORDER' ? '#007bff' : '#333' }}>
                   Pēc pults #
@@ -749,7 +792,7 @@ export default function Host() {
                 </tr>
               </thead>
               <tbody>
-                {sortedPlayers.map((p) => (
+                {sortedPlayers.slice(0, 100).map((p) => (
                   <tr key={p.id} style={{ borderBottom: '1px solid #2a2a2a', opacity: p.isDisabled ? 0.4 : 1 }}>
                     <td style={{ padding: '8px', fontWeight: 'bold', color: '#ffc107' }}>#{p.deviceNumber || 1}</td>
                     <td style={{ padding: '8px' }}>
@@ -791,12 +834,17 @@ export default function Host() {
                 ))}
               </tbody>
             </table>
+            {sortedPlayers.length > 100 && (
+              <div style={{ textAlign: 'center', color: '#888', fontSize: '0.8rem', marginTop: '10px' }}>
+                Rāda pirmos 100 no {sortedPlayers.length} spēlētājiem (optimizācija)
+              </div>
+            )}
           </div>
         )}
 
         {isTeamMode && activeTab === 'TEAMS' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
-            <h4 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>🏆 KOMANDU KOPVĒRTĒJUMS</h4>
+            <h4 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>🏆 KOMANDU KOPVĒRTĒJUMS ({teamLeaderboard.length})</h4>
             {teamLeaderboard.length === 0 ? (
               <p style={{ color: '#888', fontStyle: 'italic' }}>Nav reģistrēta neviena komanda.</p>
             ) : (
@@ -828,7 +876,7 @@ export default function Host() {
   );
 }
 
-// --- STILI ---
+// STILI
 const panelContainer: React.CSSProperties = {
   padding: '30px',
   background: '#111',

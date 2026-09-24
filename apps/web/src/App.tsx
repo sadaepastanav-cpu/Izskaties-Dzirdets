@@ -1,27 +1,46 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Player from './player';
 import Host from './host';
 import Presentation from './presentation';
 import Studio from './studio';
+import { BACKEND_URL } from './config';
 
-// Droša un vizuāli pievilcīga administrācijas aizsardzība
+// Droša servera puses autentifikācijas aizsardzība
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
-    return localStorage.getItem('isAdminAuthorized') === 'true';
+    return sessionStorage.getItem('isAdminAuthorized') === 'true';
   });
   const [passwordInput, setPasswordInput] = useState('');
-  const [errorMsg, setErrorMsg] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | false>(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const savedKey = localStorage.getItem('admin_api_key') || 'izskaties_dzirdets_super_secret_key_2026';
-    
-    if (passwordInput === 'admin123' || passwordInput === savedKey) {
-      localStorage.setItem('isAdminAuthorized', 'true');
-      setIsAdmin(true);
-    } else {
-      setErrorMsg(true);
+    if (!passwordInput.trim()) return;
+
+    setIsLoading(true);
+    setErrorMsg(false);
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/admin-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: passwordInput })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success && data.adminKey) {
+        sessionStorage.setItem('isAdminAuthorized', 'true');
+        sessionStorage.setItem('admin_api_key', data.adminKey);
+        setIsAdmin(true);
+      } else {
+        setErrorMsg(data.error || 'Nepareiza parole!');
+      }
+    } catch {
+      setErrorMsg('Neizdevās sazināties ar serveri! Pārbaudiet tīkla savienojumu.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -46,11 +65,12 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
               }}
               style={lockInputStyle}
               autoFocus
+              disabled={isLoading}
             />
 
             {errorMsg && (
               <span style={{ color: '#ff4d4d', fontSize: '0.85rem', fontWeight: 'bold' }}>
-                ❌ Nepareiza parole! (Noklusējuma: admin123)
+                ❌ {errorMsg}
               </span>
             )}
 
@@ -59,11 +79,12 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
                 type="button"
                 onClick={() => (window.location.href = '/')}
                 style={{ ...lockBtnStyle, background: '#444' }}
+                disabled={isLoading}
               >
                 Atpakaļ
               </button>
-              <button type="submit" style={{ ...lockBtnStyle, background: '#007bff', flex: 1 }}>
-                Ienākt 🚀
+              <button type="submit" style={{ ...lockBtnStyle, background: '#007bff', flex: 1 }} disabled={isLoading}>
+                {isLoading ? 'Pārbauda... ⏳' : 'Ienākt 🚀'}
               </button>
             </div>
           </form>
@@ -79,12 +100,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Publiskie maršruti spēlētājiem un ekrānam */}
         <Route path="/" element={<Player />} />
         <Route path="/player" element={<Player />} />
         <Route path="/present/:pin" element={<Presentation />} />
 
-        {/* Aizsargātie administrācijas maršruti */}
         <Route
           path="/host"
           element={
@@ -102,7 +121,6 @@ export default function App() {
           }
         />
 
-        {/* 404 pāradresācija uz sākumlapu */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

@@ -8,7 +8,7 @@ import crypto from 'crypto';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import multer from 'multer';
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, exec, ChildProcessWithoutNullStreams } from 'child_process';
 import rateLimit from 'express-rate-limit';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
@@ -17,27 +17,46 @@ const app = express();
 const httpServer = createServer(app);
 const PORT = process.env.PORT || 3000;
 
-// Droša ADMIN atslēgas inicializācija
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY || crypto.randomBytes(8).toString('hex');
-if (!process.env.ADMIN_API_KEY) {
-  console.log(`🔑 [Drošība] Izveidota pagaidu ADMIN atslēga šai sesijai: ${ADMIN_API_KEY}`);
-}
+
+// ==========================================
+// 1. MAPES UN ŽURNĀLFAILU (LOGS) SISTĒMA
+// ==========================================
+const SECURE_DATA_DIR = path.resolve(process.cwd(), 'server_data');
+const LOGS_DIR = path.join(SECURE_DATA_DIR, 'logs');
+const LOG_FILE_PATH = path.join(LOGS_DIR, 'event.log');
+
+if (!fs.existsSync(SECURE_DATA_DIR)) fs.mkdirSync(SECURE_DATA_DIR, { recursive: true });
+if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+
+const logEvent = (level: 'INFO' | 'WARN' | 'ERROR', message: string, meta?: any) => {
+  const timestamp = new Date().toISOString();
+  const metaStr = meta ? ` | ${JSON.stringify(meta)}` : '';
+  const logLine = `[${timestamp}] [${level}] ${message}${metaStr}\n`;
+
+  if (level === 'ERROR') console.error(`❌ ${logLine.trim()}`);
+  else if (level === 'WARN') console.warn(`⚠️ ${logLine.trim()}`);
+  else console.log(`ℹ️ ${logLine.trim()}`);
+
+  fs.stat(LOG_FILE_PATH, (err, stats) => {
+    if (!err && stats.size > 5 * 1024 * 1024) {
+      fs.rename(LOG_FILE_PATH, path.join(LOGS_DIR, `event_${Date.now()}.log`), () => {});
+    }
+    fs.appendFile(LOG_FILE_PATH, logLine, () => {});
+  });
+};
+
+logEvent('INFO', `Serveris inicializēts. Admin atslēga: ${process.env.ADMIN_API_KEY ? 'NO ENV' : ADMIN_API_KEY}`);
 
 let publicTunnelUrl = '';
 let tunnelProcess: ChildProcessWithoutNullStreams | null = null;
+let tunnelRestartTimeout: NodeJS.Timeout | null = null;
 
-// ==========================================
-// 1. DROŠAS MAPJU STRUKTŪRAS
-// ==========================================
 const MEDIA_ROOT_DIR = path.resolve(process.cwd(), '../../public/uploads');
 let currentProjectPath = MEDIA_ROOT_DIR;
 if (!fs.existsSync(currentProjectPath)) {
   fs.mkdirSync(currentProjectPath, { recursive: true });
-}
-
-const SECURE_DATA_DIR = path.resolve(process.cwd(), 'server_data');
-if (!fs.existsSync(SECURE_DATA_DIR)) {
-  fs.mkdirSync(SECURE_DATA_DIR, { recursive: true });
 }
 
 // ==========================================
@@ -72,7 +91,7 @@ app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 const apiLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 120,
+  max: 5000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Pārāk daudz pieprasījumu. Lūdzu, uzgaidiet brīdi.' }
@@ -80,7 +99,7 @@ const apiLimiter = rateLimit({
 
 const uploadLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 20,
+  max: 50,
   message: { error: 'Pārāk daudz augšupielāžu vienlaikus.' }
 });
 
@@ -111,9 +130,6 @@ const getLocalIpAddress = () => {
   return 'localhost';
 };
 
-// ==========================================
-// 3. MEDIJU SERVĒŠANA & MULTER VALIDĀCIJA
-// ==========================================
 app.use('/project-media', (req, res, next) => {
   if (!currentProjectPath || !fs.existsSync(currentProjectPath)) {
     return res.status(404).send('Mape nav iestatīta vai neeksistē');
@@ -148,14 +164,11 @@ const upload = multer({
     if (isMimeAllowed || isExtAllowed) {
       cb(null, true);
     } else {
-      cb(new Error('Neatļauts faila tips! Drīkst augšupielādēt tikai attēlus, video un audio failus.'));
+      cb(new Error('Neatļauts faila tips!'));
     }
   }
 });
 
-// ==========================================
-// 4. SESIJU GLABĀTUVE UN DROŠĪBA
-// ==========================================
 interface PlayerState {
   id: string;
   name: string;
@@ -177,6 +190,8 @@ const participants = new Map<string, Set<string>>();
 const sessionHostTokens = new Map<string, string>();
 const sessionTimers = new Map<string, NodeJS.Timeout>();
 const socketPlayerMap = new Map<string, { pin: string; playerId: string }>();
+const snapshotDebounceTimers = new Map<string, NodeJS.Timeout>();
+const lastAdvanceTimestamps = new Map<string, number>();
 
 const clearSessionTimer = (pin: string) => {
   if (sessionTimers.has(pin)) {
@@ -213,7 +228,7 @@ const emitStateUpdate = (pin: string, scene: any, subState: string, extra: any =
   io.to(pin).emit('state-update', { ...sanitized, subState, ...extra });
 };
 
-const saveSnapshot = (pin: string) => {
+const executeSaveSnapshot = (pin: string) => {
   try {
     const state = sessions.get(pin);
     const scores = sessionScores.get(pin);
@@ -231,10 +246,30 @@ const saveSnapshot = (pin: string) => {
       scores: Array.from(scores?.entries() || [])
     };
 
-    fs.writeFileSync(path.join(SECURE_DATA_DIR, 'active_session.json'), JSON.stringify(payload, null, 2));
-    fs.writeFileSync(path.join(SECURE_DATA_DIR, `snapshot_${pin}.json`), JSON.stringify(payload, null, 2));
+    const dataString = JSON.stringify(payload, null, 2);
+    fs.writeFile(path.join(SECURE_DATA_DIR, 'active_session.json'), dataString, () => {});
+    fs.writeFile(path.join(SECURE_DATA_DIR, `snapshot_${pin}.json`), dataString, () => {});
   } catch (err: any) {
-    console.error(`[Snapshot] Kļūda saglabājot sesiju ${pin}:`, err.message);
+    logEvent('ERROR', `Kļūda saglabājot snapshot sesijai ${pin}: ${err.message}`);
+  }
+};
+
+const saveSnapshot = (pin: string, immediate: boolean = false) => {
+  if (immediate) {
+    if (snapshotDebounceTimers.has(pin)) {
+      clearTimeout(snapshotDebounceTimers.get(pin)!);
+      snapshotDebounceTimers.delete(pin);
+    }
+    executeSaveSnapshot(pin);
+    return;
+  }
+
+  if (!snapshotDebounceTimers.has(pin)) {
+    const timer = setTimeout(() => {
+      snapshotDebounceTimers.delete(pin);
+      executeSaveSnapshot(pin);
+    }, 1500);
+    snapshotDebounceTimers.set(pin, timer);
   }
 };
 
@@ -245,7 +280,7 @@ const clearSnapshot = (pin: string) => {
     if (fs.existsSync(activeFile)) fs.unlinkSync(activeFile);
     if (fs.existsSync(pinFile)) fs.unlinkSync(pinFile);
   } catch (err: any) {
-    console.error(`[Snapshot] Kļūda dzēšot snapshot:`, err.message);
+    logEvent('WARN', `Kļūda dzēšot snapshot: ${err.message}`);
   }
 };
 
@@ -312,7 +347,7 @@ const getSortedTeamLeaderboard = (playersMap: Map<string, PlayerState>, scoringM
 };
 
 // ==========================================
-// 5. CLOUDFLARE TUNELIS (AUTOMĀTISKS)
+// 5. CLOUDFLARE TUNELIS
 // ==========================================
 function startCloudflareTunnel(onReady?: (url: string) => void) {
   if (publicTunnelUrl) {
@@ -321,11 +356,10 @@ function startCloudflareTunnel(onReady?: (url: string) => void) {
   }
 
   if (tunnelProcess) {
-    console.log('[Cloudflare] Tunelis jau tiek startēts...');
     return;
   }
 
-  console.log('[Cloudflare] ⏳ Automātiski startējam Cloudflare tuneli uz http://127.0.0.1:5173...');
+  logEvent('INFO', '⏳ Automātiski startējam Cloudflare tuneli...');
 
   try {
     tunnelProcess = spawn('cloudflared', ['tunnel', '--url', 'http://127.0.0.1:5173'], {
@@ -334,12 +368,13 @@ function startCloudflareTunnel(onReady?: (url: string) => void) {
 
     const handleOutput = (data: any) => {
       const output = data.toString();
-      const match = output.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+      const match = output.match(/https:\/\/(?!api\.)([a-zA-Z0-9-]+)\.trycloudflare\.com/i);
+      
       if (match && !publicTunnelUrl) {
         publicTunnelUrl = match[0];
-        console.log(`\n=========================================`);
-        console.log(`🚀 CLOUDFLARE TUNELIS GATAVS: ${publicTunnelUrl}`);
-        console.log(`=========================================\n`);
+        logEvent('INFO', `=========================================`);
+        logEvent('INFO', `🚀 CLOUDFLARE TUNELIS GATAVS: ${publicTunnelUrl}`);
+        logEvent('INFO', `=========================================`);
 
         io.emit('tunnel-ready', { url: publicTunnelUrl });
         if (onReady) onReady(publicTunnelUrl);
@@ -347,24 +382,35 @@ function startCloudflareTunnel(onReady?: (url: string) => void) {
         sessions.forEach((sessionData, sessionPin) => {
           sessionData.connectionUrl = publicTunnelUrl;
           io.to(sessionPin).emit('connection-url-changed', publicTunnelUrl);
-          saveSnapshot(sessionPin);
+          saveSnapshot(sessionPin, true);
         });
       }
     };
 
     tunnelProcess.stdout?.on('data', handleOutput);
     tunnelProcess.stderr?.on('data', handleOutput);
+
     tunnelProcess.on('error', (err) => {
-      console.error('⚠️ [Cloudflare] Kļūda:', err.message);
-      tunnelProcess = null;
-    });
-    tunnelProcess.on('close', (code) => {
-      console.log(`[Cloudflare] Tunelis aizvērts (${code})`);
+      logEvent('ERROR', `Cloudflare procesa kļūda: ${err.message}`);
       tunnelProcess = null;
       publicTunnelUrl = '';
     });
+
+    tunnelProcess.on('close', (code) => {
+      logEvent('INFO', `Cloudflare tunelis aizvērts (${code})`);
+      tunnelProcess = null;
+      publicTunnelUrl = '';
+
+      if (code !== 0 && !tunnelRestartTimeout) {
+        tunnelRestartTimeout = setTimeout(() => {
+          tunnelRestartTimeout = null;
+          logEvent('INFO', '🔄 Mēģinām automātiski pārstartēt Cloudflare tuneli...');
+          startCloudflareTunnel();
+        }, 4000);
+      }
+    });
   } catch (err: any) {
-    console.error('⚠️ [Cloudflare] Izsaukuma kļūda:', err.message);
+    logEvent('ERROR', `Cloudflare izsaukuma kļūda: ${err.message}`);
     tunnelProcess = null;
   }
 }
@@ -372,6 +418,16 @@ function startCloudflareTunnel(onReady?: (url: string) => void) {
 // ==========================================
 // 6. REST API MARŠRUTI
 // ==========================================
+app.post('/api/admin-login', (req, res) => {
+  const { password } = req.body || {};
+  if (password && (password === ADMIN_PASSWORD || password === ADMIN_API_KEY)) {
+    logEvent('INFO', 'Veiksmīga administratora autorizācija no IP: ' + req.ip);
+    return res.json({ success: true, adminKey: ADMIN_API_KEY });
+  }
+  logEvent('WARN', 'Neveiksmīgs administratora autorizācijas mēģinājums no IP: ' + req.ip);
+  return res.status(401).json({ success: false, error: 'Nepareiza administratora parole!' });
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
@@ -385,7 +441,6 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/tunnel-url', (_req, res) => res.json({ tunnelUrl: publicTunnelUrl }));
 app.get('/api/network-ip', (_req, res) => res.json({ localIp: getLocalIpAddress(), tunnelUrl: publicTunnelUrl }));
 
-// Tūlītējs zīmola un komandu režīma nolasīšanas maršruts telefonam
 app.get('/api/session-branding/:pin', (req, res) => {
   const session = sessions.get(req.params.pin);
   if (session && session.branding) {
@@ -472,6 +527,7 @@ app.post('/api/save-to-file', requireAdminAuth, (req, res) => {
     const fileName = rawName.endsWith('.json') ? rawName : `${rawName}.json`;
     const filePath = safeResolve(fileName);
     fs.writeFileSync(filePath, JSON.stringify(req.body.data, null, 2));
+    logEvent('INFO', `Projekts saglabāts: ${path.basename(filePath)}`);
     res.json({ success: true, fileName: path.basename(filePath), fullPath: filePath });
   } catch (err: any) {
     res.status(500).json({ error: 'Neizdevās saglabāt: ' + err.message });
@@ -505,6 +561,7 @@ app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
       sessionScores.set(data.pin, new Map(data.scores));
       if (data.hostToken) sessionHostTokens.set(data.pin, data.hostToken);
       if (!participants.has(data.pin)) participants.set(data.pin, new Set());
+      logEvent('INFO', `Sesija atjaunota no snapshot: PIN ${data.pin}`);
       res.json({ success: true, pin: data.pin, state: data.state, hostToken: data.hostToken });
     } catch {
       res.status(500).json({ error: 'Kļūda atjaunojot sesiju' });
@@ -514,7 +571,6 @@ app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   }
 });
 
-// CSV EKSPORTS
 app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
   const { pin } = req.params;
   const playersMap = sessionScores.get(pin);
@@ -547,6 +603,7 @@ app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
     }
   });
 
+  logEvent('INFO', `CSV eksports sesijai: PIN ${pin}`);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename=rezultati_sesija_${pin}.csv`);
   return res.send(csvContent);
@@ -561,7 +618,8 @@ const io = new Server(httpServer, {
     credentials: true
   },
   pingTimeout: 30000,
-  pingInterval: 10000
+  pingInterval: 10000,
+  perMessageDeflate: false
 });
 
 const handleVote = (pin: string, answers: string[], playerId: string) => {
@@ -597,7 +655,8 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
       }
     });
 
-    io.to(pin).emit('votes-updated', { summary, votedCount: s.votes.length });
+    const votedPlayerIds = s.votes.map((v: any) => v.playerId);
+    io.to(pin).emit('votes-updated', { summary, votedCount: s.votes.length, votedPlayerIds });
 
     const isFullTimeMode = s.branding?.timerMode === 'FULL_TIME';
     if (!isFullTimeMode && activeParticipantsCount > 0 && s.votes.length >= activeParticipantsCount) {
@@ -606,7 +665,7 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
       if (s.currentScene) s.currentScene.endTime = Date.now();
       emitStateUpdate(pin, s.currentScene, 'STATS');
       io.to(pin).emit('video-command', 'pause');
-      saveSnapshot(pin);
+      saveSnapshot(pin, true);
     }
   }
 };
@@ -616,14 +675,7 @@ io.on('connection', (socket: Socket) => {
     socket.emit('tunnel-ready', { url: publicTunnelUrl });
   }
 
-  socket.on('host:start-tunnel', (data?: { pin?: string; hostToken?: string; adminKey?: string }) => {
-    const isAdmin = data?.adminKey === ADMIN_API_KEY;
-    const isHost = !!(data?.pin && data?.hostToken && isHostAuthorized(data.pin, data.hostToken));
-
-    if (!isAdmin && !isHost) {
-      return socket.emit('error-message', 'Nav tiesību startēt tuneli.');
-    }
-
+  socket.on('host:start-tunnel', (_data?: { pin?: string; hostToken?: string; adminKey?: string }) => {
     startCloudflareTunnel((url) => {
       socket.emit('tunnel-ready', { url });
     });
@@ -655,6 +707,7 @@ io.on('connection', (socket: Socket) => {
       revealReadyToAdvance: false,
       currentPaging: 0,
       finalPodiumStage: 0,
+      finalLeaderboardView: data.projectData?.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL',
       questionStartTime: 0,
       isPaused: false,
       pausedRemainingMs: 0
@@ -667,7 +720,8 @@ io.on('connection', (socket: Socket) => {
 
     socket.join(pin);
     socket.emit('session-info', { pin, hostToken, state: sessionData });
-    saveSnapshot(pin);
+    logEvent('INFO', `Izveidota jauna spēles sesija: PIN ${pin}`);
+    saveSnapshot(pin, true);
   });
 
   socket.on('host:pause-session', (data: { pin: string; hostToken: string }) => {
@@ -681,7 +735,7 @@ io.on('connection', (socket: Socket) => {
 
       emitStateUpdate(data.pin, s.currentScene, 'PAUSED', { pausedRemainingMs: s.pausedRemainingMs });
       io.to(data.pin).emit('video-command', 'pause');
-      saveSnapshot(data.pin);
+      saveSnapshot(data.pin, true);
     }
   });
 
@@ -705,11 +759,11 @@ io.on('connection', (socket: Socket) => {
           if (currentSession.currentScene) currentSession.currentScene.endTime = Date.now();
           emitStateUpdate(data.pin, currentSession.currentScene, 'STATS');
           io.to(data.pin).emit('video-command', 'pause');
-          saveSnapshot(data.pin);
+          saveSnapshot(data.pin, true);
         }
       }, remainingMs);
       sessionTimers.set(data.pin, timer);
-      saveSnapshot(data.pin);
+      saveSnapshot(data.pin, true);
     }
   });
 
@@ -725,8 +779,9 @@ io.on('connection', (socket: Socket) => {
       s.subState = 'READY';
 
       emitStateUpdate(data.pin, s.currentScene, 'READY');
-      io.to(data.pin).emit('votes-updated', { summary: {}, votedCount: 0 });
-      saveSnapshot(data.pin);
+      io.to(data.pin).emit('votes-updated', { summary: {}, votedCount: 0, votedPlayerIds: [] });
+      logEvent('INFO', `Restartēts jautājums sesijā: PIN ${data.pin}`);
+      saveSnapshot(data.pin, true);
     }
   });
 
@@ -740,6 +795,7 @@ io.on('connection', (socket: Socket) => {
     sessionScores.delete(data.pin);
     participants.delete(data.pin);
     sessionHostTokens.delete(data.pin);
+    logEvent('INFO', `Sesija pabeigta un slēgta: PIN ${data.pin}`);
   });
 
   socket.on('get-branding', (data: { pin: string }) => {
@@ -754,6 +810,21 @@ io.on('connection', (socket: Socket) => {
     const binding = socketPlayerMap.get(socket.id);
     if (!binding || binding.pin !== data.pin || binding.playerId !== data.playerId) return;
     io.to(data.pin).emit('player-buzzer-test', { playerId: data.playerId });
+  });
+
+  socket.on('host:toggle-team-view', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    const s = sessions.get(data.pin);
+    if (!s) return;
+
+    if (!s.finalLeaderboardView) {
+      s.finalLeaderboardView = s.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL';
+    }
+    s.finalLeaderboardView = s.finalLeaderboardView === 'TEAMS' ? 'INDIVIDUAL' : 'TEAMS';
+    s.currentPaging = 0;
+
+    io.to(data.pin).emit('toggle-team-leaderboard', { view: s.finalLeaderboardView, page: 0 });
+    saveSnapshot(data.pin, true);
   });
 
   socket.on('host:update-player', (data: any) => {
@@ -774,7 +845,7 @@ io.on('connection', (socket: Socket) => {
 
       io.to(data.pin).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
       io.to(data.pin).emit('leaderboard-update', { data: sortedLb, lbType: s?.currentScene?.config?.lbType || 'TOTAL' });
-      io.to(data.pin).emit('team-leaderboard-update', { data: sortedTeams });
+      io.to(data.pin).emit('team-leaderboard-update', { data: sortedTeams, lbType: s?.currentScene?.config?.lbType || 'TOTAL' });
       saveSnapshot(data.pin);
     }
   });
@@ -786,14 +857,18 @@ io.on('connection', (socket: Socket) => {
     if (!players) return;
 
     const isTeamMode = !!session?.branding?.teamModeEnabled;
-    const sampleTeams = ['1. Galdiņš', '2. Galdiņš', '3. Galdiņš', 'VIP Komanda'];
+    const sampleTeams = [
+      '1. Galdiņš', '2. Galdiņš', '3. Galdiņš', '4. Galdiņš', '5. Galdiņš',
+      'VIP Galdiņš', 'Čempioni', 'Ātrie Prāti', 'Zelta Bulta', 'Gudrinieki'
+    ];
 
-    for (let i = 0; i < data.count; i++) {
-      const botId = `bot_${i}`;
+    const targetCount = data.count || 500;
+    for (let i = 0; i < targetCount; i++) {
+      const botId = `bot_${Date.now()}_${i}`;
       if (!players.has(botId)) {
         players.set(botId, {
           id: botId,
-          name: `Dalībnieks-${i + 1}`,
+          name: `Dalībnieks #${players.size + 1}`,
           deviceNumber: players.size + 1,
           score: 0,
           roundScore: 0,
@@ -807,7 +882,28 @@ io.on('connection', (socket: Socket) => {
       }
     }
 
+    const sortedTeams = getSortedTeamLeaderboard(players, session?.branding?.teamScoringMode || 'AVG', false);
     io.to(data.pin).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+    io.to(data.pin).emit('team-leaderboard-update', { data: sortedTeams, lbType: 'TOTAL' });
+    logEvent('INFO', `Simulēti ${targetCount} boti sesijai: PIN ${data.pin}`);
+    saveSnapshot(data.pin, true);
+  });
+
+  socket.on('host:clear-bots', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    const players = sessionScores.get(data.pin);
+    const session = sessions.get(data.pin);
+    if (!players) return;
+
+    players.forEach((p, id) => {
+      if (p.isBot) players.delete(id);
+    });
+
+    const sortedTeams = getSortedTeamLeaderboard(players, session?.branding?.teamScoringMode || 'AVG', false);
+    io.to(data.pin).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+    io.to(data.pin).emit('team-leaderboard-update', { data: sortedTeams, lbType: 'TOTAL' });
+    logEvent('INFO', `Dzēsti visi boti sesijai: PIN ${data.pin}`);
+    saveSnapshot(data.pin, true);
   });
 
   socket.on('host:toggle-chart', (data: { pin: string; hostToken: string }) => {
@@ -824,6 +920,9 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  // =========================================================================
+  // SPACE VADĪBAS DZINĒJS AR DAUDZATBILŽU (2/2, 1/2, 0/2) PRECIZITĀTI
+  // =========================================================================
   socket.on('host:advance', (data: { pin: string; hostToken: string; force?: boolean } | string) => {
     const pin = typeof data === 'string' ? data : data?.pin;
     const token = typeof data === 'string' ? undefined : data?.hostToken;
@@ -834,6 +933,13 @@ io.on('connection', (socket: Socket) => {
     const playersMap = sessionScores.get(pin);
     if (!s) return;
 
+    const now = Date.now();
+    const lastAdvance = lastAdvanceTimestamps.get(pin) || 0;
+    if (!force && now - lastAdvance < 300) {
+      return;
+    }
+    lastAdvanceTimestamps.set(pin, now);
+
     if (s.subState === 'ACTIVE' && !force) {
       return;
     }
@@ -843,32 +949,44 @@ io.on('connection', (socket: Socket) => {
     // FINĀLA APBALVOŠANA
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
       const activePlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
-      const totalPlayers = activePlayers.length;
-      if (s.finalPodiumStage === undefined) s.finalPodiumStage = 0;
+      const isTeamMode = !!s.branding?.teamModeEnabled;
+      const teamList = isTeamMode ? getSortedTeamLeaderboard(playersMap!, s?.branding?.teamScoringMode || 'AVG', false) : [];
 
-      if (totalPlayers <= 2) {
-        if (s.finalPodiumStage < 2) s.finalPodiumStage = 2;
-        else if (s.finalPodiumStage === 2) s.finalPodiumStage = 3;
-        else {
-          clearSnapshot(pin);
-          return io.to(pin).emit('game-over');
-        }
-        io.to(pin).emit('podium-stage-change', s.finalPodiumStage);
-        saveSnapshot(pin);
-        return;
+      if (!s.finalLeaderboardView) {
+        s.finalLeaderboardView = isTeamMode && teamList.length > 0 ? 'TEAMS' : 'INDIVIDUAL';
       }
 
-      if (s.finalPodiumStage < 3) {
-        s.finalPodiumStage++;
-        io.to(pin).emit('podium-stage-change', s.finalPodiumStage);
+      const isViewingTeams = isTeamMode && s.finalLeaderboardView === 'TEAMS' && teamList.length > 0;
+      const totalItems = isViewingTeams ? teamList.length : activePlayers.length;
+
+      if (s.finalPodiumStage === undefined) s.finalPodiumStage = 0;
+
+      if (s.finalPodiumStage < 1) {
+        s.finalPodiumStage = 1;
+        io.to(pin).emit('podium-stage-change', 1);
+      } else if (s.finalPodiumStage === 1) {
+        s.finalPodiumStage = 2;
+        io.to(pin).emit('podium-stage-change', 2);
+      } else if (s.finalPodiumStage === 2) {
+        s.finalPodiumStage = 3;
+        io.to(pin).emit('podium-stage-change', 3);
       } else if (s.finalPodiumStage === 3) {
-        s.finalPodiumStage = 4;
-        s.currentPaging = 0;
-        io.to(pin).emit('podium-stage-change', 4);
-        io.to(pin).emit('leaderboard-page-change', 0);
+        const remainingCount = Math.max(0, totalItems - 3);
+        if (remainingCount > 0) {
+          s.finalPodiumStage = 4;
+          s.currentPaging = 0;
+          io.to(pin).emit('podium-stage-change', 4);
+          io.to(pin).emit('leaderboard-page-change', 0);
+        } else {
+          s.finalPodiumStage = 3;
+          s.currentPaging = 0;
+          io.to(pin).emit('podium-stage-change', 3);
+          io.to(pin).emit('leaderboard-page-change', 0);
+        }
       } else if (s.finalPodiumStage === 4) {
-        const remainingCount = Math.max(0, totalPlayers - 3);
+        const remainingCount = Math.max(0, totalItems - 3);
         const maxPages = Math.ceil(remainingCount / 10);
+
         if (s.currentPaging < maxPages - 1) {
           s.currentPaging++;
           io.to(pin).emit('leaderboard-page-change', s.currentPaging);
@@ -879,18 +997,8 @@ io.on('connection', (socket: Socket) => {
           io.to(pin).emit('leaderboard-page-change', 0);
         }
       }
-      saveSnapshot(pin);
+      saveSnapshot(pin, true);
       return;
-    }
-
-    if (s.currentScene && s.currentScene.type === 'LEADERBOARD') {
-      const totalPlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled).length;
-      const maxPages = Math.ceil(totalPlayers / 10);
-      if (s.currentPaging < maxPages - 1) {
-        s.currentPaging++;
-        io.to(pin).emit('leaderboard-page-change', s.currentPaging);
-        return;
-      }
     }
 
     if (s.subState === 'REVEAL' && !s.revealReadyToAdvance) {
@@ -899,6 +1007,7 @@ io.on('connection', (socket: Socket) => {
       return;
     }
 
+    // 1. PĀREJA UZ NĀKAMO SLAIDU
     if (
       s.subState === 'IDLE' ||
       s.subState === 'REVEAL' ||
@@ -909,6 +1018,7 @@ io.on('connection', (socket: Socket) => {
       s.currentSceneIdx++;
       if (s.currentSceneIdx >= s.scenes.length) {
         clearSnapshot(pin);
+        logEvent('INFO', `Spēle pabeigta: PIN ${pin}`);
         return io.to(pin).emit('game-over');
       }
 
@@ -920,6 +1030,8 @@ io.on('connection', (socket: Socket) => {
       s.subState = 'READY';
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
+      s.finalLeaderboardView = s.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL';
+      delete s.summaryStats;
 
       emitStateUpdate(pin, s.currentScene, 'READY');
 
@@ -928,15 +1040,18 @@ io.on('connection', (socket: Socket) => {
         const sortedLb = getSortedLeaderboard(playersMap, isRound);
         const sortedTeams = getSortedTeamLeaderboard(playersMap, s?.branding?.teamScoringMode || 'AVG', isRound);
         io.to(pin).emit('leaderboard-update', { data: sortedLb, lbType: s.currentScene?.config?.lbType || 'TOTAL' });
-        io.to(pin).emit('team-leaderboard-update', { data: sortedTeams });
+        io.to(pin).emit('team-leaderboard-update', { data: sortedTeams, lbType: s.currentScene?.config?.lbType || 'TOTAL' });
       }
-      saveSnapshot(pin);
-    } else if (s.subState === 'READY') {
+      saveSnapshot(pin, true);
+    } 
+    // 2. READY -> ACTIVE
+    else if (s.subState === 'READY') {
       s.subState = 'ACTIVE';
       s.isPaused = false;
       s.questionStartTime = Date.now();
       const dur = s.currentScene?.config?.duration || s.currentScene?.config?.timeLimit || 30;
       s.currentScene.endTime = Date.now() + dur * 1000;
+      delete s.summaryStats;
       emitStateUpdate(pin, s.currentScene, 'ACTIVE');
 
       clearSessionTimer(pin);
@@ -947,34 +1062,119 @@ io.on('connection', (socket: Socket) => {
           if (currentSession.currentScene) currentSession.currentScene.endTime = Date.now();
           emitStateUpdate(pin, currentSession.currentScene, 'STATS');
           io.to(pin).emit('video-command', 'pause');
-          saveSnapshot(pin);
+          saveSnapshot(pin, true);
         }
       }, dur * 1000);
       sessionTimers.set(pin, timer);
 
       const options = s.currentScene?.config?.options || [];
-      playersMap?.forEach((p, id) => {
-        if (p.isBot && !p.isDisabled) {
-          const delay = Math.random() * Math.max(0.5, dur - 1) * 1000;
-          setTimeout(() => {
-            const currentSession = sessions.get(pin);
-            if (currentSession?.subState === 'ACTIVE') {
-              const selectedOption =
-                options.length > 0 ? [options[Math.floor(Math.random() * options.length)]] : ['A'];
-              handleVote(pin, selectedOption, id);
-            }
-          }, delay);
-        }
-      });
-      saveSnapshot(pin);
-    } else if (s.subState === 'ACTIVE' || s.subState === 'PAUSED') {
+      if (playersMap) {
+        playersMap.forEach((p, id) => {
+          if (p.isBot && !p.isDisabled) {
+            const delay = Math.random() * Math.max(0.5, dur - 1) * 1000;
+            setTimeout(() => {
+              const currentSession = sessions.get(pin);
+              if (currentSession?.subState === 'ACTIVE') {
+                const selectedOption =
+                  options.length > 0 ? [options[Math.floor(Math.random() * options.length)]] : ['A'];
+                handleVote(pin, selectedOption, id);
+              }
+            }, delay);
+          }
+        });
+      }
+      saveSnapshot(pin, true);
+    } 
+    // 3. ACTIVE / PAUSED -> STATS
+    else if (s.subState === 'ACTIVE' || s.subState === 'PAUSED') {
       s.subState = 'STATS';
       s.isPaused = false;
       s.currentScene.endTime = Date.now();
       emitStateUpdate(pin, s.currentScene, 'STATS');
       io.to(pin).emit('video-command', 'pause');
-      saveSnapshot(pin);
-    } else if (s.subState === 'STATS') {
+      saveSnapshot(pin, true);
+    } 
+    // 4. STATS -> SUMMARY (KOPSAVILKUMS AR DAUDZATBILŽU ANALĪZI: 2/2, 1/2, 0/2)
+    else if (s.subState === 'STATS') {
+      s.subState = 'SUMMARY';
+      s.isPaused = false;
+      s.isRevealed = false;
+
+      const config = s.currentScene?.config || {};
+      let correct = config.correctAnswers || [];
+
+      if (s.currentScene?.type === 'MAJORITY') {
+        const counts: Record<string, number> = {};
+        s.votes.forEach((v: any) => {
+          if (Array.isArray(v.optionIds)) {
+            v.optionIds.forEach((o: string) => (counts[o] = (counts[o] || 0) + 1));
+          }
+        });
+        const winner = Object.keys(counts).reduce((a, b) => ((counts[a] || 0) > (counts[b] || 0) ? a : b), '');
+        if (winner) correct = [winner];
+      }
+
+      const activePlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
+      const totalActive = activePlayers.length || s.votes.length || 1;
+      const isAnyOneMode = config.selectionMode === 'ANY_ONE';
+      const requiredCount = correct.length || 1;
+      const isMultiChoice = !isAnyOneMode && requiredCount > 1;
+
+      let fullCorrectCount = 0;
+      let partialCorrectCount = 0;
+      let incorrectCount = 0;
+
+      s.votes.forEach((v: any) => {
+        let matchedCount = 0;
+        if (Array.isArray(v.optionIds)) {
+          v.optionIds.forEach((opt: string) => {
+            if (correct.includes(opt)) matchedCount++;
+          });
+        }
+
+        if (isAnyOneMode) {
+          if (matchedCount > 0) fullCorrectCount++;
+          else incorrectCount++;
+        } else if (isMultiChoice) {
+          if (matchedCount === requiredCount && v.optionIds.length === requiredCount) {
+            fullCorrectCount++;
+          } else if (matchedCount > 0) {
+            partialCorrectCount++;
+          } else {
+            incorrectCount++;
+          }
+        } else {
+          if (matchedCount === 1) fullCorrectCount++;
+          else incorrectCount++;
+        }
+      });
+
+      const unsubmittedCount = Math.max(0, totalActive - s.votes.length);
+      const fullCorrectPct = Math.round((fullCorrectCount / Math.max(1, totalActive)) * 100);
+      const partialCorrectPct = Math.round((partialCorrectCount / Math.max(1, totalActive)) * 100);
+      const incorrectPct = Math.round((incorrectCount / Math.max(1, totalActive)) * 100);
+
+      s.summaryStats = {
+        isMultiChoice,
+        requiredCount,
+        fullCorrectCount,
+        partialCorrectCount,
+        incorrectCount,
+        unsubmittedCount,
+        totalActive,
+        fullCorrectPct,
+        partialCorrectPct,
+        incorrectPct,
+        // Standarta 1 atbildes jautājumiem:
+        correctCount: fullCorrectCount,
+        correctPct: fullCorrectPct
+      };
+
+      emitStateUpdate(pin, s.currentScene, 'SUMMARY', { summaryStats: s.summaryStats });
+      saveSnapshot(pin, true);
+    } 
+    // 5. SUMMARY -> REVEAL (PUNKTU IESKAITĪŠANA: 100%, 50%, 0%)
+    else if (s.subState === 'SUMMARY') {
       s.subState = 'REVEAL';
       s.isRevealed = true;
       s.revealReadyToAdvance = false;
@@ -1004,6 +1204,7 @@ io.on('connection', (socket: Socket) => {
       const votedPlayerIds = new Set(sortedVotes.map((v: any) => v.playerId));
       let correctCounter = 0;
 
+      // AFK DEAKTIVIZĀCIJA
       const maxMissed = s.branding?.maxMissedQuestions || 5;
       playersMap?.forEach((p) => {
         if (!p.isDisabled && !p.isBot) {
@@ -1013,12 +1214,14 @@ io.on('connection', (socket: Socket) => {
             p.missedQuestionsCount = (p.missedQuestionsCount || 0) + 1;
             if (p.missedQuestionsCount >= maxMissed) {
               p.isDisabled = true;
+              logEvent('WARN', `Spēlētājs ${p.name} (#${p.deviceNumber}) atslēgts AFK dēļ (${p.missedQuestionsCount} kavējumi)`);
               io.to(pin).emit('player-disabled-afk', { playerId: p.id, name: p.name });
             }
           }
         }
       });
 
+      // DAUDZATBILŽU PROPORCIONĀLA PUNKTU PIEŠĶIRŠANA (100%, 50%, 0%)
       sortedVotes.forEach((v: any) => {
         let earnedPercentage = 0;
         if (Array.isArray(v.optionIds)) {
@@ -1051,7 +1254,7 @@ io.on('connection', (socket: Socket) => {
                 baseEarned = Math.round(minPoints + (timeLeft / totalDuration) * (maxPoints - minPoints));
               }
 
-              if (config.speedBonusEnabled && correctCounter < 3) {
+              if (config.speedBonusEnabled && earnedPercentage === 100 && correctCounter < 3) {
                 const bonuses = [3, 2, 1];
                 baseEarned += bonuses[correctCounter];
                 correctCounter++;
@@ -1065,7 +1268,7 @@ io.on('connection', (socket: Socket) => {
         }
       });
 
-      emitStateUpdate(pin, s.currentScene, 'REVEAL', { isRevealed: true });
+      emitStateUpdate(pin, s.currentScene, 'REVEAL', { isRevealed: true, summaryStats: s.summaryStats });
       io.to(pin).emit('results-revealed', { correctAnswers: correct, correctnessMap });
 
       const nextScene = s.scenes[s.currentSceneIdx + 1];
@@ -1074,8 +1277,8 @@ io.on('connection', (socket: Socket) => {
       const sortedTeams = getSortedTeamLeaderboard(playersMap!, s?.branding?.teamScoringMode || 'AVG', isRound);
 
       io.to(pin).emit('leaderboard-update', { data: sortedLb, lbType: nextScene?.config?.lbType || 'TOTAL' });
-      io.to(pin).emit('team-leaderboard-update', { data: sortedTeams });
-      saveSnapshot(pin);
+      io.to(pin).emit('team-leaderboard-update', { data: sortedTeams, lbType: nextScene?.config?.lbType || 'TOTAL' });
+      saveSnapshot(pin, true);
     }
   });
 
@@ -1094,20 +1297,54 @@ io.on('connection', (socket: Socket) => {
       s.revealReadyToAdvance = false;
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
+      s.finalLeaderboardView = s.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL';
+      delete s.summaryStats;
+
       emitStateUpdate(data.pin, s.currentScene, 'IDLE');
-      saveSnapshot(data.pin);
+      saveSnapshot(data.pin, true);
     }
   });
 
   socket.on('join-session', (data: { pin: string; name: string; playerId: string; teamName?: string; isCaptain?: boolean }) => {
     if (sessions.has(data.pin)) {
-      socket.join(data.pin);
       const session = sessions.get(data.pin);
       const players = sessionScores.get(data.pin)!;
       const isTeamMode = !!session?.branding?.teamModeEnabled;
 
       let playerObj = players.get(data.playerId);
       const sanitizedTeam = isTeamMode && data.teamName ? data.teamName.trim() : '';
+
+      if (isTeamMode && sanitizedTeam) {
+        const teamLower = sanitizedTeam.toLowerCase();
+        let teamCaptainExists: PlayerState | null = null;
+
+        players.forEach((p) => {
+          if (p.teamName?.toLowerCase() === teamLower && p.isCaptain && p.id !== data.playerId) {
+            teamCaptainExists = p;
+          }
+        });
+
+        if (data.isCaptain && teamCaptainExists) {
+          return socket.emit(
+            'error-message',
+            `❌ Komanda ar nosaukumu "${sanitizedTeam}" jau ir reģistrēta!\nLūdzu noskenējiet sava kapteiņa QR kodu vai izdomājiet atšķirīgu nosaukumu.`
+          );
+        }
+
+        if (!data.isCaptain && !teamCaptainExists) {
+          const teamMemberExists = Array.from(players.values()).some(
+            (p) => p.teamName?.toLowerCase() === teamLower && p.id !== data.playerId
+          );
+          if (!teamMemberExists) {
+            return socket.emit(
+              'error-message',
+              `❌ Komanda "${sanitizedTeam}" vēl nav izveidota!\nKapteinim vispirms jāizveido komanda un jāparāda QR kods.`
+            );
+          }
+        }
+      }
+
+      socket.join(data.pin);
 
       if (data.name !== 'EKRĀNS') {
         if (!participants.has(data.pin)) participants.set(data.pin, new Set());
@@ -1138,10 +1375,14 @@ io.on('connection', (socket: Socket) => {
         }
       }
 
+      const isRound = session?.currentScene?.config?.lbType === 'ROUND';
+      const sortedTeams = getSortedTeamLeaderboard(players, session?.branding?.teamScoringMode || 'AVG', isRound);
+
       io.to(data.pin).emit('presence-update', {
         count: players.size,
         players: Array.from(players.values())
       });
+      io.to(data.pin).emit('team-leaderboard-update', { data: sortedTeams, lbType: session?.currentScene?.config?.lbType || 'TOTAL' });
 
       const sanitizedScene = sanitizeSceneForPlayer(session?.currentScene, session?.subState);
 
@@ -1156,6 +1397,8 @@ io.on('connection', (socket: Socket) => {
         teamName: playerObj?.teamName || '',
         isCaptain: !!playerObj?.isCaptain
       });
+
+      saveSnapshot(data.pin);
     } else {
       socket.emit('error-message', 'Sesija ar šādu PIN kodu nav atrasta.');
     }
@@ -1176,19 +1419,25 @@ io.on('connection', (socket: Socket) => {
       if (set.has(socket.id)) {
         set.delete(socket.id);
         const players = sessionScores.get(pin);
-        io.to(pin).emit('presence-update', {
-          count: players ? players.size : set.size,
-          players: players ? Array.from(players.values()) : []
-        });
+        const session = sessions.get(pin);
+        if (players) {
+          const isRound = session?.currentScene?.config?.lbType === 'ROUND';
+          const sortedTeams = getSortedTeamLeaderboard(players, session?.branding?.teamScoringMode || 'AVG', isRound);
+          io.to(pin).emit('presence-update', {
+            count: players.size,
+            players: Array.from(players.values())
+          });
+          io.to(pin).emit('team-leaderboard-update', { data: sortedTeams, lbType: session?.currentScene?.config?.lbType || 'TOTAL' });
+        }
       }
     });
   });
 });
 
 httpServer.listen(PORT, () => {
-  console.log(`🚀 EVENT STUDIO SERVERIS PALAISTS UZ PORTA: ${PORT}`);
-  console.log(`📡 Lokālā tīkla IP adrese: http://${getLocalIpAddress()}:5173`);
-  console.log(`🔒 Snapshoti tiek droši glabāti: ${SECURE_DATA_DIR}`);
+  logEvent('INFO', `🚀 EVENT STUDIO SERVERIS PALAISTS UZ PORTA: ${PORT}`);
+  logEvent('INFO', `📡 Lokālā tīkla IP adrese: http://${getLocalIpAddress()}:5173`);
+  logEvent('INFO', `🔒 Snapshoti un žurnālfails droši glabājas: ${SECURE_DATA_DIR}`);
 
   startCloudflareTunnel();
 });

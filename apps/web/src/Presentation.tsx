@@ -20,12 +20,14 @@ const NEON_PALETTE = [
 ];
 
 const getDynamicOrbConfig = (count: number) => {
-  if (count <= 4) return { size: 115, numFont: '2.3rem', nameFont: '1.05rem', maxW: 125, gap: 30 };
-  if (count <= 10) return { size: 95, numFont: '1.9rem', nameFont: '0.95rem', maxW: 105, gap: 24 };
-  if (count <= 20) return { size: 78, numFont: '1.5rem', nameFont: '0.82rem', maxW: 86, gap: 18 };
-  if (count <= 40) return { size: 62, numFont: '1.2rem', nameFont: '0.72rem', maxW: 70, gap: 14 };
-  if (count <= 70) return { size: 48, numFont: '0.95rem', nameFont: '0.6rem', maxW: 54, gap: 10 };
-  return { size: 38, numFont: '0.75rem', nameFont: '0.5rem', maxW: 42, gap: 8 };
+  if (count <= 6) return { size: 110, numFont: '2.2rem', nameFont: '1.05rem', maxW: 120, gap: 24, showName: true };
+  if (count <= 15) return { size: 85, numFont: '1.7rem', nameFont: '0.9rem', maxW: 95, gap: 18, showName: true };
+  if (count <= 30) return { size: 68, numFont: '1.3rem', nameFont: '0.78rem', maxW: 76, gap: 14, showName: true };
+  if (count <= 60) return { size: 50, numFont: '1.0rem', nameFont: '0.65rem', maxW: 56, gap: 10, showName: true };
+  if (count <= 100) return { size: 38, numFont: '0.78rem', nameFont: '0.52rem', maxW: 42, gap: 8, showName: true };
+  if (count <= 150) return { size: 30, numFont: '0.62rem', nameFont: '0.45rem', maxW: 34, gap: 6, showName: true };
+  if (count <= 250) return { size: 24, numFont: '0.5rem', nameFont: '0.35rem', maxW: 28, gap: 5, showName: false };
+  return { size: 18, numFont: '0.38rem', nameFont: '0.3rem', maxW: 22, gap: 4, showName: false };
 };
 
 const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
@@ -40,7 +42,6 @@ const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
 
 export const formatThinkingTime = (totalMs: number = 0): string => {
   if (!totalMs || totalMs <= 0) return '0 sek un 000 ms';
-  
   const ms = Math.floor(totalMs % 1000);
   const totalSeconds = Math.floor(totalMs / 1000);
   const seconds = totalSeconds % 60;
@@ -68,11 +69,11 @@ const MediaLayoutItem: React.FC<{
 
   const isVisible =
     vis === 'ALWAYS' ||
-    (vis === 'DURING_QUESTION' && ['READY', 'ACTIVE', 'PAUSED', 'STATS'].includes(currentSub) && !isRevealPhase) ||
+    (vis === 'DURING_QUESTION' && ['READY', 'ACTIVE', 'PAUSED', 'STATS', 'SUMMARY'].includes(currentSub) && !isRevealPhase) ||
     (vis === 'AFTER_REVEAL' && isRevealPhase);
 
   const shouldPlay = isVisible && currentSub !== 'PAUSED' && (
-    (vis === 'ALWAYS' && ['READY', 'ACTIVE', 'STATS', 'REVEAL'].includes(currentSub)) ||
+    (vis === 'ALWAYS' && ['READY', 'ACTIVE', 'STATS', 'SUMMARY', 'REVEAL'].includes(currentSub)) ||
     (vis === 'DURING_QUESTION' && currentSub === 'ACTIVE') ||
     (vis === 'AFTER_REVEAL' && isRevealPhase)
   );
@@ -94,7 +95,7 @@ const MediaLayoutItem: React.FC<{
     }
   }, [shouldPlay, currentSub, isRevealPhase, el.trimStart, el.volume]);
 
-  const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 80 : 50));
+  const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 85 : 60));
   const style: React.CSSProperties = {
     position: 'absolute',
     left: `${el.x}%`,
@@ -123,10 +124,11 @@ const MediaLayoutItem: React.FC<{
           ...style,
           background: bgRgba,
           padding: el.type === 'QUESTION' ? '15px 25px' : '10px',
-          borderRadius: el.type === 'QUESTION' ? '20px' : '6px',
-          backdropFilter: 'blur(8px)',
-          border: el.type === 'QUESTION' ? '2px solid #ffc107' : 'none',
-          textShadow: '2px 2px 10px #000'
+          borderRadius: el.type === 'QUESTION' ? '20px' : '8px',
+          backdropFilter: 'blur(14px)',
+          border: el.type === 'QUESTION' ? '2px solid #ffc107' : '1px solid rgba(255,255,255,0.15)',
+          textShadow: '0 2px 10px #000',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.8)'
         }}
       >
         {el.content}
@@ -204,21 +206,42 @@ const MediaLayoutItem: React.FC<{
 interface TopBarProps {
   pin: string | undefined;
   scene: any;
+  subState: string;
+  summaryStats?: any;
   participantCount: number;
   voteData: {
     summary: Record<string, number>;
     votedCount: number;
+    votedPlayerIds?: string[];
   };
+  players: any[];
   isRevealed: boolean;
+  isTeamMode: boolean;
 }
 
-const TopBar: React.FC<TopBarProps> = ({ pin, scene, participantCount, voteData, isRevealed }) => {
+const TopBar: React.FC<TopBarProps> = ({
+  pin,
+  scene,
+  subState,
+  summaryStats,
+  participantCount,
+  voteData,
+  players,
+  isRevealed,
+  isTeamMode
+}) => {
   const votedCount = voteData.votedCount || 0;
-  const missingCount = Math.max(0, participantCount - votedCount);
+  
+  const unvotedPlayers = players.filter(
+    (p) => !p.isDisabled && !(voteData.votedPlayerIds || []).includes(p.id)
+  );
+  const missingCount = unvotedPlayers.length;
 
   const duration = scene?.config?.duration ?? scene?.config?.timeLimit ?? 0;
   const hasTimer = duration > 0;
   const isPaused = scene?.subState === 'PAUSED';
+  const currentSub = (subState || scene?.subState || '').toUpperCase();
+  const isSummaryPhase = currentSub === 'SUMMARY' || currentSub === 'REVEAL';
 
   const maxPoints = scene?.config?.pointsMax ?? scene?.config?.points ?? 15;
   const minPoints = scene?.config?.pointsMin ?? 1;
@@ -249,18 +272,18 @@ const TopBar: React.FC<TopBarProps> = ({ pin, scene, participantCount, voteData,
   }, [scene?.endTime, scene?.subState, duration, maxPoints, minPoints, hasTimer, isPaused]);
 
   const getDotStyle = (count: number): React.CSSProperties => {
-    let size = 18;
-    if (count > 60) size = 7;
-    else if (count > 30) size = 10;
-    else if (count > 15) size = 13;
-    else if (count <= 5) size = 22;
+    let size = 6;
+    if (count <= 10) size = 20;
+    else if (count <= 25) size = 15;
+    else if (count <= 60) size = 10;
+    else if (count <= 150) size = 8;
 
     return {
       width: `${size}px`,
       height: `${size}px`,
       backgroundColor: '#00ff00',
       borderRadius: '50%',
-      boxShadow: '0 0 8px #00ff00',
+      boxShadow: `0 0 ${size}px #00ff00`,
       transition: 'all 0.3s ease'
     };
   };
@@ -272,22 +295,77 @@ const TopBar: React.FC<TopBarProps> = ({ pin, scene, participantCount, voteData,
       </div>
 
       <div style={votersBox}>
-        {isPaused ? (
+        {/* SUMMARY DIAGRAMMA AR DAUDZATBILŽU (2/2, 1/2, 0/2) VAI STANDARTA (1/1) ATBALSTU */}
+        {isSummaryPhase && (summaryStats || scene?.summaryStats) ? (
+          (() => {
+            const stats = summaryStats || scene?.summaryStats || {};
+            if (stats.isMultiChoice) {
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <span style={summaryPillGreen}>
+                    🟩 Pilnīgi ({stats.requiredCount}/{stats.requiredCount}): <strong>{stats.fullCorrectCount ?? 0}</strong> ({stats.fullCorrectPct ?? 0}%)
+                  </span>
+                  <span style={summaryPillYellow}>
+                    🟨 Daļēji (1/{stats.requiredCount}): <strong>{stats.partialCorrectCount ?? 0}</strong> ({stats.partialCorrectPct ?? 0}%)
+                  </span>
+                  <span style={summaryPillRed}>
+                    🟥 Kļūdaini (0/{stats.requiredCount}): <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
+                  </span>
+                  <span style={summaryPillGray}>
+                    ⏱️ Nokavēja: <strong>{stats.unsubmittedCount ?? 0}</strong>
+                  </span>
+                </div>
+              );
+            }
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <span style={summaryPillGreen}>
+                  🟩 Pareizi: <strong>{stats.correctCount ?? 0}</strong> ({stats.correctPct ?? 0}%)
+                </span>
+                <span style={summaryPillRed}>
+                  🟥 Kļūdaini: <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
+                </span>
+                <span style={summaryPillGray}>
+                  ⏱️ Nokavēja: <strong>{stats.unsubmittedCount ?? 0}</strong>
+                </span>
+              </div>
+            );
+          })()
+        ) : isPaused ? (
           <span style={{ color: '#ff9800', fontSize: '1.3vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(255,152,0,0.8)' }}>
             ⏸️ SPĒLE IEPAUZĒTA
           </span>
-        ) : missingCount > 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '420px', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
-              {[...Array(missingCount)].map((_, i) => (
-                <div key={i} style={getDotStyle(missingCount)} title="Gaidām atbildi..." />
+        ) : missingCount > 5 ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '500px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', maxHeight: '55px', overflow: 'hidden' }}>
+              {[...Array(Math.min(missingCount, 120))].map((_, i) => (
+                <div key={i} style={getDotStyle(missingCount)} />
               ))}
             </div>
-            {missingCount <= 5 && (
-              <span style={{ color: '#ffc107', fontWeight: 'bold', fontSize: '1vw', marginLeft: '6px', textShadow: '0 0 10px #ffc107' }}>
-                GAIDĀM PĒDĒJOS! ({missingCount})
+          </div>
+        ) : missingCount > 0 ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <span style={{ color: '#ffc107', fontWeight: 'bold', fontSize: '0.95vw', textTransform: 'uppercase', textShadow: '0 0 10px #ffc107' }}>
+              GAIDĀM ATBILDES ({missingCount}):
+            </span>
+            {unvotedPlayers.map((p) => (
+              <span
+                key={p.id}
+                style={{
+                  background: 'rgba(255, 193, 7, 0.25)',
+                  border: '2px solid #ffc107',
+                  color: '#fff',
+                  padding: '3px 10px',
+                  borderRadius: '8px',
+                  fontWeight: 'bold',
+                  fontSize: '0.95vw',
+                  backdropFilter: 'blur(10px)',
+                  boxShadow: '0 0 12px rgba(255, 193, 7, 0.6)'
+                }}
+              >
+                #{p.deviceNumber || '?'} {p.name} {isTeamMode && p.teamName ? `[${p.teamName}]` : ''}
               </span>
-            )}
+            ))}
           </div>
         ) : (
           <span style={{ color: '#28a745', fontSize: '1.2vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(40,167,69,0.8)' }}>
@@ -322,9 +400,11 @@ export default function Presentation() {
   const [pin, setPin] = useState<string>('');
   const [scene, setScene] = useState<any>(null);
   const [subState, setSubState] = useState<string>('IDLE');
-  const [voteData, setVoteData] = useState<{ summary: Record<string, number>; votedCount: number }>({
+  const [summaryStats, setSummaryStats] = useState<any>(null);
+  const [voteData, setVoteData] = useState<{ summary: Record<string, number>; votedCount: number; votedPlayerIds?: string[] }>({
     summary: {},
-    votedCount: 0
+    votedCount: 0,
+    votedPlayerIds: []
   });
   const [participantCount, setParticipantCount] = useState(0);
   const [players, setPlayers] = useState<any[]>([]);
@@ -334,7 +414,7 @@ export default function Presentation() {
   const [isStatsVisible, setIsStatsVisible] = useState(false);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [teamLeaderboard, setTeamLeaderboard] = useState<any[]>([]);
-  const [showTeamLeaderboard, setShowTeamLeaderboard] = useState(false);
+  const [showTeamLeaderboard, setShowTeamLeaderboard] = useState(true);
   const [leaderboardType, setLeaderboardType] = useState<'ROUND' | 'TOTAL' | 'FINAL'>('TOTAL');
   const [leaderboardPage, setLeaderboardPage] = useState(0);
   const [podiumStage, setPodiumStage] = useState(0);
@@ -355,25 +435,65 @@ export default function Presentation() {
   const [connectionUrl, setConnectionUrl] = useState<string>('');
   const [testedBuzzerCounts, setTestedBuzzerCounts] = useState<Record<string, number>>({});
 
-  const audioTimerRef = useRef<HTMLAudioElement | null>(null);
-  const audioTimeUpRef = useRef<HTMLAudioElement | null>(null);
-  const audioRevealRef = useRef<HTMLAudioElement | null>(null);
-  const audioFinalsRef = useRef<HTMLAudioElement | null>(null);
+  const audioBank = useRef<{
+    timer: HTMLAudioElement;
+    timeUp: HTMLAudioElement;
+    reveal: HTMLAudioElement;
+    finals: HTMLAudioElement;
+  } | null>(null);
 
   useEffect(() => {
-    audioTimerRef.current = new Audio('/sounds/00Time.mp3');
-    audioTimeUpRef.current = new Audio('/sounds/01laiksbeidzas.mp3');
-    audioRevealRef.current = new Audio('/sounds/02atklajatbildi.mp3');
-    audioFinalsRef.current = new Audio('/sounds/04Finals.mp3');
-    audioFinalsRef.current.loop = true;
+    if (!audioBank.current) {
+      audioBank.current = {
+        timer: new Audio('/sounds/00Time.mp3'),
+        timeUp: new Audio('/sounds/01laiksbeidzas.mp3'),
+        reveal: new Audio('/sounds/02atklajatbildi.mp3'),
+        finals: new Audio('/sounds/04Finals.mp3')
+      };
+      audioBank.current.timer.preload = 'auto';
+      audioBank.current.timeUp.preload = 'auto';
+      audioBank.current.reveal.preload = 'auto';
+      audioBank.current.finals.preload = 'auto';
+      audioBank.current.finals.loop = true;
+    }
 
     return () => {
-      audioTimerRef.current?.pause();
-      audioTimeUpRef.current?.pause();
-      audioRevealRef.current?.pause();
-      audioFinalsRef.current?.pause();
+      if (audioBank.current) {
+        Object.values(audioBank.current).forEach((a) => {
+          a.pause();
+          a.currentTime = 0;
+        });
+      }
     };
   }, []);
+
+  const playSound = (audio: HTMLAudioElement | undefined) => {
+    if (!audio || !isMediaReady) return;
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {});
+      }
+    } catch {}
+  };
+
+  const stopSound = (audio: HTMLAudioElement | undefined) => {
+    if (!audio) return;
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+    } catch {}
+  };
+
+  const hasCustomMediaDuringQuestion = !!(scene?.config?.layout || []).some(
+    (el: any) =>
+      (el.type === 'AUDIO' || el.type === 'VIDEO') &&
+      el.content &&
+      String(el.content).trim() !== '' &&
+      (el.visibility === 'ALWAYS' || el.visibility === 'DURING_QUESTION')
+  );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -397,19 +517,34 @@ export default function Presentation() {
       if (data?.connectionUrl) setConnectionUrl(data.connectionUrl);
       if (data?.currentScene) setScene(data.currentScene);
       if (data?.subState) setSubState(String(data.subState).toUpperCase());
-      if (data?.branding) setBranding((prev: any) => ({ ...prev, ...data.branding }));
+      if (data?.summaryStats) setSummaryStats(data.summaryStats);
+      if (data?.branding) {
+        setBranding((prev: any) => ({ ...prev, ...data.branding }));
+        if (data.branding.teamModeEnabled !== undefined) {
+          setShowTeamLeaderboard(Boolean(data.branding.teamModeEnabled));
+        }
+      }
     };
 
     const handleSessionInfo = (data: any) => {
       if (data?.state?.connectionUrl) setConnectionUrl(data.state.connectionUrl);
       if (data?.state?.currentScene) setScene(data.state.currentScene);
       if (data?.state?.subState) setSubState(String(data.state.subState).toUpperCase());
-      if (data?.state?.branding) setBranding((prev: any) => ({ ...prev, ...data.state.branding }));
+      if (data?.state?.summaryStats) setSummaryStats(data.state.summaryStats);
+      if (data?.state?.branding) {
+        setBranding((prev: any) => ({ ...prev, ...data.state.branding }));
+        if (data.state.branding.teamModeEnabled !== undefined) {
+          setShowTeamLeaderboard(Boolean(data.state.branding.teamModeEnabled));
+        }
+      }
     };
 
     const handleSessionBranding = (br: any) => {
       if (br && Object.keys(br).length > 0) {
         setBranding((prev: any) => ({ ...prev, ...br }));
+        if (br.teamModeEnabled !== undefined) {
+          setShowTeamLeaderboard(Boolean(br.teamModeEnabled));
+        }
       }
     };
 
@@ -424,16 +559,20 @@ export default function Presentation() {
     const handleStateUpdate = (newScene: any) => {
       setScene((prevScene: any) => {
         if (!prevScene || prevScene.id !== newScene.id || newScene.subState === 'READY') {
-          setVoteData({ summary: {}, votedCount: 0 });
+          setVoteData({ summary: {}, votedCount: 0, votedPlayerIds: [] });
           setIsRevealed(false);
           setRevealedCorrectAnswers([]);
           setRevealedCorrectnessMap({});
           setIsStatsVisible(false);
+          setSummaryStats(null);
         }
         return newScene;
       });
       const nextSub = (newScene?.subState || 'READY').toUpperCase();
       setSubState(nextSub);
+      if (newScene?.summaryStats) {
+        setSummaryStats(newScene.summaryStats);
+      }
       if (nextSub === 'REVEAL') {
         setIsRevealed(true);
       }
@@ -447,50 +586,44 @@ export default function Presentation() {
       window.close();
     };
 
-    socket.on('join-success', handleJoinSuccess);
-    socket.on('session-info', handleSessionInfo);
-    socket.on('session-branding', handleSessionBranding);
-    socket.on('connection-url-changed', handleConnectionUrlChanged);
-    socket.on('tunnel-ready', handleTunnelReady);
-    socket.on('state-update', handleStateUpdate);
-    socket.on('session-ended', handleSessionEnded);
-    socket.on('session-closed', handleSessionEnded);
+    const handleVotesUpdated = (data: any) => {
+      setVoteData({
+        summary: data?.summary || {},
+        votedCount: data?.votedCount || 0,
+        votedPlayerIds: data?.votedPlayerIds || []
+      });
+    };
 
-    socket.on('votes-updated', (data: any) => {
-      setVoteData({ summary: data?.summary || {}, votedCount: data?.votedCount || 0 });
-    });
-
-    socket.on('presence-update', (data) => {
+    const handlePresenceUpdate = (data: any) => {
       setParticipantCount(data?.count || 0);
       if (Array.isArray(data?.players)) setPlayers(data.players);
-    });
+    };
 
-    socket.on('results-revealed', (data: { correctAnswers: string[]; correctnessMap: Record<string, number> }) => {
+    const handleResultsRevealed = (data: { correctAnswers: string[]; correctnessMap: Record<string, number> }) => {
       setIsRevealed(true);
       if (data?.correctAnswers) setRevealedCorrectAnswers(data.correctAnswers);
       if (data?.correctnessMap) setRevealedCorrectnessMap(data.correctnessMap);
+    };
 
-      audioTimerRef.current?.pause();
-      audioTimeUpRef.current?.pause();
+    const handleToggleChart = () => setIsStatsVisible((prev) => !prev);
 
-      if (audioRevealRef.current) {
-        audioRevealRef.current.currentTime = 0;
-        audioRevealRef.current.play().catch((err) => console.log('Reveal audio error:', err));
+    const handleToggleTeamView = (data?: { view?: 'TEAMS' | 'INDIVIDUAL'; page?: number }) => {
+      if (data?.view) {
+        setShowTeamLeaderboard(data.view === 'TEAMS');
+      } else {
+        setShowTeamLeaderboard((prev) => !prev);
       }
-    });
+      setLeaderboardPage(data?.page !== undefined ? data.page : 0);
+    };
 
-    socket.on('toggle-audience-chart', () => {
-      setIsStatsVisible((prev) => !prev);
-    });
-
-    socket.on('player-buzzer-test', (data: { playerId: string }) => {
+    const handleBuzzerTest = (data: { playerId: string }) => {
       setTestedBuzzerCounts((prev) => ({
         ...prev,
         [data.playerId]: (prev[data.playerId] || 0) + 1
       }));
-    });
+    };
 
-    socket.on('leaderboard-update', (payload: any) => {
+    const handleLeaderboardUpdate = (payload: any) => {
       if (Array.isArray(payload)) {
         setLeaderboard(payload);
         setLeaderboardType('TOTAL');
@@ -500,23 +633,43 @@ export default function Presentation() {
       }
       setLeaderboardPage(0);
       setPodiumStage(0);
-    });
+    };
 
-    socket.on('team-leaderboard-update', (payload: any) => {
+    const handleTeamLeaderboardUpdate = (payload: any) => {
       const list = Array.isArray(payload) ? payload : (payload?.data || []);
       setTeamLeaderboard(list);
-    });
+      if (payload?.lbType) {
+        setLeaderboardType(payload.lbType.toUpperCase());
+      }
+    };
 
+    socket.on('join-success', handleJoinSuccess);
+    socket.on('session-info', handleSessionInfo);
+    socket.on('session-branding', handleSessionBranding);
+    socket.on('connection-url-changed', handleConnectionUrlChanged);
+    socket.on('tunnel-ready', handleTunnelReady);
+    socket.on('state-update', handleStateUpdate);
+    socket.on('session-ended', handleSessionEnded);
+    socket.on('session-closed', handleSessionEnded);
+    socket.on('votes-updated', handleVotesUpdated);
+    socket.on('presence-update', handlePresenceUpdate);
+    socket.on('results-revealed', handleResultsRevealed);
+    socket.on('toggle-audience-chart', handleToggleChart);
+    socket.on('toggle-team-leaderboard', handleToggleTeamView);
+    socket.on('player-buzzer-test', handleBuzzerTest);
+    socket.on('leaderboard-update', handleLeaderboardUpdate);
+    socket.on('team-leaderboard-update', handleTeamLeaderboardUpdate);
     socket.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
     socket.on('leaderboard-page-change', (page: number) => setLeaderboardPage(page));
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.key === 'c' || e.key === 'C') && (subState === 'STATS' || isRevealed)) {
+      if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
         setIsStatsVisible((prev) => !prev);
-      } else if ((e.key === 't' || e.key === 'T') && scene?.type === 'LEADERBOARD' && branding?.teamModeEnabled) {
+      } else if (e.key === 't' || e.key === 'T') {
         e.preventDefault();
         setShowTeamLeaderboard((prev) => !prev);
+        setLeaderboardPage(0);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -530,18 +683,19 @@ export default function Presentation() {
       socket.off('state-update', handleStateUpdate);
       socket.off('session-ended', handleSessionEnded);
       socket.off('session-closed', handleSessionEnded);
-      socket.off('votes-updated');
-      socket.off('presence-update');
-      socket.off('results-revealed');
-      socket.off('toggle-audience-chart');
-      socket.off('player-buzzer-test');
-      socket.off('leaderboard-update');
-      socket.off('team-leaderboard-update');
+      socket.off('votes-updated', handleVotesUpdated);
+      socket.off('presence-update', handlePresenceUpdate);
+      socket.off('results-revealed', handleResultsRevealed);
+      socket.off('toggle-audience-chart', handleToggleChart);
+      socket.off('toggle-team-leaderboard', handleToggleTeamView);
+      socket.off('player-buzzer-test', handleBuzzerTest);
+      socket.off('leaderboard-update', handleLeaderboardUpdate);
+      socket.off('team-leaderboard-update', handleTeamLeaderboardUpdate);
       socket.off('podium-stage-change');
       socket.off('leaderboard-page-change');
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [routePin, subState, isRevealed, scene?.type, branding?.teamModeEnabled]);
+  }, [routePin]);
 
   const isTeamMode = !!branding?.teamModeEnabled;
   const currentSub = (subState || scene?.subState || 'IDLE').toUpperCase();
@@ -555,76 +709,73 @@ export default function Presentation() {
   const isFinalLb = scene?.type === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
   const isFullContent = scene?.type === 'BILLBOARD' || scene?.type === 'LEADERBOARD';
 
-  const hasCustomMediaDuringQuestion = !!(scene?.config?.layout || []).some(
-    (el: any) =>
-      (el.type === 'AUDIO' || el.type === 'VIDEO') &&
-      el.content &&
-      (el.visibility === 'ALWAYS' || el.visibility === 'DURING_QUESTION')
-  );
-
+  // KONTROLĒTA AUDIO ATSKAŅOŠANA
   useEffect(() => {
-    if (!isMediaReady || !audioTimerRef.current) return;
+    if (!isMediaReady || !audioBank.current) return;
 
     if (currentSub === 'ACTIVE' && isQuestionType) {
-      if (!hasCustomMediaDuringQuestion) {
-        audioTimerRef.current.currentTime = 0;
-        audioTimerRef.current.play().catch(() => {});
+      stopSound(audioBank.current.timeUp);
+      stopSound(audioBank.current.reveal);
+      stopSound(audioBank.current.finals);
+
+      if (hasCustomMediaDuringQuestion) {
+        stopSound(audioBank.current.timer);
+      } else {
+        playSound(audioBank.current.timer);
       }
+    } else if (currentSub === 'STATS' && isQuestionType) {
+      stopSound(audioBank.current.timer);
+      stopSound(audioBank.current.reveal);
+      playSound(audioBank.current.timeUp);
+    } else if (currentSub === 'SUMMARY' && isQuestionType) {
+      stopSound(audioBank.current.timer);
+      stopSound(audioBank.current.timeUp);
+    } else if (currentSub === 'REVEAL' && isQuestionType) {
+      stopSound(audioBank.current.timer);
+      stopSound(audioBank.current.timeUp);
+      playSound(audioBank.current.reveal);
+    } else if (isFinalLb) {
+      stopSound(audioBank.current.timer);
+      stopSound(audioBank.current.timeUp);
+      stopSound(audioBank.current.reveal);
+      playSound(audioBank.current.finals);
     } else {
-      audioTimerRef.current.pause();
+      stopSound(audioBank.current.timer);
+      if (!isFinalLb) stopSound(audioBank.current.finals);
     }
-  }, [currentSub, isQuestionType, hasCustomMediaDuringQuestion, isMediaReady]);
+  }, [currentSub, isQuestionType, hasCustomMediaDuringQuestion, isFinalLb, isMediaReady]);
 
   const handleCustomMediaEnded = () => {
-    if (currentSub === 'ACTIVE' && isQuestionType && audioTimerRef.current) {
-      if (audioTimerRef.current.paused) {
-        audioTimerRef.current.currentTime = 0;
-        audioTimerRef.current.play().catch(() => {});
+    if (currentSub === 'ACTIVE' && isQuestionType && audioBank.current) {
+      playSound(audioBank.current.timer);
+    }
+  };
+
+  const handleStartPresentation = async () => {
+    setIsMediaReady(true);
+    if (!audioBank.current) return;
+
+    for (const sound of Object.values(audioBank.current)) {
+      try {
+        sound.muted = true;
+        await sound.play();
+        sound.pause();
+        sound.currentTime = 0;
+        sound.muted = false;
+        sound.volume = 1.0;
+      } catch (e) {
+        sound.muted = false;
+        sound.volume = 1.0;
       }
     }
   };
 
-  useEffect(() => {
-    if (!isMediaReady || !audioTimeUpRef.current) return;
-
-    if (currentSub === 'STATS' && isQuestionType) {
-      audioTimerRef.current?.pause();
-      audioTimeUpRef.current.currentTime = 0;
-      audioTimeUpRef.current.play().catch(() => {});
-    }
-  }, [currentSub, isQuestionType, isMediaReady]);
-
-  useEffect(() => {
-    if (!isMediaReady || !audioRevealRef.current) return;
-
-    if (currentSub === 'REVEAL' && isQuestionType) {
-      audioTimerRef.current?.pause();
-      audioTimeUpRef.current?.pause();
-      audioRevealRef.current.currentTime = 0;
-      audioRevealRef.current.play().catch(() => {});
-    }
-  }, [currentSub, isQuestionType, isMediaReady]);
-
-  useEffect(() => {
-    if (!isMediaReady || !audioFinalsRef.current) return;
-
-    if (isFinalLb) {
-      audioTimerRef.current?.pause();
-      audioTimeUpRef.current?.pause();
-      audioRevealRef.current?.pause();
-      audioFinalsRef.current.currentTime = 0;
-      audioFinalsRef.current.play().catch(() => {});
-    } else {
-      audioFinalsRef.current.pause();
-    }
-  }, [isFinalLb, isMediaReady]);
-
   if (isSessionClosed) {
     return (
       <div style={fullScreenCenter}>
-        <div style={{ textAlign: 'center', background: '#1c1c1c', padding: '40px', borderRadius: '20px', border: '2px solid #444' }}>
-          <h1 style={{ color: '#ffc107', fontSize: '3vw', margin: '0 0 15px 0' }}>👋 SPĒLES SESIJA IR BEIGUSIES</h1>
-          <p style={{ color: '#aaa', fontSize: '1.4vw', margin: '0 0 25px 0' }}>Vadītājs ir noslēdzis šo sesiju. Šo logu var droši aizvērt.</p>
+        <div style={{ textAlign: 'center', background: 'rgba(20, 20, 20, 0.95)', backdropFilter: 'blur(16px)', padding: '40px', borderRadius: '24px', border: '2px solid rgba(255,255,255,0.2)', boxShadow: '0 20px 60px rgba(0,0,0,0.9)' }}>
+          <h1 style={{ color: '#ffc107', fontSize: '3vw', margin: '0 0 15px 0', textShadow: '0 2px 10px #000' }}>👋 SPĒLES SESIJA IR BEIGUSIES</h1>
+          <p style={{ color: '#ccc', fontSize: '1.4vw', margin: '0 0 25px 0' }}>Vadītājs ir noslēdzis šo sesiju. Šo logu var droši aizvērt.</p>
           <button onClick={() => window.close()} style={bigBtn}>
             Aizvērt logu
           </button>
@@ -632,16 +783,6 @@ export default function Presentation() {
       </div>
     );
   }
-
-  const handleStartPresentation = () => {
-    setIsMediaReady(true);
-    [audioTimerRef.current, audioTimeUpRef.current, audioRevealRef.current, audioFinalsRef.current].forEach((a) => {
-      if (a) {
-        a.load();
-        a.volume = 1.0;
-      }
-    });
-  };
 
   if (!isMediaReady) {
     return (
@@ -657,36 +798,35 @@ export default function Presentation() {
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
 
-  // 1. LOBBY SKATS (ABI REŽĪMI)
+  // 1. SĀKUMA REĢISTRĀCIJAS EKRĀNS (LOBBY)
   if (!scene) {
     const lobbyMode = branding?.lobbyMode || 'CIRCLE';
 
-    // A) REŽĪMS AR BUMBIŅĀM (INTERACTIVE_DOTS)
     if (lobbyMode === 'INTERACTIVE_DOTS') {
       const orbCfg = getDynamicOrbConfig(players.length);
 
       return (
-        <div style={{ ...fullScreen, backgroundColor: branding.appBgColor || '#0a0a0a', padding: '25px 35px', boxSizing: 'border-box' }}>
+        <div style={{ ...fullScreen, backgroundColor: branding.appBgColor || '#0a0a0a', padding: '20px 30px', boxSizing: 'border-box' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-            <div style={{ border: '4px solid #00ff00', padding: '8px 26px', borderRadius: '18px', boxShadow: '0 0 35px rgba(0,255,0,0.35)', background: '#000' }}>
-              <span style={{ fontSize: '1.4vw', color: '#888' }}>PIN: </span>
+            <div style={{ border: '4px solid #00ff00', padding: '8px 26px', borderRadius: '18px', boxShadow: '0 0 35px rgba(0,255,0,0.35)', background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)' }}>
+              <span style={{ fontSize: '1.4vw', color: '#aaa' }}>PIN: </span>
               <span style={{ fontSize: '3.2vw', color: '#00ff00', fontWeight: 'bold' }}>{pin}</span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 18px', borderRadius: '15px', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
-              <img src={qrCodeUrl} alt="QR" style={{ width: '95px', height: '95px' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 18px', borderRadius: '16px', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
+              <img src={qrCodeUrl} alt="QR" style={{ width: '85px', height: '85px' }} />
               <div style={{ textAlign: 'left', color: '#000' }}>
-                <div style={{ fontWeight: 'bold', fontSize: '1.2vw' }}>Skenē kamerā!</div>
-                <div style={{ fontSize: '0.85vw', color: '#555' }}>Pieslēdzies spēlei</div>
+                <div style={{ fontWeight: 'bold', fontSize: '1.1vw' }}>Skenē kamerā!</div>
+                <div style={{ fontSize: '0.8vw', color: '#555' }}>Pieslēdzies spēlei</div>
               </div>
             </div>
           </div>
 
-          <div style={{ margin: '15px 0', textAlign: 'center' }}>
-            <h2 style={{ fontSize: '2.2vw', color: '#ffc107', margin: 0, textShadow: '0 0 15px rgba(255,193,7,0.4)' }}>
+          <div style={{ margin: '8px 0', textAlign: 'center' }}>
+            <h2 style={{ fontSize: '2vw', color: '#ffc107', margin: 0, textShadow: '0 0 15px rgba(255,193,7,0.5)' }}>
               🎮 PIESLĒGUŠIES DALĪBNIEKI ({participantCount}):
             </h2>
-            <span style={{ fontSize: '1.1vw', color: '#aaa', marginTop: '4px', display: 'inline-block' }}>
+            <span style={{ fontSize: '0.95vw', color: '#aaa', marginTop: '2px', display: 'inline-block' }}>
               Spiediet telefonā "Pārbaudīt pulti", lai mainītu krāsas un bumbiņa pulsētu! 💥
             </span>
           </div>
@@ -701,13 +841,13 @@ export default function Presentation() {
               justifyContent: 'center',
               alignItems: 'center',
               alignContent: 'center',
-              overflowY: 'auto',
-              padding: '15px',
+              overflow: 'hidden',
+              padding: '10px',
               boxSizing: 'border-box'
             }}
           >
             {players.length === 0 ? (
-              <div style={{ color: '#555', fontSize: '1.5vw', fontStyle: 'italic' }}>
+              <div style={{ color: '#666', fontSize: '1.5vw', fontStyle: 'italic', background: 'rgba(0,0,0,0.6)', padding: '10px 20px', borderRadius: '10px' }}>
                 Gaidām dalībnieku pieslēgšanos...
               </div>
             ) : (
@@ -742,6 +882,7 @@ export default function Presentation() {
                       transform: `scale(${currentScale})`,
                       transition: 'all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                     }}
+                    title={`${p.name} (#${p.deviceNumber || idx + 1})`}
                   >
                     <div
                       style={{
@@ -757,35 +898,33 @@ export default function Presentation() {
                         fontWeight: '900',
                         fontSize: orbCfg.numFont,
                         border: 'none',
-                        outline: 'none',
                         userSelect: 'none'
                       }}
                     >
                       #{p.deviceNumber || idx + 1}
                     </div>
 
-                    <span
-                      style={{
-                        fontSize: orbCfg.nameFont,
-                        fontWeight: 'bold',
-                        color: '#fff',
-                        marginTop: '6px',
-                        width: '100%',
-                        maxWidth: `${orbCfg.maxW}px`,
-                        textAlign: 'center',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        textShadow: '0 2px 6px #000',
-                        display: 'block'
-                      }}
-                      title={p.name}
-                    >
-                      {p.name}
-                    </span>
-                    {isTeamMode && p.teamName && (
-                      <span style={{ fontSize: '0.65vw', color: '#00e5ff', marginTop: '2px' }}>
-                        [{p.teamName}]
+                    {orbCfg.showName && (
+                      <span
+                        style={{
+                          fontSize: orbCfg.nameFont,
+                          fontWeight: 'bold',
+                          color: '#fff',
+                          marginTop: '4px',
+                          width: '100%',
+                          maxWidth: `${orbCfg.maxW}px`,
+                          textAlign: 'center',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          background: 'rgba(0,0,0,0.7)',
+                          backdropFilter: 'blur(4px)',
+                          borderRadius: '4px',
+                          padding: '1px 3px',
+                          display: 'block'
+                        }}
+                      >
+                        {p.name}
                       </span>
                     )}
                   </div>
@@ -797,7 +936,6 @@ export default function Presentation() {
       );
     }
 
-    // B) KLASISKAIS REŽĪMS AR LIELO SKAITLI UN APLI (CIRCLE)
     const circleSize = `${Math.min(14 + participantCount * 0.2, 32)}vw`;
 
     return (
@@ -805,7 +943,7 @@ export default function Presentation() {
         <h1 style={{ fontSize: '2.5vw', color: '#888', margin: 0 }}>PIEVIENOJIES SPĒLEI:</h1>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '35px' }}>
-          <div style={{ border: '6px solid #0f0', padding: '1.5vw 3.5vw', borderRadius: '30px', boxShadow: '0 0 60px rgba(0,255,0,0.3)' }}>
+          <div style={{ border: '6px solid #0f0', padding: '1.5vw 3.5vw', borderRadius: '30px', boxShadow: '0 0 60px rgba(0,255,0,0.3)', background: 'rgba(0,0,0,0.85)' }}>
             <h1 style={{ fontSize: '8vw', margin: 0, letterSpacing: '0.8vw', lineHeight: 1, color: '#fff' }}>{pin}</h1>
           </div>
 
@@ -827,7 +965,9 @@ export default function Presentation() {
             justifyContent: 'center',
             transition: 'all 0.5s ease',
             boxShadow: '0 0 50px #00ff00',
-            marginTop: '0.5vw'
+            marginTop: '0.5vw',
+            background: 'rgba(0,0,0,0.7)',
+            backdropFilter: 'blur(8px)'
           }}
         >
           <span style={{ fontSize: '5vw', fontWeight: 'bold', color: '#fff', lineHeight: 1 }}>{participantCount}</span>
@@ -862,20 +1002,23 @@ export default function Presentation() {
       return timeA - timeB;
     });
 
-  const totalCount = sortedLeaderboard.length;
-  const firstPlace = sortedLeaderboard[0];
-  const secondPlace = sortedLeaderboard[1];
-  const thirdPlace = totalCount >= 3 ? sortedLeaderboard[2] : null;
+  const finalIsTeamPodium = isTeamMode && showTeamLeaderboard && teamLeaderboard.length > 0;
+  const activePodiumList = finalIsTeamPodium ? teamLeaderboard : sortedLeaderboard;
 
-  const remainingPlayers = totalCount > 3 ? sortedLeaderboard.slice(3) : [];
-  const totalRemainingPages = Math.ceil(remainingPlayers.length / 10);
-  const currentRemainingPageList = remainingPlayers.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10);
+  const totalCount = activePodiumList.length;
+  const firstPlace = activePodiumList[0];
+  const secondPlace = activePodiumList[1];
+  const thirdPlace = totalCount >= 3 ? activePodiumList[2] : null;
+
+  const remainingList = totalCount > 3 ? activePodiumList.slice(3) : [];
+  const totalRemainingPages = Math.max(1, Math.ceil(remainingList.length / 10));
+  const currentRemainingPageList = remainingList.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10);
 
   const optionsRevealTiming = branding?.optionsRevealTiming || 'ON_ACTIVE';
   const shouldShowOptions =
     isQuestionType &&
     optionsList.length > 0 &&
-    (optionsRevealTiming === 'ALWAYS' ? true : ['ACTIVE', 'PAUSED', 'STATS', 'REVEAL'].includes(currentSub));
+    (optionsRevealTiming === 'ALWAYS' ? true : ['ACTIVE', 'PAUSED', 'STATS', 'SUMMARY', 'REVEAL'].includes(currentSub));
 
   const effectiveCorrectAnswers = isRevealed ? (revealedCorrectAnswers.length > 0 ? revealedCorrectAnswers : (scene?.config?.correctAnswers || [])) : [];
   const effectiveCorrectnessMap = isRevealed ? (Object.keys(revealedCorrectnessMap).length > 0 ? revealedCorrectnessMap : (scene?.config?.answerCorrectness || {})) : {};
@@ -886,9 +1029,13 @@ export default function Presentation() {
         <TopBar
           pin={pin}
           scene={scene}
+          subState={subState}
+          summaryStats={summaryStats}
           participantCount={participantCount}
           voteData={voteData}
+          players={players}
           isRevealed={isRevealed}
+          isTeamMode={isTeamMode}
         />
       )}
 
@@ -943,9 +1090,9 @@ export default function Presentation() {
                     minHeight: `${pos.h}%`,
                     height: 'auto',
                     ...optionCard,
-                    background: isOnlyLetter ? 'transparent' : isCorrect ? '#28a745' : 'rgba(0, 0, 0, 0.8)',
-                    borderColor: isOnlyLetter ? 'transparent' : isCorrect ? '#00ff00' : '#555',
-                    boxShadow: isOnlyLetter ? 'none' : isCorrect ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 4px 15px rgba(0,0,0,0.6)',
+                    background: isOnlyLetter ? 'transparent' : isCorrect ? '#28a745' : 'rgba(0, 0, 0, 0.85)',
+                    borderColor: isOnlyLetter ? 'transparent' : isCorrect ? '#00ff00' : 'rgba(255,255,255,0.2)',
+                    boxShadow: isOnlyLetter ? 'none' : isCorrect ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 8px 25px rgba(0,0,0,0.8)',
                     padding: isOnlyLetter ? '0' : '12px 20px',
                     zIndex: 10
                   }}
@@ -970,12 +1117,12 @@ export default function Presentation() {
                   </div>
 
                   {!isOnlyLetter && (
-                    <span style={{ fontSize: '1.8vw', fontWeight: 'bold', flex: 1, marginLeft: '15px' }}>
+                    <span style={{ fontSize: '1.8vw', fontWeight: 'bold', flex: 1, marginLeft: '15px', textShadow: '0 2px 8px #000' }}>
                       {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
                     </span>
                   )}
 
-                  {isStatsVisible && (currentSub === 'STATS' || isRevealed) && (
+                  {isStatsVisible && (currentSub === 'STATS' || currentSub === 'SUMMARY' || isRevealed) && (
                     <span style={voteBadge}>{count}</span>
                   )}
                 </div>
@@ -1005,9 +1152,9 @@ export default function Presentation() {
                     key={`grp-opt-${i}`}
                     style={{
                       ...optionCard,
-                      background: isOnlyLetter ? 'transparent' : isCorrect ? '#28a745' : 'rgba(0, 0, 0, 0.8)',
-                      borderColor: isOnlyLetter ? 'transparent' : isCorrect ? '#00ff00' : '#555',
-                      boxShadow: isOnlyLetter ? 'none' : isCorrect ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 4px 15px rgba(0,0,0,0.6)'
+                      background: isOnlyLetter ? 'transparent' : isCorrect ? '#28a745' : 'rgba(0, 0, 0, 0.85)',
+                      borderColor: isOnlyLetter ? 'transparent' : isCorrect ? '#00ff00' : 'rgba(255,255,255,0.2)',
+                      boxShadow: isOnlyLetter ? 'none' : isCorrect ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 8px 25px rgba(0,0,0,0.8)'
                     }}
                   >
                     <div
@@ -1031,12 +1178,12 @@ export default function Presentation() {
                     </div>
 
                     {!isOnlyLetter && (
-                      <span style={{ fontSize: '1.8vw', fontWeight: 'bold', flex: 1 }}>
+                      <span style={{ fontSize: '1.8vw', fontWeight: 'bold', flex: 1, textShadow: '0 2px 8px #000' }}>
                         {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
                       </span>
                     )}
 
-                    {isStatsVisible && (currentSub === 'STATS' || isRevealed) && (
+                    {isStatsVisible && (currentSub === 'STATS' || currentSub === 'SUMMARY' || isRevealed) && (
                       <span style={voteBadge}>{count}</span>
                     )}
                   </div>
@@ -1046,24 +1193,26 @@ export default function Presentation() {
           )
         )}
 
+        {/* 2. REGULĀRĀ LĪDERU TABULA */}
         {scene.type === 'LEADERBOARD' && !isFinalLb && (
           <div style={leaderboardOverlay}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-              <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: 0 }}>
-                {isTeamMode && showTeamLeaderboard ? '👥 KOMANDU KOPVĒRTĒJUMS' : isRoundLb ? '🏆 KĀRTAS REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
+              <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: 0, textShadow: '0 2px 10px #000' }}>
+                {isTeamMode && showTeamLeaderboard
+                  ? isRoundLb
+                    ? '🏆 KOMANDU KĀRTAS REZULTĀTI'
+                    : '👥 KOMANDU KOPVĒRTĒJUMS'
+                  : isRoundLb
+                  ? '🏆 KĀRTAS REZULTĀTI'
+                  : '⭐ INDIVIDUĀLAIS KOPVĒRTĒJUMS'}
               </h1>
-              {isTeamMode && teamLeaderboard.length > 0 && (
-                <span style={{ fontSize: '1vw', color: '#00e5ff', background: 'rgba(0,229,255,0.15)', padding: '4px 10px', borderRadius: '6px' }}>
-                  Pārslēgt skatu [T]
-                </span>
-              )}
             </div>
 
             {isTeamMode && showTeamLeaderboard ? (
               <div>
                 {teamLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((t, i) => (
                   <div key={t.name} style={leaderRow}>
-                    <span>{leaderboardPage * 10 + i + 1}. {t.name} ({t.memberCount} spēlētāji)</span>
+                    <span>{leaderboardPage * 10 + i + 1}. 👥 {t.name} ({t.memberCount} spēlētāji)</span>
                     <span style={{ fontWeight: 'bold', color: 'gold' }}>{t.score} pt</span>
                   </div>
                 ))}
@@ -1094,84 +1243,98 @@ export default function Presentation() {
           </div>
         )}
 
+        {/* 3. FINĀLA APBALVOŠANA (PODIJS) */}
         {scene.type === 'LEADERBOARD' && isFinalLb && (
-          <div style={{ width: '85vw', height: '80vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={podiumWrapper}>
             {podiumStage < 4 && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
-                <h1 style={{ fontSize: '3.5vw', color: '#ffc107', margin: '0 0 30px 0', textShadow: '0 0 25px rgba(255,215,0,0.6)' }}>
-                  🥇 FINĀLA APBALVOŠANA
-                </h1>
+              <div style={podiumFlexContainer}>
+                <div style={podiumTitleBox}>
+                  <h1 style={{ fontSize: 'clamp(1.4rem, 2.5vw, 3rem)', color: '#ffd700', margin: 0, textShadow: '0 0 25px rgba(255,215,0,0.7)', fontWeight: '900', letterSpacing: '1px' }}>
+                    🥇 {finalIsTeamPodium ? 'KOMANDU FINĀLA APBALVOŠANA' : 'INDIVIDUĀLĀ FINĀLA APBALVOŠANA'}
+                  </h1>
+                </div>
 
-                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: '30px', height: '380px', width: '100%' }}>
+                <div style={podiumStagesContainer}>
+                  {/* 2. VIETA */}
                   {secondPlace && (
                     <div
                       style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
+                        ...pedestalColumn,
                         opacity: podiumStage >= 2 ? 1 : 0,
-                        transform: podiumStage >= 2 ? 'translateY(0)' : 'translateY(50px)',
-                        transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                        transform: podiumStage >= 2 ? 'translateY(0)' : 'translateY(40px)',
+                        transition: 'all 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
-                      <span style={{ fontSize: '2vw', fontWeight: 'bold', color: '#fff', marginBottom: '4px' }}>
-                        {secondPlace.name} {isTeamMode && secondPlace.teamName && `[${secondPlace.teamName}]`}
-                      </span>
-                      <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>{secondPlace.score} pt</span>
-                      <span style={{ fontSize: '0.9vw', color: '#00e5ff', marginBottom: '8px' }}>
-                        ⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}
-                      </span>
-                      <div style={{ width: '180px', height: '180px', background: 'linear-gradient(to top, #7f8c8d, #bdc3c7)', borderRadius: '15px 15px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '3px solid #fff' }}>
-                        <span style={{ fontSize: '4.5vw', fontWeight: 'bold', color: '#000' }}>🥈 2</span>
+                      <div style={podiumTextBadge}>
+                        <span style={podiumNameText} title={secondPlace.name}>
+                          {finalIsTeamPodium ? `👥 ${secondPlace.name}` : `${secondPlace.name} ${isTeamMode && secondPlace.teamName ? `[${secondPlace.teamName}]` : ''}`}
+                        </span>
+                        <span style={{ fontSize: 'clamp(1rem, 1.3vw, 1.5rem)', color: '#ffc107', fontWeight: 'bold' }}>{secondPlace.score} pt</span>
+                        {secondPlace.totalTimeMs !== undefined && (
+                          <span style={{ fontSize: 'clamp(0.7rem, 0.85vw, 0.95rem)', color: '#00e5ff' }}>
+                            ⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}
+                          </span>
+                        )}
+                      </div>
+                      <div style={silverPedestal}>
+                        <span style={pedestalNumberText}>🥈 2</span>
                       </div>
                     </div>
                   )}
 
+                  {/* 1. VIETA */}
                   {firstPlace && (
                     <div
                       style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
+                        ...pedestalColumn,
                         opacity: podiumStage >= 3 ? 1 : 0,
-                        transform: podiumStage >= 3 ? 'scale(1)' : 'scale(0.5)',
+                        transform: podiumStage >= 3 ? 'translateY(0)' : 'translateY(50px)',
                         transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
-                      <div style={{ fontSize: '2.5vw', marginBottom: '4px' }}>👑</div>
-                      <span style={{ fontSize: '2.5vw', fontWeight: 'bold', color: '#ffd700', marginBottom: '4px', textShadow: '0 0 15px #ffd700' }}>
-                        {firstPlace.name} {isTeamMode && firstPlace.teamName && `[${firstPlace.teamName}]`}
-                      </span>
-                      <span style={{ fontSize: '1.5vw', color: '#fff', fontWeight: 'bold' }}>{firstPlace.score} pt</span>
-                      <span style={{ fontSize: '0.95vw', color: '#00e5ff', marginBottom: '8px' }}>
-                        ⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}
-                      </span>
-                      <div style={{ width: '220px', height: '260px', background: 'linear-gradient(to top, #f39c12, #f1c40f)', borderRadius: '20px 20px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '4px solid #fff', boxShadow: '0 0 40px rgba(241,196,15,0.7)' }}>
-                        <span style={{ fontSize: '6vw', fontWeight: 'bold', color: '#000' }}>🥇 1</span>
+                      <div style={{ fontSize: 'clamp(1.8rem, 2.6vw, 3.2rem)', marginBottom: '-4px', animation: 'pulse 1.2s infinite alternate', filter: 'drop-shadow(0 0 12px gold)' }}>
+                        👑
+                      </div>
+                      <div style={{ ...podiumTextBadge, border: '2px solid #ffd700', boxShadow: '0 0 25px rgba(255,215,0,0.6)', background: 'rgba(20, 15, 0, 0.92)' }}>
+                        <span style={{ ...podiumNameText, color: '#ffd700', fontWeight: '900', textShadow: '0 0 12px #ffd700' }} title={firstPlace.name}>
+                          {finalIsTeamPodium ? `👥 ${firstPlace.name}` : `${firstPlace.name} ${isTeamMode && firstPlace.teamName ? `[${firstPlace.teamName}]` : ''}`}
+                        </span>
+                        <span style={{ fontSize: 'clamp(1.1rem, 1.5vw, 1.8rem)', color: '#fff', fontWeight: 'bold' }}>{firstPlace.score} pt</span>
+                        {firstPlace.totalTimeMs !== undefined && (
+                          <span style={{ fontSize: 'clamp(0.75rem, 0.9vw, 1rem)', color: '#00e5ff' }}>
+                            ⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}
+                          </span>
+                        )}
+                      </div>
+                      <div style={goldPedestal}>
+                        <span style={pedestalNumberText}>🥇 1</span>
                       </div>
                     </div>
                   )}
 
+                  {/* 3. VIETA */}
                   {thirdPlace && (
                     <div
                       style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
+                        ...pedestalColumn,
                         opacity: podiumStage >= 1 ? 1 : 0,
-                        transform: podiumStage >= 1 ? 'translateY(0)' : 'translateY(50px)',
-                        transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                        transform: podiumStage >= 1 ? 'translateY(0)' : 'translateY(40px)',
+                        transition: 'all 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
-                      <span style={{ fontSize: '2vw', fontWeight: 'bold', color: '#fff', marginBottom: '4px' }}>
-                        {thirdPlace.name} {isTeamMode && thirdPlace.teamName && `[${thirdPlace.teamName}]`}
-                      </span>
-                      <span style={{ fontSize: '1.3vw', color: '#ffc107' }}>{thirdPlace.score} pt</span>
-                      <span style={{ fontSize: '0.9vw', color: '#00e5ff', marginBottom: '8px' }}>
-                        ⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}
-                      </span>
-                      <div style={{ width: '180px', height: '130px', background: 'linear-gradient(to top, #8e44ad, #cd7f32)', borderRadius: '15px 15px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '3px solid #fff' }}>
-                        <span style={{ fontSize: '4vw', fontWeight: 'bold', color: '#000' }}>🥉 3</span>
+                      <div style={podiumTextBadge}>
+                        <span style={podiumNameText} title={thirdPlace.name}>
+                          {finalIsTeamPodium ? `👥 ${thirdPlace.name}` : `${thirdPlace.name} ${isTeamMode && thirdPlace.teamName ? `[${thirdPlace.teamName}]` : ''}`}
+                        </span>
+                        <span style={{ fontSize: 'clamp(1rem, 1.3vw, 1.5rem)', color: '#ffc107', fontWeight: 'bold' }}>{thirdPlace.score} pt</span>
+                        {thirdPlace.totalTimeMs !== undefined && (
+                          <span style={{ fontSize: 'clamp(0.7rem, 0.85vw, 0.95rem)', color: '#00e5ff' }}>
+                            ⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}
+                          </span>
+                        )}
+                      </div>
+                      <div style={bronzePedestal}>
+                        <span style={pedestalNumberText}>🥉 3</span>
                       </div>
                     </div>
                   )}
@@ -1179,28 +1342,39 @@ export default function Presentation() {
               </div>
             )}
 
-            {podiumStage >= 4 && remainingPlayers.length > 0 && (
+            {/* 4. SOLIS: PILNAIS SARAKSTS NO 4. VIETAS */}
+            {podiumStage >= 4 && (
               <div style={leaderboardOverlay}>
-                <h1 style={{ fontSize: '2.5vw', color: '#ffc107', textAlign: 'center', margin: '0 0 15px 0' }}>
-                  KOPVĒRTĒJUMS (NO 4. VIETAS) {totalRemainingPages > 1 ? `(${leaderboardPage + 1}/${totalRemainingPages})` : ''}
-                </h1>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                  <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: 0, textShadow: '0 2px 10px #000' }}>
+                    {finalIsTeamPodium ? 'KOMANDU KOPVĒRTĒJUMS (NO 4. VIETAS)' : 'INDIVIDUĀLAIS KOPVĒRTĒJUMS (NO 4. VIETAS)'} {totalRemainingPages > 1 ? `(${leaderboardPage + 1}/${totalRemainingPages})` : ''}
+                  </h1>
+                </div>
                 <div>
-                  {currentRemainingPageList.map((p, i) => {
-                    const globalRank = 4 + leaderboardPage * 10 + i;
-                    return (
-                      <div key={p.id || globalRank} style={leaderRow}>
-                        <span>
-                          {globalRank}. {p.name} {isTeamMode && p.teamName && `[${p.teamName}]`}
-                        </span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                          <span style={timeTagStyle}>⏱️ {formatThinkingTime(p.totalTimeMs)}</span>
-                          <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
-                            {p.score} pt
+                  {currentRemainingPageList.length === 0 ? (
+                    <div style={{ textAlign: 'center', color: '#aaa', padding: '20px', fontStyle: 'italic', fontSize: '1.4vw' }}>
+                      Citu dalībnieku sarakstā nav. Nospiediet [Space], lai atgrieztos uz Top 3 podiju!
+                    </div>
+                  ) : (
+                    currentRemainingPageList.map((item, i) => {
+                      const globalRank = 4 + leaderboardPage * 10 + i;
+                      return (
+                        <div key={item.id || item.name || globalRank} style={leaderRow}>
+                          <span>
+                            {globalRank}. {finalIsTeamPodium ? `👥 ${item.name} (${item.memberCount} spēlētāji)` : `${item.name} ${isTeamMode && item.teamName ? `[${item.teamName}]` : ''}`}
                           </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                            {item.totalTimeMs !== undefined && (
+                              <span style={timeTagStyle}>⏱️ {formatThinkingTime(item.totalTimeMs)}</span>
+                            )}
+                            <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
+                              {item.score} pt
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}
@@ -1211,7 +1385,7 @@ export default function Presentation() {
   );
 }
 
-// --- STILI ---
+// STILI
 const fullScreen: React.CSSProperties = {
   height: '100vh',
   width: '100vw',
@@ -1234,20 +1408,21 @@ const topBarStyle: React.CSSProperties = {
   left: 0,
   width: '100%',
   height: '75px',
-  background: '#1a1a1a',
+  background: 'rgba(20, 20, 20, 0.92)',
+  backdropFilter: 'blur(12px)',
   display: 'flex',
   alignItems: 'center',
   padding: '0 30px',
   gap: '20px',
-  borderBottom: '2px solid #333',
+  borderBottom: '2px solid rgba(255,255,255,0.15)',
   zIndex: 30,
   boxSizing: 'border-box'
 };
 
 const pinBadge: React.CSSProperties = {
-  background: '#000',
+  background: 'rgba(0,0,0,0.85)',
   padding: '8px 18px',
-  borderRadius: '8px',
+  borderRadius: '10px',
   fontSize: '1.4rem',
   fontWeight: 'bold',
   border: '2px solid #0f0'
@@ -1264,7 +1439,8 @@ const timerBadge: React.CSSProperties = {
   justifyContent: 'center',
   fontWeight: 'bold',
   fontSize: '1.2rem',
-  background: 'rgba(0,0,0,0.6)'
+  background: 'rgba(0,0,0,0.7)',
+  backdropFilter: 'blur(8px)'
 };
 
 const votersBox: React.CSSProperties = {
@@ -1274,7 +1450,15 @@ const votersBox: React.CSSProperties = {
   justifyContent: 'center'
 };
 
-const statsBadge: React.CSSProperties = { fontSize: '1.3rem', fontWeight: 'bold' };
+const statsBadge: React.CSSProperties = { 
+  fontSize: '1.3rem', 
+  fontWeight: 'bold',
+  background: 'rgba(0,0,0,0.7)',
+  backdropFilter: 'blur(8px)',
+  padding: '6px 14px',
+  borderRadius: '10px',
+  border: '1px solid rgba(255,255,255,0.15)'
+};
 
 const pointsBadge: React.CSSProperties = {
   background: '#fff',
@@ -1282,7 +1466,8 @@ const pointsBadge: React.CSSProperties = {
   padding: '8px 18px',
   borderRadius: '25px',
   fontWeight: 'bold',
-  fontSize: '1.1rem'
+  fontSize: '1.1rem',
+  boxShadow: '0 4px 15px rgba(0,0,0,0.5)'
 };
 
 const bigBtn: React.CSSProperties = {
@@ -1294,17 +1479,18 @@ const bigBtn: React.CSSProperties = {
   border: 'none',
   borderRadius: '20px',
   fontWeight: 'bold',
-  boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+  boxShadow: '0 10px 30px rgba(0,0,0,0.7)'
 };
 
 const optionCard: React.CSSProperties = {
   padding: '12px 20px',
-  borderRadius: '12px',
-  border: '2px solid #444',
+  borderRadius: '14px',
+  border: '2px solid rgba(255,255,255,0.15)',
+  backdropFilter: 'blur(14px)',
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
-  boxShadow: '0 4px 15px rgba(0,0,0,0.6)',
+  boxShadow: '0 8px 30px rgba(0,0,0,0.85)',
   boxSizing: 'border-box'
 };
 
@@ -1317,15 +1503,64 @@ const voteBadge: React.CSSProperties = {
   fontWeight: 'bold'
 };
 
+const summaryPillGreen: React.CSSProperties = {
+  background: 'rgba(40, 167, 69, 0.3)',
+  border: '2px solid #28a745',
+  color: '#00ff00',
+  padding: '5px 14px',
+  borderRadius: '10px',
+  fontWeight: 'bold',
+  fontSize: '1.05vw',
+  backdropFilter: 'blur(8px)',
+  boxShadow: '0 0 15px rgba(40,167,69,0.45)'
+};
+
+const summaryPillYellow: React.CSSProperties = {
+  background: 'rgba(255, 193, 7, 0.25)',
+  border: '2px solid #ffc107',
+  color: '#ffc107',
+  padding: '5px 12px',
+  borderRadius: '10px',
+  fontWeight: 'bold',
+  fontSize: '0.95vw',
+  backdropFilter: 'blur(8px)',
+  boxShadow: '0 0 15px rgba(255,193,7,0.45)'
+};
+
+const summaryPillRed: React.CSSProperties = {
+  background: 'rgba(220, 53, 69, 0.3)',
+  border: '2px solid #dc3545',
+  color: '#ff4d4d',
+  padding: '5px 14px',
+  borderRadius: '10px',
+  fontWeight: 'bold',
+  fontSize: '1.05vw',
+  backdropFilter: 'blur(8px)',
+  boxShadow: '0 0 15px rgba(220,53,69,0.45)'
+};
+
+const summaryPillGray: React.CSSProperties = {
+  background: 'rgba(108, 117, 125, 0.3)',
+  border: '2px solid #6c757d',
+  color: '#ddd',
+  padding: '5px 14px',
+  borderRadius: '10px',
+  fontWeight: 'bold',
+  fontSize: '1.05vw',
+  backdropFilter: 'blur(8px)',
+  boxShadow: '0 0 10px rgba(108,117,125,0.4)'
+};
+
 const leaderboardOverlay: React.CSSProperties = {
-  background: 'rgba(10, 10, 10, 0.95)',
+  background: 'rgba(10, 10, 10, 0.88)',
+  backdropFilter: 'blur(16px)',
   padding: '35px',
-  borderRadius: '20px',
-  width: '65vw',
+  borderRadius: '24px',
+  width: '68vw',
   maxHeight: '75vh',
   zIndex: 40,
-  border: '2px solid #444',
-  boxShadow: '0 0 50px rgba(0,0,0,0.9)',
+  border: '2px solid rgba(255, 255, 255, 0.18)',
+  boxShadow: '0 20px 60px rgba(0,0,0,0.95)',
   display: 'flex',
   flexDirection: 'column'
 };
@@ -1334,15 +1569,132 @@ const leaderRow: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
   fontSize: '1.8vw',
-  borderBottom: '1px solid #333',
-  padding: '8px 0'
+  borderBottom: '1px solid rgba(255,255,255,0.12)',
+  padding: '10px 0',
+  textShadow: '0 2px 8px #000'
 };
 
 const timeTagStyle: React.CSSProperties = {
   fontSize: '1.2vw',
   color: '#00e5ff',
-  background: 'rgba(0, 229, 255, 0.12)',
+  background: 'rgba(0, 229, 255, 0.15)',
+  backdropFilter: 'blur(6px)',
   padding: '2px 8px',
   borderRadius: '6px',
   border: '1px solid rgba(0, 229, 255, 0.4)'
+};
+
+const podiumWrapper: React.CSSProperties = {
+  width: '92vw',
+  height: '86vh',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  boxSizing: 'border-box'
+};
+
+const podiumFlexContainer: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '100%',
+  height: '100%'
+};
+
+const podiumTitleBox: React.CSSProperties = {
+  background: 'rgba(10, 10, 10, 0.85)',
+  backdropFilter: 'blur(14px)',
+  padding: '8px 32px',
+  borderRadius: '16px',
+  border: '1px solid rgba(255, 215, 0, 0.4)',
+  marginBottom: 'clamp(10px, 2.5vh, 25px)',
+  boxShadow: '0 10px 30px rgba(0,0,0,0.85)'
+};
+
+const podiumStagesContainer: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-end',
+  justifyContent: 'center',
+  gap: 'clamp(15px, 3vw, 40px)',
+  width: '100%',
+  maxHeight: '62vh'
+};
+
+const pedestalColumn: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'flex-end'
+};
+
+const podiumTextBadge: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  background: 'rgba(12, 12, 12, 0.88)',
+  backdropFilter: 'blur(14px)',
+  padding: '6px 14px',
+  borderRadius: '12px',
+  border: '1px solid rgba(255, 255, 255, 0.2)',
+  marginBottom: '6px',
+  boxShadow: '0 8px 25px rgba(0,0,0,0.9)',
+  width: 'clamp(160px, 20vw, 280px)',
+  boxSizing: 'border-box'
+};
+
+const podiumNameText: React.CSSProperties = {
+  fontSize: 'clamp(0.95rem, 1.4vw, 1.7rem)',
+  fontWeight: 'bold',
+  color: '#fff',
+  width: '100%',
+  textAlign: 'center',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  textShadow: '0 2px 6px #000'
+};
+
+const pedestalNumberText: React.CSSProperties = {
+  fontSize: 'clamp(2.5rem, 4.5vw, 5.5rem)',
+  fontWeight: '900',
+  color: '#000',
+  textShadow: '0 2px 8px rgba(255,255,255,0.7)'
+};
+
+const goldPedestal: React.CSSProperties = {
+  width: 'clamp(150px, 19vw, 240px)',
+  height: 'clamp(140px, 26vh, 230px)',
+  background: 'linear-gradient(to top, #b7791f, #f6e05e, #ecc94b)',
+  borderRadius: '18px 18px 0 0',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: '3px solid #fff',
+  boxShadow: '0 0 45px rgba(246, 224, 94, 0.8), inset 0 0 20px rgba(255,255,255,0.6)'
+};
+
+const silverPedestal: React.CSSProperties = {
+  width: 'clamp(130px, 16vw, 200px)',
+  height: 'clamp(100px, 19vh, 170px)',
+  background: 'linear-gradient(to top, #4a5568, #cbd5e0, #e2e8f0)',
+  borderRadius: '14px 14px 0 0',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: '3px solid #fff',
+  boxShadow: '0 0 30px rgba(226, 232, 240, 0.6), inset 0 0 15px rgba(255,255,255,0.5)'
+};
+
+const bronzePedestal: React.CSSProperties = {
+  width: 'clamp(130px, 16vw, 200px)',
+  height: 'clamp(70px, 14vh, 130px)',
+  background: 'linear-gradient(to top, #744210, #d69e2e, #b7791f)',
+  borderRadius: '14px 14px 0 0',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: '3px solid #fff',
+  boxShadow: '0 0 30px rgba(214, 158, 46, 0.6), inset 0 0 15px rgba(255,255,255,0.5)'
 };
