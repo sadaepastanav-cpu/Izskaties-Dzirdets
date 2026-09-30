@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { socket } from './socket';
-import { BACKEND_URL, getAdminHeaders } from './config';
+import { BACKEND_URL, getAdminHeaders, getAdminKey } from './config';
 
 const formatThinkingTime = (ms?: number): string => {
   if (ms === undefined || ms === null) return '0.00s';
@@ -34,8 +34,7 @@ export default function Host() {
   const [customTunnelUrl, setCustomTunnelUrl] = useState<string>('');
   const [isTunnelAutoDetected, setIsTunnelAutoDetected] = useState(false);
 
-  // Aizsargfiltrs dubultajiem nospiedieniem (Debounce)
-  const lastSpacePress = useRef<number>(0);
+  const lastSpacePress = React.useRef<number>(0);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -85,7 +84,7 @@ export default function Host() {
 
   const handleStartTunnel = () => {
     setIsStartingTunnel(true);
-    socket.emit('host:start-tunnel');
+    socket.emit('host:start-tunnel', { adminKey: getAdminKey() });
   };
 
   const loadProjects = async (folderPath?: string) => {
@@ -303,6 +302,13 @@ export default function Host() {
     }
   };
 
+  // PALIELINĀT / PASLĒPT QR KODU EKRĀNĀ [Q]
+  const toggleLargeQr = () => {
+    if (pin && hostToken) {
+      socket.emit('host:toggle-qr-zoom', { pin, hostToken });
+    }
+  };
+
   const updatePlayer = (playerId: string, updates: any) => {
     if (!pin || !hostToken) return;
     socket.emit('host:update-player', { pin, hostToken, playerId, ...updates });
@@ -358,7 +364,6 @@ export default function Host() {
       if (e.code === 'Space' && pin && hostToken) {
         e.preventDefault();
         const now = Date.now();
-        // Aizsardzība pret nejaušu dubulto spiedienu uz skatuves (350ms Debounce)
         if (now - lastSpacePress.current < 350) return;
         lastSpacePress.current = now;
 
@@ -373,6 +378,9 @@ export default function Host() {
       } else if ((e.key === 't' || e.key === 'T') && pin && hostToken) {
         e.preventDefault();
         toggleTeamView();
+      } else if ((e.key === 'q' || e.key === 'Q') && pin && hostToken) {
+        e.preventDefault();
+        toggleLargeQr();
       }
     };
 
@@ -568,6 +576,11 @@ export default function Host() {
             📊 Statistika [C]
           </button>
 
+          {/* QR KODA PALIELINĀŠANAS POGA VADĪTĀJAM [Q] */}
+          <button onClick={toggleLargeQr} style={{ ...btnPurple, background: '#007bff' }} title="Palielināt / Paslēpt QR kodu lielajā ekrānā [Q]">
+            📱 QR [Q]
+          </button>
+
           {isTeamMode && (
             <button onClick={toggleTeamView} style={{ ...btnPurple, background: '#17a2b8' }} title="Pārslēgt Komandu / Individuālo rangu ekrānā [T]">
               👥/👤 Komandu skats [T]
@@ -621,7 +634,13 @@ export default function Host() {
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '15px', marginBottom: '15px' }}>
         <div style={instructionBox}>
           <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>
-            {isCurrentActive ? '⏳ LAIKA ATSKAITE RIT (Space nobloķēts. Spied [P], lai pauzētu)' : '⌨️ SPIED [ SPACE ] TAUSTIŅU, LAI VADĪTU ŠOVU'}
+            {isCurrentActive
+              ? '⏳ LAIKA ATSKAITE RIT (Space nobloķēts. Spied [P], lai pauzētu)'
+              : currentScene?.subState === 'STATS'
+              ? '⌨️ SPIED [ SPACE ], LAI PARĀDĪTU REZULTĀTU KOPSAVILKUMU'
+              : currentScene?.subState === 'SUMMARY'
+              ? '⌨️ SPIED [ SPACE ], LAI ATKLĀTU PAREIZO ATBILDI'
+              : '⌨️ SPIED [ SPACE ] TAUSTIŅU, LAI VADĪTU ŠOVU'}
           </div>
           <div style={{ marginTop: '5px', opacity: 0.9, fontSize: '0.95rem' }}>
             Slaids: <strong>{currentScene?.title || 'Nav sākts'}</strong> | Fāze:{' '}
@@ -756,7 +775,10 @@ export default function Host() {
                 >
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 'bold' }}>
-                      <span>{i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})</span>
+                      <span>
+                        {s.config?.autoStart && <span title="Automātiskais starts" style={{ color: '#00e5ff', marginRight: '5px' }}>⚡</span>}
+                        {i + 1}. {s.config?.question || s.title || `Slaids #${i + 1}`} ({s.type})
+                      </span>
                     </div>
                   </div>
                   {isActive && <span style={activeBadge}>{currentScene?.subState || 'IDLE'}</span>}

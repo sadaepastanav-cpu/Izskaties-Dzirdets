@@ -38,6 +38,8 @@ export default function Player() {
   const [scene, setScene] = useState<any>(null);
   const [subState, setSubState] = useState<string>('IDLE');
 
+  const [showCaptainQrModal, setShowCaptainQrModal] = useState(false);
+
   const [myChoice, setMyChoice] = useState<string | null>(null);
   const [selectedMultipleOptions, setSelectedMultipleOptions] = useState<string[]>([]);
 
@@ -622,23 +624,108 @@ export default function Player() {
   return (
     <div style={appBgStyle}>
       <div style={mobileHeader}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
-          <span style={{ fontWeight: 'bold', fontSize: '0.95rem', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontWeight: 'bold', fontSize: '0.9rem', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {name}
           </span>
+          {isTeamMode && teamName && <span style={{ fontSize: '0.75rem', color: '#00e5ff' }}>[{teamName}]</span>}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {isTeamMode && teamName && <span style={{ fontSize: '0.8rem', color: '#00e5ff' }}>[{teamName}]</span>}
-          <div style={{ background: '#000', border: '1px solid #00ff00', borderRadius: '6px', padding: '3px 8px', color: '#00ff00', fontWeight: 'bold', fontSize: '0.85rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* KAPTEIŅA POGA - ATVER KOMANDAS QR KODU JEBKURĀ SPĒLES BRĪDĪ */}
+          {isTeamMode && isCaptain && (
+            <button
+              onClick={() => setShowCaptainQrModal(true)}
+              style={btnCaptainBadge}
+              title="Parādīt komandas QR kodu jaunam biedram"
+            >
+              👑 + Biedrs (QR)
+            </button>
+          )}
+
+          <div style={{ background: '#000', border: '1px solid #00ff00', borderRadius: '6px', padding: '3px 6px', color: '#00ff00', fontWeight: 'bold', fontSize: '0.8rem' }}>
             PIN: {pin}
           </div>
           <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
         </div>
       </div>
 
+      {/* KAPTEIŅA IZLECOŠAIS LOGS AR KOMANDAS QR KODU */}
+      {showCaptainQrModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100dvh',
+            background: 'rgba(0,0,0,0.85)',
+            backdropFilter: 'blur(12px)',
+            zIndex: 999999,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            boxSizing: 'border-box'
+          }}
+          onClick={() => setShowCaptainQrModal(false)}
+        >
+          <div
+            style={{
+              background: '#1c1705',
+              border: '2px solid #ffc107',
+              borderRadius: '16px',
+              padding: '20px',
+              maxWidth: '340px',
+              width: '100%',
+              textAlign: 'center',
+              boxShadow: '0 10px 40px rgba(0,0,0,0.95)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: '1rem', color: '#ffc107', fontWeight: 'bold', marginBottom: '4px' }}>
+              👑 TAVA KOMANDA: {teamName}
+            </div>
+            <div style={{ fontSize: '0.85rem', color: '#ccc', marginBottom: '10px' }}>
+              Parādi šo QR kodu, lai pievienotu spēlētāju savam galdiņam!
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
+              <img
+                src={captainQrUrl}
+                alt="Captain QR"
+                style={{ width: '160px', height: '160px', borderRadius: '12px', background: '#fff', padding: '6px', border: '3px solid #ffc107' }}
+              />
+            </div>
+
+            <div style={{ fontSize: '0.9rem', color: '#00ff00', fontWeight: 'bold', marginBottom: '8px' }}>
+              👥 Pieslēgušies biedri: {myTeammates.length}
+            </div>
+
+            <button
+              onClick={() => setShowCaptainQrModal(false)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                background: '#ffc107',
+                color: '#000',
+                border: 'none',
+                borderRadius: '8px',
+                fontWeight: 'bold',
+                fontSize: '0.95rem',
+                cursor: 'pointer'
+              }}
+            >
+              Turpināt spēli [✕]
+            </button>
+          </div>
+        </div>
+      )}
+
       <div style={mobileBody}>
+        {/* PAUZE */}
         {currentSub === 'PAUSED' && (
           <div style={{ ...infoCard, borderColor: '#ff9800', marginBottom: '15px' }}>
             <div style={{ fontSize: '3rem', marginBottom: '8px' }}>⏸️</div>
@@ -649,6 +736,7 @@ export default function Player() {
           </div>
         )}
 
+        {/* BILLBOARD INFORMATĪVAIS SLAIDS */}
         {slideType === 'BILLBOARD' && currentSub !== 'PAUSED' && (
           <div style={infoCard}>
             <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>👀</div>
@@ -659,6 +747,7 @@ export default function Player() {
           </div>
         )}
 
+        {/* LĪDERU TABULA UN REZULTĀTI */}
         {slideType === 'LEADERBOARD' && currentSub !== 'PAUSED' && (
           <div style={infoCard}>
             {isFinalLeaderboard && podiumStage < 3 ? (
@@ -672,10 +761,10 @@ export default function Player() {
             ) : (
               <div>
                 <div style={{ fontSize: '2.5rem', marginBottom: '6px' }}>
-                  {isFinalLeaderboard ? '👑' : leaderboardType === 'ROUND' ? '🏆' : '⭐'}
+                  {leaderboardType === 'FINAL' ? '👑' : leaderboardType === 'ROUND' ? '🏆' : '⭐'}
                 </div>
                 <h2 style={{ color: '#ffc107', margin: '0 0 8px 0', fontSize: '1.3rem' }}>
-                  {isFinalLeaderboard
+                  {leaderboardType === 'FINAL'
                     ? 'FINĀLA REZULTĀTI'
                     : leaderboardType === 'ROUND'
                     ? 'KĀRTAS REZULTĀTI'
@@ -721,8 +810,10 @@ export default function Player() {
           </div>
         )}
 
+        {/* JAUTĀJUMA / BALSOŠANAS FĀZES */}
         {(slideType === 'QUESTION' || slideType === 'QUIZ' || slideType === 'VOTE' || slideType === 'MAJORITY' || slideType === '') && currentSub !== 'PAUSED' && (
           <>
+            {/* GATAVĪBA (READY) */}
             {currentSub === 'READY' && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>⏳</div>
@@ -733,6 +824,7 @@ export default function Player() {
               </div>
             )}
 
+            {/* AKTĪVĀ BALSOŠANA (ACTIVE) */}
             {currentSub === 'ACTIVE' && (
               <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', boxSizing: 'border-box', padding: '5px 0' }}>
                 <div style={textHeaderBadge}>
@@ -821,20 +913,25 @@ export default function Player() {
               </div>
             )}
 
+            {/* STATS / SUMMARY / REVEAL FĀZES */}
             {(currentSub === 'STATS' || currentSub === 'SUMMARY' || currentSub === 'REVEAL') && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3rem', marginBottom: '10px' }}>
-                  {currentSub === 'SUMMARY' ? '⏳' : '📊'}
+                  {currentSub === 'SUMMARY' ? '⏳' : currentSub === 'REVEAL' ? '🎉' : '📊'}
                 </div>
                 <h2 style={{ color: currentSub === 'SUMMARY' ? '#ffc107' : '#28a745', margin: '0 0 10px 0' }}>
-                  {currentSub === 'SUMMARY' ? 'APKOPO REZULTĀTUS...' : 'BALSOŠANA NOSLĒGUSIES!'}
+                  {currentSub === 'SUMMARY'
+                    ? 'APKOPO REZULTĀTUS...'
+                    : currentSub === 'REVEAL'
+                    ? 'PAREIZĀ ATBILDE ATKLĀTA!'
+                    : 'BALSOŠANA NOSLĒGUSIES!'}
                 </h2>
                 <p style={{ color: '#ccc', fontSize: '1rem', margin: 0 }}>
                   {currentSub === 'REVEAL'
-                    ? 'Pareizā atbilde atklāta lielajā ekrānā!'
+                    ? 'Skaties rezultātus un punktus lielajā ekrānā!'
                     : currentSub === 'SUMMARY'
-                    ? 'Skaties rezultātu apkopojumu lielajā ekrānā!'
-                    : 'Gaidiet rezultātu apkopojumu...'}
+                    ? 'Skaties atbilžu kopsavilkumu lielajā ekrānā!'
+                    : 'Gaidiet rezultātu atklāšanu...'}
                 </p>
               </div>
             )}
@@ -845,7 +942,9 @@ export default function Player() {
   );
 }
 
+// =========================================================================
 // STILI
+// =========================================================================
 const fullScreenMobile: React.CSSProperties = {
   position: 'fixed',
   top: 0,
@@ -885,6 +984,18 @@ const keypadBadge: React.CSSProperties = {
   padding: '3px 8px',
   borderRadius: '6px',
   fontSize: '0.85rem'
+};
+
+const btnCaptainBadge: React.CSSProperties = {
+  background: 'linear-gradient(135deg, #ffc107, #ff9800)',
+  color: '#000',
+  border: '1px solid #fff',
+  padding: '3px 8px',
+  borderRadius: '6px',
+  fontSize: '0.75rem',
+  fontWeight: 'bold',
+  cursor: 'pointer',
+  boxShadow: '0 2px 6px rgba(255,193,7,0.4)'
 };
 
 const btnExitSmall: React.CSSProperties = {

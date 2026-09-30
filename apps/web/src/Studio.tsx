@@ -1,14 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BACKEND_URL, ADMIN_API_KEY, getAdminHeaders } from './config';
+import { BACKEND_URL, getAdminHeaders } from './config';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
-
-const secondsToTimeStr = (totalSec: number = 0): string => {
-  const m = Math.floor(totalSec / 60);
-  const s = Math.floor(totalSec % 60);
-  const cs = Math.floor((totalSec % 1) * 100);
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
-};
 
 const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
   let c = hex.replace('#', '');
@@ -18,6 +11,26 @@ const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
   const g = (num >> 8) & 255;
   const b = num & 255;
   return `rgba(${r}, ${g}, ${b}, ${opacityPercent / 100})`;
+};
+
+export const getStudioFontSize = (fontSize?: number | string): string => {
+  const scaleMultiplier = 1.35;
+  if (typeof fontSize === 'number') {
+    return `${fontSize * scaleMultiplier * 9.6}px`;
+  }
+  if (typeof fontSize === 'string') {
+    const num = parseFloat(fontSize);
+    if (!isNaN(num)) return `${num * scaleMultiplier * 9.6}px`;
+  }
+  return `${2.2 * scaleMultiplier * 9.6}px`;
+};
+
+export const getOptionFontSize = (text: string = ''): string => {
+  const len = text.trim().length;
+  if (len <= 15) return '15px';
+  if (len <= 30) return '13px';
+  if (len <= 55) return '11px';
+  return '10px';
 };
 
 interface MobileBranding {
@@ -46,13 +59,17 @@ interface CanvasElement {
   color?: string;
   fontSize?: number;
   fontFamily?: string;
+  fontWeight?: string;
+  bold?: boolean;
   bgColor?: string;
   bgOpacity?: number;
   volume?: number;
   trimStart?: number;
   trimEnd?: number;
   isTrimEndCustom?: boolean;
-  visibility?: 'ALWAYS' | 'DURING_QUESTION' | 'AFTER_REVEAL';
+  visibility?: 'ALWAYS' | 'DURING_QUESTION' | 'UNTIL_REVEAL' | 'AFTER_REVEAL';
+  blurMode?: 'NONE' | 'STATIC' | 'PROGRESSIVE';
+  blurAmount?: number;
 }
 
 interface Slide {
@@ -67,14 +84,19 @@ interface Slide {
     scoringMode?: 'FIXED' | 'DECREASING';
     speedBonusEnabled?: boolean;
     selectionMode?: 'ALL' | 'ANY_ONE';
+    autoStart?: boolean;
     question?: string;
     notes?: string;
     optionsCount: number;
     options: string[];
     correctAnswers: string[];
     answerCorrectness?: Record<string, number>;
-    optionsLayout: 'GRID' | 'COLUMN' | 'INDIVIDUAL';
+    optionsLayout: 'INDIVIDUAL' | 'RIGHT_COLUMN' | 'GRID';
     optionsPositions?: Record<string | number, { x: number; y: number; w: number; h: number }>;
+    optionsColor?: string;
+    optionsBgColor?: string;
+    optionsBgOpacity?: number;
+    optionsCorrectColor?: string;
     backgroundUrl?: string;
     lbType?: 'ROUND' | 'TOTAL' | 'FINAL';
     layout: CanvasElement[];
@@ -120,13 +142,18 @@ export default function Studio() {
         scoringMode: 'FIXED',
         speedBonusEnabled: false,
         selectionMode: 'ALL',
+        autoStart: false,
         notes: 'Paskaidrojums vadītājam: Rīga dibināta 1201. gadā.',
         optionsCount: 4,
         options: ['Rīga', 'Liepāja', 'Daugavpils', 'Jelgava'],
         correctAnswers: ['Rīga'],
         answerCorrectness: { Rīga: 100 },
-        optionsLayout: 'GRID',
+        optionsLayout: 'INDIVIDUAL',
         optionsPositions: {},
+        optionsColor: '#ffffff',
+        optionsBgColor: '#000000',
+        optionsBgOpacity: 85,
+        optionsCorrectColor: '#00ff00',
         layout: [
           {
             id: 'q-box',
@@ -140,7 +167,8 @@ export default function Studio() {
             fontFamily: 'Segoe UI',
             color: '#ffffff',
             bgColor: '#000000',
-            bgOpacity: 80,
+            bgOpacity: 85,
+            bold: true,
             visibility: 'ALWAYS'
           }
         ]
@@ -152,6 +180,7 @@ export default function Studio() {
   const [selectedSlideIndices, setSelectedSlideIndices] = useState<number[]>([0]);
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [copiedSlides, setCopiedSlides] = useState<Slide[] | null>(null);
 
   const [marqueeBox, setMarqueeBox] = useState<{
     startX: number;
@@ -176,8 +205,10 @@ export default function Studio() {
   const previewMediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const activeSlide = slides[activeSlideIdx] || slides[0];
 
-  const primarySelectedId = selectedElementIds[selectedElementIds.length - 1] || null;
-  const selectedElement = activeSlide?.config?.layout?.find((el) => el.id === primarySelectedId);
+  const selectedElements = (activeSlide?.config?.layout || []).filter((el) =>
+    selectedElementIds.includes(el.id)
+  );
+  const primarySelectedElement = selectedElements[selectedElements.length - 1] || null;
 
   const pushToHistory = (newSlides: Slide[]) => {
     if (isHistoryAction.current) {
@@ -213,25 +244,131 @@ export default function Studio() {
     }
   };
 
+  const updateActiveSlide = (updater: (draft: Slide) => void) => {
+    setSlides((prev) => {
+      const copy = JSON.parse(JSON.stringify(prev));
+      updater(copy[activeSlideIdx]);
+      pushToHistory(copy);
+      return copy;
+    });
+  };
+
+  const updateSelectedElements = (updater: (el: CanvasElement) => void) => {
+    updateActiveSlide((s) => {
+      s.config.layout.forEach((el) => {
+        if (selectedElementIds.includes(el.id)) {
+          updater(el);
+        }
+      });
+    });
+  };
+
+  const deleteSelectedElements = () => {
+    if (selectedElementIds.length === 0) return;
+    updateActiveSlide((s) => {
+      s.config.layout = s.config.layout.filter((x) => !selectedElementIds.includes(x.id));
+    });
+    setSelectedElementIds([]);
+  };
+
+  const handleSaveProject = async () => {
+    const cleanFileName = projectFile.trim().endsWith('.json') ? projectFile.trim() : `${projectFile.trim()}.json`;
+    if (availableProjects.includes(cleanFileName)) {
+      const isConfirmed = window.confirm(
+        `⚠️ UZMANĪBU!\n\nFails "${cleanFileName}" jau eksistē mapē:\n${activeFolder}\n\nVai vēlaties to pārrakstīt?`
+      );
+      if (!isConfirmed) return;
+    }
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/save-to-file`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAdminHeaders()
+        },
+        body: JSON.stringify({
+          fileName: cleanFileName,
+          data: {
+            scenes: slides,
+            branding: mobileBranding
+          }
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`✅ Projekts veiksmīgi saglabāts:\n${data.fullPath || data.fileName}`);
+        setProjectFile(data.fileName);
+        syncWorkingFolder();
+      }
+    } catch {
+      alert('❌ Kļūda saglabājot projektu!');
+    }
+  };
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const isTyping = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName);
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        if (!isTyping) {
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSaveProject();
+        return;
+      }
+
+      if (isTyping) return;
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedElementIds.length > 0) {
           e.preventDefault();
-          if (e.shiftKey) handleRedo();
-          else handleUndo();
+          deleteSelectedElements();
         }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        if (selectedSlideIndices.length > 0) {
+          e.preventDefault();
+          const toCopy = selectedSlideIndices
+            .sort((a, b) => a - b)
+            .map((idx) => JSON.parse(JSON.stringify(slides[idx])));
+          setCopiedSlides(toCopy);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        if (copiedSlides && copiedSlides.length > 0) {
+          e.preventDefault();
+          const insertIdx = activeSlideIdx + 1;
+          const newPasted = copiedSlides.map((s, i) => {
+            const cloned = JSON.parse(JSON.stringify(s));
+            cloned.id = `slide-${Date.now()}-${i}`;
+            cloned.title = `${cloned.title} (Kopija)`;
+            if (cloned.config?.layout) {
+              cloned.config.layout = cloned.config.layout.map((el: any, elI: number) => ({
+                ...el,
+                id: `el-${Date.now()}-${i}-${elI}`
+              }));
+            }
+            return cloned;
+          });
+
+          const updated = [...slides];
+          updated.splice(insertIdx, 0, ...newPasted);
+          setSlides(updated);
+          pushToHistory(updated);
+
+          const newIndices = newPasted.map((_, i) => insertIdx + i);
+          setSelectedSlideIndices(newIndices);
+          setActiveSlideIdx(insertIdx);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-        if (!isTyping) {
-          e.preventDefault();
-          handleRedo();
-        }
+        e.preventDefault();
+        handleRedo();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [historyIdx, history, activeSlideIdx]);
+  }, [historyIdx, history, activeSlideIdx, selectedSlideIndices, copiedSlides, slides, selectedElementIds, projectFile, availableProjects, mobileBranding]);
 
   const syncWorkingFolder = async (folderToSet?: string) => {
     try {
@@ -260,15 +397,6 @@ export default function Studio() {
     pushToHistory(slides);
   }, []);
 
-  const updateActiveSlide = (updater: (draft: Slide) => void) => {
-    setSlides((prev) => {
-      const copy = JSON.parse(JSON.stringify(prev));
-      updater(copy[activeSlideIdx]);
-      pushToHistory(copy);
-      return copy;
-    });
-  };
-
   const handleSlideDropReorder = (fromIdx: number, toIdx: number) => {
     if (fromIdx === toIdx) return;
     const updated = [...slides];
@@ -293,13 +421,18 @@ export default function Studio() {
         scoringMode: 'FIXED',
         speedBonusEnabled: false,
         selectionMode: 'ALL',
+        autoStart: false,
         notes: '',
         optionsCount: 4,
         options: ['Variants A', 'Variants B', 'Variants C', 'Variants D'],
         correctAnswers: ['Variants A'],
         answerCorrectness: { 'Variants A': 100 },
-        optionsLayout: 'GRID',
+        optionsLayout: 'INDIVIDUAL',
         optionsPositions: {},
+        optionsColor: '#ffffff',
+        optionsBgColor: '#000000',
+        optionsBgOpacity: 85,
+        optionsCorrectColor: '#00ff00',
         backgroundUrl: activeSlide?.config?.backgroundUrl,
         layout: [
           {
@@ -314,7 +447,8 @@ export default function Studio() {
             fontFamily: 'Segoe UI',
             color: '#ffffff',
             bgColor: '#000000',
-            bgOpacity: 80,
+            bgOpacity: 85,
+            bold: true,
             visibility: 'ALWAYS'
           }
         ]
@@ -427,7 +561,7 @@ export default function Studio() {
             const el = s.config.layout.find((x) => x.id === item.id);
             if (el) { el.x = newX; el.y = newY; }
           } else if (optionIdx !== null) {
-            const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 60, w: 38, h: 10 };
+            const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 58, w: 38, h: 10 };
             s.config.optionsPositions[optionIdx] = { ...curPos, x: newX, y: newY };
           }
         } else if (dragState.mode === 'RESIZE_RIGHT' && item.id === dragState.primaryId) {
@@ -444,7 +578,7 @@ export default function Studio() {
             const el = s.config.layout.find((x) => x.id === item.id);
             if (el) { el.w = newW; el.h = newH; }
           } else if (optionIdx !== null) {
-            const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 60, w: 38, h: 10 };
+            const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 58, w: 38, h: 10 };
             s.config.optionsPositions[optionIdx] = { ...curPos, w: newW, h: newH };
           }
         } else if (dragState.mode === 'RESIZE_LEFT' && item.id === dragState.primaryId) {
@@ -462,7 +596,7 @@ export default function Studio() {
               const el = s.config.layout.find((x) => x.id === item.id);
               if (el) { el.x = newX; el.w = newW; el.h = newH; }
             } else if (optionIdx !== null) {
-              const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 60, w: 38, h: 10 };
+              const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 58, w: 38, h: 10 };
               s.config.optionsPositions[optionIdx] = { ...curPos, x: newX, w: newW, h: newH };
             }
           }
@@ -490,24 +624,6 @@ export default function Studio() {
           newlySelected.push(el.id);
         }
       });
-
-      if (activeSlide.type === 'QUESTION' || activeSlide.type === 'MAJORITY') {
-        activeSlide.config.options.forEach((_, idx) => {
-          const pos = activeSlide.config.optionsPositions?.[idx] || {
-            x: 10 + (idx % 2) * 42,
-            y: 58 + Math.floor(idx / 2) * 13,
-            w: 38,
-            h: 10
-          };
-          const optPxX = (pos.x / 100) * rect.width;
-          const optPxY = (pos.y / 100) * rect.height;
-          const optPxW = (pos.w / 100) * rect.width;
-          const optPxH = (pos.h / 100) * rect.height;
-          if (x1 < optPxX + optPxW && x2 > optPxX && y1 < optPxY + optPxH && y2 > optPxY) {
-            newlySelected.push(`opt-index-${idx}`);
-          }
-        });
-      }
 
       setSelectedElementIds(newlySelected);
       setMarqueeBox(null);
@@ -555,7 +671,9 @@ export default function Studio() {
       trimStart: 0,
       trimEnd: 30,
       isTrimEndCustom: false,
-      visibility: 'ALWAYS'
+      visibility: 'DURING_QUESTION',
+      blurMode: 'NONE',
+      blurAmount: 12
     };
 
     updateActiveSlide((s) => s.config.layout.push(newElement));
@@ -579,41 +697,6 @@ export default function Studio() {
 
   const stopPreviewFragment = () => {
     if (previewMediaRef.current) previewMediaRef.current.pause();
-  };
-
-  const handleSaveProject = async () => {
-    const cleanFileName = projectFile.trim().endsWith('.json') ? projectFile.trim() : `${projectFile.trim()}.json`;
-    if (availableProjects.includes(cleanFileName)) {
-      const isConfirmed = window.confirm(
-        `⚠️ UZMANĪBU!\n\nFails "${cleanFileName}" jau eksistē mapē:\n${activeFolder}\n\nVai vēlaties to pārrakstīt?`
-      );
-      if (!isConfirmed) return;
-    }
-
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/save-to-file`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAdminHeaders()
-        },
-        body: JSON.stringify({
-          fileName: cleanFileName,
-          data: {
-            scenes: slides,
-            branding: mobileBranding
-          }
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        alert(`✅ Projekts saglabāts mapē:\n${data.fullPath || data.fileName}`);
-        setProjectFile(data.fileName);
-        syncWorkingFolder();
-      }
-    } catch {
-      alert('❌ Kļūda saglabājot projektu!');
-    }
   };
 
   const handleOpenProject = async (name: string) => {
@@ -651,6 +734,8 @@ export default function Studio() {
     setMobileBranding({ ...mobileBranding, predefinedTeams: current.filter((t) => t !== teamToRemove) });
   };
 
+  const hasMultipleSelection = selectedElements.length > 1;
+
   return (
     <div style={studioLayout} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
       {/* 1. RIBBON */}
@@ -683,8 +768,13 @@ export default function Studio() {
                       correctAnswers: ['A'],
                       answerCorrectness: { A: 100 },
                       selectionMode: 'ALL',
-                      optionsLayout: 'GRID',
+                      autoStart: false,
+                      optionsLayout: 'INDIVIDUAL',
                       optionsPositions: {},
+                      optionsColor: '#ffffff',
+                      optionsBgColor: '#000000',
+                      optionsBgOpacity: 85,
+                      optionsCorrectColor: '#00ff00',
                       layout: []
                     }
                   }
@@ -699,8 +789,8 @@ export default function Studio() {
             📄 Jauns
           </button>
 
-          <button style={{ ...btnAction, background: '#28a745' }} onClick={handleSaveProject}>
-            💾 Saglabāt
+          <button style={{ ...btnAction, background: '#28a745' }} onClick={handleSaveProject} title="Saglabāt (Ctrl + S)">
+            💾 Saglabāt [Ctrl+S]
           </button>
 
           <input
@@ -736,7 +826,8 @@ export default function Studio() {
                 fontFamily: 'Segoe UI',
                 color: '#ffffff',
                 bgColor: '#000000',
-                bgOpacity: 60,
+                bgOpacity: 85,
+                bold: true,
                 visibility: 'ALWAYS'
               };
               updateActiveSlide((s) => s.config.layout.push(newText));
@@ -821,10 +912,11 @@ export default function Studio() {
                     borderColor: isMultiSelected ? '#007bff' : '#333',
                     background: isCurrentActive ? '#2a2a2a' : isMultiSelected ? '#1a2a3a' : '#1c1c1c'
                   }}
-                  title="Pārvelc ar peli, lai samainītu vietām"
+                  title="Pārvelc ar peli, vai kopē ar Ctrl+C / Ctrl+V"
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>
+                      {s.config?.autoStart && <span title="Automātiskais starts" style={{ color: '#00e5ff', marginRight: '4px' }}>⚡</span>}
                       ☰ {idx + 1}. {s.title}
                     </span>
 
@@ -896,10 +988,13 @@ export default function Studio() {
               />
             )}
 
+            {/* KANVAS ELEMENTI */}
             {activeSlide?.config?.layout?.map((el) => {
               const isSelected = selectedElementIds.includes(el.id);
               const isEditing = editingElementId === el.id;
-              const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 80 : 50));
+              const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 85 : 60));
+              const blurVal = (el.blurMode === 'STATIC' || el.blurMode === 'PROGRESSIVE') ? `${el.blurAmount || 12}px` : 'none';
+              const calculatedFontSize = getStudioFontSize(el.fontSize);
 
               return (
                 <div
@@ -924,7 +1019,7 @@ export default function Studio() {
                     width: `${el.w}%`,
                     minHeight: `${el.h}%`,
                     height: 'auto',
-                    border: isSelected ? '2px dashed #00ff00' : '1px solid rgba(255,255,255,0.15)',
+                    border: isSelected ? '2px dashed #00ff00' : 'none',
                     cursor: isEditing ? 'text' : 'move',
                     display: 'flex',
                     alignItems: 'center',
@@ -935,7 +1030,8 @@ export default function Studio() {
                     padding: '10px 15px',
                     boxSizing: 'border-box',
                     zIndex: isSelected ? 25 : 5,
-                    fontFamily: el.fontFamily || 'Segoe UI'
+                    fontFamily: el.fontFamily || 'Segoe UI',
+                    fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal')
                   }}
                 >
                   {el.type === 'QUESTION' || el.type === 'TEXT' ? (
@@ -955,19 +1051,21 @@ export default function Studio() {
                           ...inlineTextArea,
                           color: el.color || '#fff',
                           fontFamily: el.fontFamily || 'Segoe UI',
-                          fontSize: `${el.fontSize || 2.2}vw`
+                          fontSize: calculatedFontSize,
+                          fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal')
                         }}
                       />
                     ) : (
                       <span
                         style={{
-                          fontSize: `${el.fontSize || 2.2}vw`,
+                          fontSize: calculatedFontSize,
                           color: el.color || '#fff',
                           textAlign: 'center',
                           width: '100%',
                           wordBreak: 'break-word',
                           whiteSpace: 'pre-wrap',
-                          fontFamily: el.fontFamily || 'Segoe UI'
+                          fontFamily: el.fontFamily || 'Segoe UI',
+                          fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal')
                         }}
                       >
                         {el.content}
@@ -977,7 +1075,14 @@ export default function Studio() {
                     <img
                       src={`${MEDIA_BASE_URL}/${el.content}`}
                       alt="img"
-                      style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'contain',
+                        pointerEvents: 'none',
+                        filter: blurVal !== 'none' ? `blur(${blurVal})` : 'none',
+                        transition: 'filter 0.3s ease'
+                      }}
                     />
                   ) : el.type === 'VIDEO' ? (
                     <video
@@ -985,7 +1090,14 @@ export default function Studio() {
                         if (isSelected) previewMediaRef.current = r;
                       }}
                       src={`${MEDIA_BASE_URL}/${el.content}`}
-                      style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'contain',
+                        pointerEvents: 'none',
+                        filter: blurVal !== 'none' ? `blur(${blurVal})` : 'none',
+                        transition: 'filter 0.3s ease'
+                      }}
                     />
                   ) : (
                     <div style={{ textAlign: 'center' }}>
@@ -1018,21 +1130,50 @@ export default function Studio() {
             {/* ATBILŽU POGAS */}
             {(activeSlide?.type === 'QUESTION' || activeSlide?.type === 'MAJORITY') &&
               activeSlide?.config?.options?.map((opt, i) => {
-                const isIndividual = activeSlide.config.optionsLayout === 'INDIVIDUAL';
-                const pos = activeSlide.config.optionsPositions?.[i] ||
-                  activeSlide.config.optionsPositions?.[opt] || {
-                    x: 10 + (i % 2) * 42,
-                    y: 58 + Math.floor(i / 2) * 13,
-                    w: 38,
-                    h: 10
-                  };
+                const isIndividual = (activeSlide.config.optionsLayout || 'INDIVIDUAL') === 'INDIVIDUAL';
+                const isRightColumn = activeSlide.config.optionsLayout === 'RIGHT_COLUMN';
+                const totalOpt = activeSlide.config.options.length;
 
+                let defaultPos = {
+                  x: 10 + (i % 2) * 42,
+                  y: 58 + Math.floor(i / 2) * 13,
+                  w: 38,
+                  h: 10
+                };
+
+                if (isRightColumn) {
+                  const itemHeight = Math.min(12, Math.floor(65 / totalOpt) - 2);
+                  defaultPos = {
+                    x: 56,
+                    y: 20 + i * (itemHeight + 3),
+                    w: 40,
+                    h: itemHeight
+                  };
+                }
+
+                const pos = isIndividual
+                  ? (activeSlide.config.optionsPositions?.[i] || activeSlide.config.optionsPositions?.[opt] || defaultPos)
+                  : defaultPos;
+
+                const letter = String.fromCharCode(65 + i);
+                const optKey = (opt && opt.trim() !== '') ? opt : letter;
+
+                const isCorrect =
+                  activeSlide.config.correctAnswers.includes(optKey) ||
+                  activeSlide.config.correctAnswers.includes(letter) ||
+                  (opt && opt.trim() !== '' && activeSlide.config.correctAnswers.includes(opt));
+
+                const currentPct = activeSlide.config.answerCorrectness?.[optKey] ?? activeSlide.config.answerCorrectness?.[letter] ?? 100;
                 const optionId = `opt-index-${i}`;
-                const isCorrect = activeSlide.config.correctAnswers.includes(opt);
-                const currentPct = activeSlide.config.answerCorrectness?.[opt] ?? 100;
                 const isSelected = selectedElementIds.includes(optionId);
                 const isEditing = editingElementId === optionId;
                 const isOnlyLetter = !opt || opt.trim() === '';
+
+                const optBg = activeSlide.config.optionsBgColor || '#000000';
+                const optOpacity = activeSlide.config.optionsBgOpacity ?? 85;
+                const optColor = activeSlide.config.optionsColor || '#ffffff';
+                const optCorrectColor = activeSlide.config.optionsCorrectColor || '#00ff00';
+                const isZeroOpacity = optOpacity === 0;
 
                 return (
                   <div
@@ -1052,19 +1193,21 @@ export default function Studio() {
                     }}
                     style={{
                       position: 'absolute',
-                      left: isIndividual ? `${pos.x}%` : `${10 + (i % 2) * 42}%`,
-                      top: isIndividual ? `${pos.y}%` : `${58 + Math.floor(i / 2) * 13}%`,
-                      width: isOnlyLetter && !isEditing ? 'auto' : isIndividual ? `${pos.w}%` : '38%',
-                      height: isIndividual ? `${pos.h}%` : '10%',
-                      background: isOnlyLetter && !isEditing ? 'transparent' : isCorrect ? 'rgba(40, 167, 69, 0.9)' : 'rgba(30, 30, 30, 0.9)',
-                      border: isSelected ? '2px dashed #ffc107' : isOnlyLetter && !isEditing ? 'none' : '2px solid #555',
+                      left: `${pos.x}%`,
+                      top: `${pos.y}%`,
+                      width: isOnlyLetter && !isEditing ? 'auto' : `${pos.w}%`,
+                      height: `${pos.h}%`,
+                      background: isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optBg, optOpacity),
+                      backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(6px)',
+                      boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 4px 15px rgba(0,0,0,0.5)',
+                      border: isSelected ? '2px dashed #ffc107' : 'none',
                       borderRadius: isOnlyLetter && !isEditing ? '50%' : '10px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: isOnlyLetter && !isEditing ? 'center' : 'space-between',
-                      padding: isOnlyLetter && !isEditing ? '0' : '0 12px',
+                      padding: isOnlyLetter && !isEditing ? '0' : isZeroOpacity ? '0 6px' : '0 12px',
                       boxSizing: 'border-box',
-                      cursor: isIndividual ? 'move' : 'pointer',
+                      cursor: isIndividual ? 'move' : 'default',
                       zIndex: 10,
                       overflow: 'visible'
                     }}
@@ -1084,21 +1227,22 @@ export default function Studio() {
 
                     <div
                       style={{
-                        width: '45px',
-                        height: '45px',
+                        width: '38px',
+                        height: '38px',
                         borderRadius: '50%',
-                        background: isCorrect ? '#28a745' : '#111',
-                        border: '2px solid #ffc107',
-                        boxShadow: '0 0 15px rgba(0,0,0,0.9)',
+                        background: isCorrect ? optCorrectColor : '#111',
+                        border: isCorrect ? `2px solid #ffffff` : '2px solid #ffc107',
+                        boxShadow: isCorrect ? `0 0 15px ${optCorrectColor}` : '0 0 10px rgba(0,0,0,0.9)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         fontWeight: 'bold',
-                        fontSize: '1.4rem',
-                        color: '#ffc107'
+                        fontSize: '1.2rem',
+                        color: isCorrect ? '#000' : '#ffc107',
+                        flexShrink: 0
                       }}
                     >
-                      {String.fromCharCode(65 + i)}
+                      {letter}
                     </div>
 
                     {isEditing ? (
@@ -1108,12 +1252,15 @@ export default function Studio() {
                         onChange={(e) => {
                           const val = e.target.value;
                           updateActiveSlide((s) => {
-                            const old = s.config.options[i];
+                            const oldVal = s.config.options[i];
+                            const oldKey = (oldVal && oldVal.trim() !== '') ? oldVal : letter;
                             s.config.options[i] = val;
-                            s.config.correctAnswers = s.config.correctAnswers.map((a) => (a === old ? val : a));
-                            if (s.config.answerCorrectness && s.config.answerCorrectness[old]) {
-                              s.config.answerCorrectness[val] = s.config.answerCorrectness[old];
-                              delete s.config.answerCorrectness[old];
+                            const newKey = (val && val.trim() !== '') ? val : letter;
+
+                            s.config.correctAnswers = s.config.correctAnswers.map((a) => (a === oldKey || a === oldVal ? newKey : a));
+                            if (s.config.answerCorrectness && s.config.answerCorrectness[oldKey]) {
+                              s.config.answerCorrectness[newKey] = s.config.answerCorrectness[oldKey];
+                              if (oldKey !== newKey) delete s.config.answerCorrectness[oldKey];
                             }
                           });
                         }}
@@ -1122,13 +1269,27 @@ export default function Studio() {
                       />
                     ) : (
                       !isOnlyLetter && (
-                        <span style={{ flex: 1, fontSize: '1.1vw', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginLeft: '10px' }}>
+                        <span
+                          style={{
+                            flex: 1,
+                            fontSize: getOptionFontSize(opt),
+                            color: optColor,
+                            fontWeight: 'bold',
+                            whiteSpace: 'normal',
+                            lineHeight: 1.2,
+                            overflow: 'hidden',
+                            marginLeft: '10px',
+                            wordBreak: 'break-word',
+                            textAlign: 'left',
+                            textShadow: isZeroOpacity ? '0 1px 4px #000' : 'none'
+                          }}
+                        >
                           {opt}
                         </span>
                       )
                     )}
 
-                    {activeSlide.type === 'QUESTION' && (!isOnlyLetter || isEditing) && (
+                    {activeSlide.type === 'QUESTION' && (
                       <div
                         style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '6px' }}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -1137,16 +1298,22 @@ export default function Studio() {
                         <input
                           type="checkbox"
                           checked={isCorrect}
-                          title="Atzīmēt kā pareizo atbildi"
+                          title={`Atzīmēt ${letter} kā pareizo atbildi`}
                           onChange={(e) => {
                             updateActiveSlide((s) => {
+                              const targetKey = (s.config.options[i] && s.config.options[i].trim() !== '') ? s.config.options[i] : letter;
                               if (e.target.checked) {
-                                if (!s.config.correctAnswers.includes(opt)) s.config.correctAnswers.push(opt);
+                                s.config.correctAnswers = s.config.correctAnswers.filter((a) => a !== letter && a !== s.config.options[i]);
+                                s.config.correctAnswers.push(targetKey);
                                 if (!s.config.answerCorrectness) s.config.answerCorrectness = {};
-                                if (!s.config.answerCorrectness[opt]) s.config.answerCorrectness[opt] = 100;
+                                s.config.answerCorrectness[targetKey] = 100;
                               } else {
-                                s.config.correctAnswers = s.config.correctAnswers.filter((a) => a !== opt);
-                                if (s.config.answerCorrectness) delete s.config.answerCorrectness[opt];
+                                s.config.correctAnswers = s.config.correctAnswers.filter((a) => a !== letter && a !== s.config.options[i] && a !== targetKey);
+                                if (s.config.answerCorrectness) {
+                                  delete s.config.answerCorrectness[targetKey];
+                                  delete s.config.answerCorrectness[letter];
+                                  delete s.config.answerCorrectness[s.config.options[i]];
+                                }
                               }
                             });
                           }}
@@ -1175,8 +1342,9 @@ export default function Studio() {
                               onChange={(e) => {
                                 const val = Math.max(1, Math.min(100, Number(e.target.value) || 0));
                                 updateActiveSlide((s) => {
+                                  const targetKey = (s.config.options[i] && s.config.options[i].trim() !== '') ? s.config.options[i] : letter;
                                   if (!s.config.answerCorrectness) s.config.answerCorrectness = {};
-                                  s.config.answerCorrectness[opt] = val;
+                                  s.config.answerCorrectness[targetKey] = val;
                                 });
                               }}
                               style={inputPercent}
@@ -1208,7 +1376,6 @@ export default function Studio() {
 
         {/* LABĀ PUSE: Iestatījumu panelis */}
         <div style={sidebarRight}>
-          {/* MOBILĀS LIETOTNES DIZAINS & KOMANDU REŽĪMS */}
           <div style={{ background: '#1c2833', border: '1px solid #007bff', borderRadius: '8px', padding: '10px', marginBottom: '15px' }}>
             <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#00ff00', marginBottom: '8px' }}>
               📱 MOBILĀS LIETOTNES & SPĒLES IESTATĪJUMI
@@ -1254,7 +1421,7 @@ export default function Studio() {
               <option value="999">Izslēgt auto-atslēgšanu</option>
             </select>
 
-            {/* KOMANDU REŽĪMA IESTATĪJUMI */}
+            {/* KOMANDU REŽĪMS */}
             <div style={{ marginTop: '10px', background: '#15222e', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', color: '#00e5ff', fontSize: '0.85rem' }}>
                 <input
@@ -1393,101 +1560,273 @@ export default function Studio() {
             </div>
           )}
 
-          {selectedElement && (
+          {/* IZVĒLĒTO ELEMENTU INSPEKTORS */}
+          {selectedElements.length > 0 && primarySelectedElement && (
             <div style={selectedBox}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'center' }}>
                 <span style={{ fontWeight: 'bold', color: '#00ff00', fontSize: '0.85rem' }}>
-                  IZVĒLĒTS: {selectedElement.type}
+                  {hasMultipleSelection
+                    ? `👥 ATLASĪTI: ${selectedElements.length} ELEMENTI (MULTI-EDIT)`
+                    : `IZVĒLĒTS: ${primarySelectedElement.type}`}
                 </span>
                 <button
-                  onClick={() => {
-                    updateActiveSlide((s) => {
-                      s.config.layout = s.config.layout.filter((x) => x.id !== selectedElement.id);
-                    });
-                    setSelectedElementIds([]);
-                  }}
-                  style={{ background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', padding: '2px 6px', fontSize: '0.75rem' }}
+                  onClick={deleteSelectedElements}
+                  style={{ background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', padding: '3px 8px', fontSize: '0.75rem', fontWeight: 'bold' }}
+                  title="Dzēst ar [Delete / Backspace]"
                 >
-                  🗑️ Dzēst
+                  🗑️ Dzēst [Del]
                 </button>
               </div>
 
+              {/* TEKSTA UN FONA KOPĒJIE IESTATĪJUMI */}
+              {selectedElements.some((el) => el.type === 'QUESTION' || el.type === 'TEXT') && (
+                <div style={{ marginTop: '8px', borderTop: '1px solid #444', paddingTop: '8px' }}>
+                  <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#ffc107', marginBottom: '8px' }}>
+                    🎨 TEKSTA & FONA STILS
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                    <div style={{ flex: 1.4 }}>
+                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Fonts:</span>
+                      <select
+                        style={selectStyle}
+                        value={primarySelectedElement.fontFamily || 'Segoe UI'}
+                        onChange={(e) => updateSelectedElements((el) => { el.fontFamily = e.target.value; })}
+                      >
+                        <option value="Segoe UI">Segoe UI</option>
+                        <option value="Montserrat">Montserrat</option>
+                        <option value="Impact">Impact</option>
+                        <option value="Roboto">Roboto</option>
+                        <option value="Arial">Arial</option>
+                        <option value="Georgia">Georgia</option>
+                        <option value="Courier New">Courier New</option>
+                      </select>
+                    </div>
+
+                    <div style={{ flex: 1 }}>
+                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Izmērs:</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0.8"
+                        max="12.0"
+                        value={primarySelectedElement.fontSize ?? 2.2}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 2.2;
+                          updateSelectedElements((el) => { el.fontSize = val; });
+                        }}
+                        style={inputStyle}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', background: '#1a1a1a', padding: '6px 10px', borderRadius: '6px', border: '1px solid #333' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Teksts:</span>
+                      <input
+                        type="color"
+                        value={primarySelectedElement.color || '#ffffff'}
+                        onChange={(e) => updateSelectedElements((el) => { el.color = e.target.value; })}
+                        style={colorPicker}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Fons:</span>
+                      <input
+                        type="color"
+                        value={primarySelectedElement.bgColor || '#000000'}
+                        onChange={(e) => updateSelectedElements((el) => { el.bgColor = e.target.value; })}
+                        style={colorPicker}
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => updateSelectedElements((el) => { el.bold = !el.bold; })}
+                      style={{
+                        padding: '4px 10px',
+                        background: primarySelectedElement.bold ? '#007bff' : '#333',
+                        color: '#fff',
+                        border: '1px solid #555',
+                        borderRadius: '4px',
+                        fontWeight: 'bold',
+                        fontSize: '0.85rem',
+                        cursor: 'pointer'
+                      }}
+                      title="Treknraksts (Bold)"
+                    >
+                      B
+                    </button>
+                  </div>
+
+                  <div style={{ marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Fona caurspīdīgums:</span>
+                      <span style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>
+                        {primarySelectedElement.bgOpacity ?? (primarySelectedElement.type === 'QUESTION' ? 85 : 60)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={primarySelectedElement.bgOpacity ?? (primarySelectedElement.type === 'QUESTION' ? 85 : 60)}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        updateSelectedElements((el) => { el.bgOpacity = val; });
+                      }}
+                      style={{ width: '100%', accentColor: '#00e5ff', cursor: 'pointer' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* 🌫️ BLUR SISTĒMA ATTĒLIEM & VIDEO */}
+              {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO') && (
+                <div style={{ marginTop: '8px', borderTop: '1px solid #444', paddingTop: '8px' }}>
+                  <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#00e5ff', marginBottom: '6px' }}>
+                    🌫️ BLUR (AIZMIGLOŠANAS) EFEKTS
+                  </div>
+
+                  <label style={labelStyle}>Aizmiglojuma režīms:</label>
+                  <select
+                    style={{ ...selectStyle, borderColor: '#00e5ff' }}
+                    value={primarySelectedElement.blurMode || 'NONE'}
+                    onChange={(e) => updateSelectedElements((el) => { el.blurMode = e.target.value as any; })}
+                  >
+                    <option value="NONE">❌ Bez Blur (Normāls ass skats)</option>
+                    <option value="STATIC">🔒 Fiksēts Blur (Vienmēr miglains)</option>
+                    <option value="PROGRESSIVE">✨ Dinamiskais Blur (Kļūst skaidrs uz beigām)</option>
+                  </select>
+
+                  {(primarySelectedElement.blurMode === 'STATIC' || primarySelectedElement.blurMode === 'PROGRESSIVE') && (
+                    <div style={{ marginTop: '6px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Miglas stiprums (sākuma stāvoklis):</span>
+                        <span style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>
+                          {primarySelectedElement.blurAmount || 12} px
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="2"
+                        max="40"
+                        step="1"
+                        value={primarySelectedElement.blurAmount || 12}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          updateSelectedElements((el) => { el.blurAmount = val; });
+                        }}
+                        style={{ width: '100%', accentColor: '#00e5ff', cursor: 'pointer' }}
+                      />
+                      {primarySelectedElement.blurMode === 'PROGRESSIVE' && (
+                        <div style={{ fontSize: '0.7rem', color: '#aaa', marginTop: '3px' }}>
+                          💡 Sāksies ar {primarySelectedElement.blurAmount || 12}px un jautājuma pēdējās 2 sekundēs kļūs pilnīgi ass (0px)!
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* REDZAMĪBAS REŽĪMI */}
               <label style={labelStyle}>Rādīt / Atskaņot:</label>
               <select
                 style={selectStyle}
-                value={selectedElement.visibility || 'ALWAYS'}
-                onChange={(e) =>
-                  updateActiveSlide((s) => {
-                    const el = s.config.layout.find((x) => x.id === selectedElement.id);
-                    if (el) el.visibility = e.target.value as any;
-                  })
-                }
+                value={primarySelectedElement.visibility || (primarySelectedElement.type === 'QUESTION' || primarySelectedElement.type === 'TEXT' ? 'ALWAYS' : 'DURING_QUESTION')}
+                onChange={(e) => updateSelectedElements((el) => { el.visibility = e.target.value as any; })}
               >
-                <option value="ALWAYS">Visu laiku (Always)</option>
-                <option value="DURING_QUESTION">Kamēr rit jautājums (During Question - pazūd pie Reveal)</option>
+                <option value="DURING_QUESTION">Kamēr rit jautājums (Parādās ar laiku, pazūd pie Reveal)</option>
+                <option value="UNTIL_REVEAL">Redzams uzreiz līdz atbildei (Uzreiz no READY līdz Reveal)</option>
+                <option value="ALWAYS">Visu laiku (Always - redzams arī pēc atbildes)</option>
                 <option value="AFTER_REVEAL">Tikai atklājot atbildi (After Reveal - parādās pie Reveal)</option>
               </select>
 
-              {(selectedElement.type === 'VIDEO' || selectedElement.type === 'AUDIO') && (
+              {/* 🔊 SKAĻUMS & TRIM AUDIO/VIDEO */}
+              {selectedElements.some((el) => el.type === 'VIDEO' || el.type === 'AUDIO') && (
                 <div style={{ marginTop: '8px', borderTop: '1px solid #444', paddingTop: '8px' }}>
                   <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#ffc107', marginBottom: '6px' }}>
-                    ✂️ TRIM IESTATĪJUMI (Sekundēs)
+                    🔊 SKAĻUMS & ✂️ TRIM IESTATĪJUMI
                   </div>
 
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
-                    <div style={{ flex: 1 }}>
-                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Sākums (sek):</span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        value={selectedElement.trimStart ?? 0}
-                        onChange={(e) => {
-                          const val = Math.max(0, parseFloat(e.target.value) || 0);
-                          updateActiveSlide((s) => {
-                            const el = s.config.layout.find((x) => x.id === selectedElement.id);
-                            if (el) {
-                              el.trimStart = val;
-                              if (!el.isTrimEndCustom || (el.trimEnd && el.trimEnd <= el.trimStart)) {
-                                el.trimEnd = Number((val + 30).toFixed(2));
-                              }
-                            }
-                          });
-                        }}
-                        style={inputStyle}
-                      />
+                  <div style={{ marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Medija skaļums:</span>
+                      <span style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>
+                        {primarySelectedElement.volume ?? 100}%
+                      </span>
                     </div>
-
-                    <div style={{ flex: 1 }}>
-                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Beigas (sek):</span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        value={selectedElement.trimEnd ?? ((selectedElement.trimStart || 0) + 30)}
-                        onChange={(e) => {
-                          const val = Math.max(0, parseFloat(e.target.value) || 0);
-                          updateActiveSlide((s) => {
-                            const el = s.config.layout.find((x) => x.id === selectedElement.id);
-                            if (el) {
-                              el.trimEnd = val;
-                              el.isTrimEndCustom = true;
-                            }
-                          });
-                        }}
-                        style={inputStyle}
-                      />
-                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={primarySelectedElement.volume ?? 100}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        updateSelectedElements((el) => { el.volume = val; });
+                        if (previewMediaRef.current) {
+                          previewMediaRef.current.volume = val / 100;
+                        }
+                      }}
+                      style={{ width: '100%', accentColor: '#00ff00', cursor: 'pointer' }}
+                    />
                   </div>
 
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                    <button style={{ ...btnSmallAction, background: '#28a745' }} onClick={() => playPreviewFragment(selectedElement)}>
-                      ▶️ Pārbaudīt fragmentu
-                    </button>
-                    <button style={{ ...btnSmallAction, background: '#666' }} onClick={stopPreviewFragment}>
-                      ⏹️ Stop
-                    </button>
-                  </div>
+                  {!hasMultipleSelection && (
+                    <>
+                      <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
+                        <div style={{ flex: 1 }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Sākums (sek):</span>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            value={primarySelectedElement.trimStart ?? 0}
+                            onChange={(e) => {
+                              const val = Math.max(0, parseFloat(e.target.value) || 0);
+                              updateSelectedElements((el) => {
+                                el.trimStart = val;
+                                if (!el.isTrimEndCustom || (el.trimEnd && el.trimEnd <= el.trimStart)) {
+                                  el.trimEnd = Number((val + 30).toFixed(2));
+                                }
+                              });
+                            }}
+                            style={inputStyle}
+                          />
+                        </div>
+
+                        <div style={{ flex: 1 }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Beigas (sek):</span>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            value={primarySelectedElement.trimEnd ?? ((primarySelectedElement.trimStart || 0) + 30)}
+                            onChange={(e) => {
+                              const val = Math.max(0, parseFloat(e.target.value) || 0);
+                              updateSelectedElements((el) => {
+                                el.trimEnd = val;
+                                el.isTrimEndCustom = true;
+                              });
+                            }}
+                            style={inputStyle}
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                        <button style={{ ...btnSmallAction, background: '#28a745' }} onClick={() => playPreviewFragment(primarySelectedElement)}>
+                          ▶️ Pārbaudīt fragmentu
+                        </button>
+                        <button style={{ ...btnSmallAction, background: '#666' }} onClick={stopPreviewFragment}>
+                          ⏹️ Stop
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -1511,6 +1850,133 @@ export default function Studio() {
           {/* JAUTĀJUMA IESTATĪJUMI */}
           {(activeSlide.type === 'QUESTION' || activeSlide.type === 'MAJORITY') && (
             <div style={{ marginTop: '10px', borderTop: '1px solid #333', paddingTop: '10px' }}>
+              <div style={{ marginBottom: '10px', background: '#1c2833', border: '1px solid #00e5ff', borderRadius: '8px', padding: '8px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', color: '#00e5ff', fontSize: '0.85rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!activeSlide.config.autoStart}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.autoStart = e.target.checked))}
+                  />
+                  ⚡ Automātiskais starts (Auto-Start)
+                </label>
+                <div style={{ fontSize: '0.72rem', color: '#aaa', marginTop: '4px', lineHeight: 1.3 }}>
+                  Pārejot uz šo slaidu, laiks un mediji startēsies uzreiz bez atsevišķa [Space] spiediena.
+                </div>
+              </div>
+
+              {/* ATBILŽU IZKĀRTOJUMS */}
+              <div style={{ marginBottom: '10px' }}>
+                <label style={labelStyle}>Atbilšu izkārtojums (Layout):</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px', marginTop: '4px' }}>
+                  <button
+                    type="button"
+                    onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'INDIVIDUAL'))}
+                    style={{
+                      padding: '7px 4px',
+                      color: '#fff',
+                      fontSize: '0.75rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      background: (activeSlide.config.optionsLayout || 'INDIVIDUAL') === 'INDIVIDUAL' ? '#007bff' : '#222',
+                      border: (activeSlide.config.optionsLayout || 'INDIVIDUAL') === 'INDIVIDUAL' ? '2px solid #00e5ff' : '1px solid #444'
+                    }}
+                  >
+                    ✋ Manuāls
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'RIGHT_COLUMN'))}
+                    style={{
+                      padding: '7px 4px',
+                      color: '#fff',
+                      fontSize: '0.75rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      background: activeSlide.config.optionsLayout === 'RIGHT_COLUMN' ? '#007bff' : '#222',
+                      border: activeSlide.config.optionsLayout === 'RIGHT_COLUMN' ? '2px solid #00e5ff' : '1px solid #444'
+                    }}
+                  >
+                    📑 Labajā pusē
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'GRID'))}
+                    style={{
+                      padding: '7px 4px',
+                      color: '#fff',
+                      fontSize: '0.75rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      background: activeSlide.config.optionsLayout === 'GRID' ? '#007bff' : '#222',
+                      border: activeSlide.config.optionsLayout === 'GRID' ? '2px solid #00e5ff' : '1px solid #444'
+                    }}
+                  >
+                    ⏹️ Horizontāli
+                  </button>
+                </div>
+              </div>
+
+              {/* ATBILŽU KRĀSAS, INTENSITĀTE & PAREIZĀS ATBILDES KRĀSA */}
+              <div style={{ background: '#182430', border: '1px solid #007bff', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
+                <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#00e5ff', marginBottom: '6px' }}>
+                  🎨 ATBILŽU LOGU & TEKSTA STILS
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Teksts:</span>
+                    <input
+                      type="color"
+                      value={activeSlide.config.optionsColor || '#ffffff'}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsColor = e.target.value))}
+                      style={colorPicker}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Fons:</span>
+                    <input
+                      type="color"
+                      value={activeSlide.config.optionsBgColor || '#000000'}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgColor = e.target.value))}
+                      style={colorPicker}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#00ff00', fontWeight: 'bold' }}>Pareizā:</span>
+                    <input
+                      type="color"
+                      value={activeSlide.config.optionsCorrectColor || '#00ff00'}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsCorrectColor = e.target.value))}
+                      style={colorPicker}
+                      title="Pareizās atbildes burta un spīduma krāsa"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Loga fona intensitāte:</span>
+                    <span style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>
+                      {activeSlide.config.optionsBgOpacity ?? 85}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={activeSlide.config.optionsBgOpacity ?? 85}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgOpacity = Number(e.target.value)))}
+                    style={{ width: '100%', accentColor: '#00ff00', cursor: 'pointer' }}
+                  />
+                </div>
+              </div>
+
               <label style={labelStyle}>Atbilšu skaits (2-6):</label>
               <div style={{ display: 'flex', gap: '4px', margin: '6px 0' }}>
                 {[2, 3, 4, 5, 6].map((num) => (
@@ -1522,7 +1988,7 @@ export default function Studio() {
                         s.config.optionsCount = num;
                         const cur = s.config.options || [];
                         const updated: string[] = [];
-                        for (let i = 0; i < num; i++) updated.push(cur[i] || `Variants ${String.fromCharCode(65 + i)}`);
+                        for (let i = 0; i < num; i++) updated.push(cur[i] !== undefined ? cur[i] : `Variants ${String.fromCharCode(65 + i)}`);
                         s.config.options = updated;
                       });
                     }}
@@ -1533,7 +1999,7 @@ export default function Studio() {
               </div>
 
               {activeSlide.config.correctAnswers.length > 1 && (
-                <div style={{ marginTop: '8px', background: '#1c2833', border: '1px solid #007bff', borderRadius: '6px', padding: '8px' }}>
+                <div style={{ marginTop: '8px', background: '#1c2833', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px' }}>
                   <label style={{ ...labelStyle, color: '#00e5ff', fontWeight: 'bold', marginTop: 0 }}>
                     🎯 Vairāku pareizo atbilžu režīms:
                   </label>
@@ -1608,7 +2074,7 @@ export default function Studio() {
   );
 }
 
-// --- STILI ---
+// STILI
 const studioLayout: React.CSSProperties = {
   height: '100vh',
   width: '100vw',

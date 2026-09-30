@@ -40,6 +40,29 @@ const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
   return `rgba(${r}, ${g}, ${b}, ${opacityPercent / 100})`;
 };
 
+export const getPresentationFontSize = (fontSize?: number | string): string => {
+  const scaleMultiplier = 1.35;
+  if (typeof fontSize === 'number') {
+    return `${fontSize * scaleMultiplier}vw`;
+  }
+  if (typeof fontSize === 'string') {
+    const num = parseFloat(fontSize);
+    if (!isNaN(num)) {
+      return `${num * scaleMultiplier}vw`;
+    }
+    return fontSize;
+  }
+  return `${2.2 * scaleMultiplier}vw`;
+};
+
+const getOptionFontSize = (text: string = ''): string => {
+  const len = text.trim().length;
+  if (len <= 15) return 'clamp(1.1rem, 1.6vw, 2.0rem)';
+  if (len <= 30) return 'clamp(0.95rem, 1.35vw, 1.7rem)';
+  if (len <= 55) return 'clamp(0.8rem, 1.1vw, 1.4rem)';
+  return 'clamp(0.7rem, 0.95vw, 1.2rem)';
+};
+
 export const formatThinkingTime = (totalMs: number = 0): string => {
   if (!totalMs || totalMs <= 0) return '0 sek un 000 ms';
   const ms = Math.floor(totalMs % 1000);
@@ -58,10 +81,12 @@ const MediaLayoutItem: React.FC<{
   el: any;
   subState: string;
   isRevealed: boolean;
+  sceneDuration?: number;
+  endTime?: number | null;
   onCustomMediaEnded?: () => void;
-}> = ({ el, subState, isRevealed, onCustomMediaEnded }) => {
+}> = ({ el, subState, isRevealed, sceneDuration = 30, endTime, onCustomMediaEnded }) => {
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
-  const vis = el.visibility || 'ALWAYS';
+  const vis = el.visibility || (el.type === 'QUESTION' || el.type === 'TEXT' ? 'ALWAYS' : 'DURING_QUESTION');
   const src = `${MEDIA_BASE_URL}/${el.content}`;
 
   const currentSub = (subState || 'IDLE').toUpperCase();
@@ -69,12 +94,13 @@ const MediaLayoutItem: React.FC<{
 
   const isVisible =
     vis === 'ALWAYS' ||
-    (vis === 'DURING_QUESTION' && ['READY', 'ACTIVE', 'PAUSED', 'STATS', 'SUMMARY'].includes(currentSub) && !isRevealPhase) ||
+    (vis === 'DURING_QUESTION' && ['ACTIVE', 'PAUSED', 'STATS', 'SUMMARY'].includes(currentSub) && !isRevealPhase) ||
+    (vis === 'UNTIL_REVEAL' && ['READY', 'ACTIVE', 'PAUSED', 'STATS', 'SUMMARY'].includes(currentSub) && !isRevealPhase) ||
     (vis === 'AFTER_REVEAL' && isRevealPhase);
 
   const shouldPlay = isVisible && currentSub !== 'PAUSED' && (
-    (vis === 'ALWAYS' && ['READY', 'ACTIVE', 'STATS', 'SUMMARY', 'REVEAL'].includes(currentSub)) ||
-    (vis === 'DURING_QUESTION' && currentSub === 'ACTIVE') ||
+    (vis === 'ALWAYS' && ['ACTIVE', 'STATS', 'SUMMARY', 'REVEAL'].includes(currentSub)) ||
+    ((vis === 'DURING_QUESTION' || vis === 'UNTIL_REVEAL') && currentSub === 'ACTIVE') ||
     (vis === 'AFTER_REVEAL' && isRevealPhase)
   );
 
@@ -95,7 +121,62 @@ const MediaLayoutItem: React.FC<{
     }
   }, [shouldPlay, currentSub, isRevealPhase, el.trimStart, el.volume]);
 
+  // 🌫️ DINAMISKĀ BLUR MATEMĀTIKA
+  const initialBlurAmount = el.blurAmount || 12;
+  const [currentBlurPx, setCurrentBlurPx] = useState<number>(() => {
+    if (el.blurMode === 'STATIC') return initialBlurAmount;
+    if (el.blurMode === 'PROGRESSIVE') return initialBlurAmount;
+    return 0;
+  });
+
+  useEffect(() => {
+    if (!el.blurMode || el.blurMode === 'NONE') {
+      setCurrentBlurPx(0);
+      return;
+    }
+
+    if (el.blurMode === 'STATIC') {
+      setCurrentBlurPx(initialBlurAmount);
+      return;
+    }
+
+    if (el.blurMode === 'PROGRESSIVE') {
+      if (isRevealPhase || ['STATS', 'SUMMARY', 'REVEAL'].includes(currentSub)) {
+        setCurrentBlurPx(0);
+        return;
+      }
+
+      if (currentSub !== 'ACTIVE') {
+        setCurrentBlurPx(initialBlurAmount);
+        return;
+      }
+
+      const totalMs = Math.max(1000, sceneDuration * 1000);
+      const clearAtMsRemaining = 2000;
+
+      const updateProgressiveBlur = () => {
+        const now = Date.now();
+        const leftMs = Math.max(0, (endTime || now + totalMs) - now);
+
+        if (leftMs <= clearAtMsRemaining) {
+          setCurrentBlurPx(0);
+        } else {
+          const effectiveRemaining = leftMs - clearAtMsRemaining;
+          const effectiveTotal = Math.max(1000, totalMs - clearAtMsRemaining);
+          const ratio = Math.min(1, Math.max(0, effectiveRemaining / effectiveTotal));
+          setCurrentBlurPx(Math.round(ratio * initialBlurAmount));
+        }
+      };
+
+      updateProgressiveBlur();
+      const interval = setInterval(updateProgressiveBlur, 100);
+      return () => clearInterval(interval);
+    }
+  }, [el.blurMode, initialBlurAmount, currentSub, isRevealPhase, endTime, sceneDuration]);
+
   const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 85 : 60));
+  const filterStyle = currentBlurPx > 0 ? `blur(${currentBlurPx}px)` : 'none';
+
   const style: React.CSSProperties = {
     position: 'absolute',
     left: `${el.x}%`,
@@ -106,7 +187,7 @@ const MediaLayoutItem: React.FC<{
     zIndex: el.z || el.zIndex || 2,
     color: el.color || '#ffffff',
     fontFamily: el.fontFamily || 'Segoe UI',
-    fontSize: typeof el.fontSize === 'number' ? `${el.fontSize}vw` : el.fontSize || '2.2vw',
+    fontSize: getPresentationFontSize(el.fontSize),
     fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal'),
     whiteSpace: 'pre-wrap',
     textAlign: 'center',
@@ -126,7 +207,7 @@ const MediaLayoutItem: React.FC<{
           padding: el.type === 'QUESTION' ? '15px 25px' : '10px',
           borderRadius: el.type === 'QUESTION' ? '20px' : '8px',
           backdropFilter: 'blur(14px)',
-          border: el.type === 'QUESTION' ? '2px solid #ffc107' : '1px solid rgba(255,255,255,0.15)',
+          border: 'none',
           textShadow: '0 2px 10px #000',
           boxShadow: '0 8px 32px rgba(0,0,0,0.8)'
         }}
@@ -140,7 +221,15 @@ const MediaLayoutItem: React.FC<{
     return (
       <img
         src={src}
-        style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: isVisible ? 'block' : 'none' }}
+        style={{
+          ...style,
+          objectFit: 'contain',
+          borderRadius: '15px',
+          display: isVisible ? 'block' : 'none',
+          border: 'none',
+          filter: filterStyle,
+          transition: el.blurMode === 'PROGRESSIVE' ? 'filter 0.2s linear' : 'none'
+        }}
         alt="Medijs"
       />
     );
@@ -152,7 +241,15 @@ const MediaLayoutItem: React.FC<{
         ref={(v) => { mediaRef.current = v; }}
         src={src}
         preload="auto"
-        style={{ ...style, objectFit: 'contain', borderRadius: '15px', display: isVisible ? 'block' : 'none' }}
+        style={{
+          ...style,
+          objectFit: 'contain',
+          borderRadius: '15px',
+          display: isVisible ? 'block' : 'none',
+          border: 'none',
+          filter: filterStyle,
+          transition: el.blurMode === 'PROGRESSIVE' ? 'filter 0.2s linear' : 'none'
+        }}
         loop={!!el.loop}
         playsInline
         onTimeUpdate={() => {
@@ -205,6 +302,7 @@ const MediaLayoutItem: React.FC<{
 
 interface TopBarProps {
   pin: string | undefined;
+  qrCodeUrl?: string;
   scene: any;
   subState: string;
   summaryStats?: any;
@@ -217,10 +315,13 @@ interface TopBarProps {
   players: any[];
   isRevealed: boolean;
   isTeamMode: boolean;
+  showLargeQr: boolean;
+  setShowLargeQr: (show: boolean) => void;
 }
 
 const TopBar: React.FC<TopBarProps> = ({
   pin,
+  qrCodeUrl,
   scene,
   subState,
   summaryStats,
@@ -228,7 +329,9 @@ const TopBar: React.FC<TopBarProps> = ({
   voteData,
   players,
   isRevealed,
-  isTeamMode
+  isTeamMode,
+  showLargeQr,
+  setShowLargeQr
 }) => {
   const votedCount = voteData.votedCount || 0;
   
@@ -289,109 +392,185 @@ const TopBar: React.FC<TopBarProps> = ({
   };
 
   return (
-    <div style={topBarStyle}>
-      <div style={pinBadge}>
-        PIN: <span style={{ color: '#0f0' }}>{pin}</span>
-      </div>
+    <>
+      <div style={topBarStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={pinBadge}>
+            PIN: <span style={{ color: '#0f0' }}>{pin}</span>
+          </div>
 
-      <div style={votersBox}>
-        {/* SUMMARY DIAGRAMMA AR DAUDZATBILŽU (2/2, 1/2, 0/2) VAI STANDARTA (1/1) ATBALSTU */}
-        {isSummaryPhase && (summaryStats || scene?.summaryStats) ? (
-          (() => {
-            const stats = summaryStats || scene?.summaryStats || {};
-            if (stats.isMultiChoice) {
+          {qrCodeUrl && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                background: '#fff',
+                padding: '2px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                border: '2px solid #00ff00',
+                boxShadow: '0 0 10px rgba(0,255,0,0.4)'
+              }}
+              onClick={() => setShowLargeQr(!showLargeQr)}
+              title="Palielināt / Aizvērt QR kodu [Q]"
+            >
+              <img src={qrCodeUrl} alt="QR" style={{ width: '44px', height: '44px', borderRadius: '6px' }} />
+            </div>
+          )}
+        </div>
+
+        <div style={votersBox}>
+          {isSummaryPhase && (summaryStats || scene?.summaryStats) ? (
+            (() => {
+              const stats = summaryStats || scene?.summaryStats || {};
+              if (stats.isMultiChoice) {
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    <span style={summaryPillGreen}>
+                      🟩 Pilnīgi ({stats.requiredCount}/{stats.requiredCount}): <strong>{stats.fullCorrectCount ?? 0}</strong> ({stats.fullCorrectPct ?? 0}%)
+                    </span>
+                    <span style={summaryPillYellow}>
+                      🟨 Daļēji (1/{stats.requiredCount}): <strong>{stats.partialCorrectCount ?? 0}</strong> ({stats.partialCorrectPct ?? 0}%)
+                    </span>
+                    <span style={summaryPillRed}>
+                      🟥 Kļūdaini (0/{stats.requiredCount}): <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
+                    </span>
+                    <span style={summaryPillGray}>
+                      ⏱️ Nokavēja: <strong>{stats.unsubmittedCount ?? 0}</strong>
+                    </span>
+                  </div>
+                );
+              }
               return (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
                   <span style={summaryPillGreen}>
-                    🟩 Pilnīgi ({stats.requiredCount}/{stats.requiredCount}): <strong>{stats.fullCorrectCount ?? 0}</strong> ({stats.fullCorrectPct ?? 0}%)
-                  </span>
-                  <span style={summaryPillYellow}>
-                    🟨 Daļēji (1/{stats.requiredCount}): <strong>{stats.partialCorrectCount ?? 0}</strong> ({stats.partialCorrectPct ?? 0}%)
+                    🟩 Pareizi: <strong>{stats.correctCount ?? 0}</strong> ({stats.correctPct ?? 0}%)
                   </span>
                   <span style={summaryPillRed}>
-                    🟥 Kļūdaini (0/{stats.requiredCount}): <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
+                    🟥 Kļūdaini: <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
                   </span>
                   <span style={summaryPillGray}>
                     ⏱️ Nokavēja: <strong>{stats.unsubmittedCount ?? 0}</strong>
                   </span>
                 </div>
               );
-            }
-            return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                <span style={summaryPillGreen}>
-                  🟩 Pareizi: <strong>{stats.correctCount ?? 0}</strong> ({stats.correctPct ?? 0}%)
-                </span>
-                <span style={summaryPillRed}>
-                  🟥 Kļūdaini: <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
-                </span>
-                <span style={summaryPillGray}>
-                  ⏱️ Nokavēja: <strong>{stats.unsubmittedCount ?? 0}</strong>
-                </span>
+            })()
+          ) : isPaused ? (
+            <span style={{ color: '#ff9800', fontSize: '1.3vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(255,152,0,0.8)' }}>
+              ⏸️ SPĒLE IEPAUZĒTA
+            </span>
+          ) : missingCount > 5 ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '500px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', maxHeight: '55px', overflow: 'hidden' }}>
+                {[...Array(Math.min(missingCount, 120))].map((_, i) => (
+                  <div key={i} style={getDotStyle(missingCount)} />
+                ))}
               </div>
-            );
-          })()
-        ) : isPaused ? (
-          <span style={{ color: '#ff9800', fontSize: '1.3vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(255,152,0,0.8)' }}>
-            ⏸️ SPĒLE IEPAUZĒTA
-          </span>
-        ) : missingCount > 5 ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '500px', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', maxHeight: '55px', overflow: 'hidden' }}>
-              {[...Array(Math.min(missingCount, 120))].map((_, i) => (
-                <div key={i} style={getDotStyle(missingCount)} />
+            </div>
+          ) : missingCount > 0 ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <span style={{ color: '#ffc107', fontWeight: 'bold', fontSize: '0.95vw', textTransform: 'uppercase', textShadow: '0 0 10px #ffc107' }}>
+                GAIDĀM ATBILDES ({missingCount}):
+              </span>
+              {unvotedPlayers.map((p) => (
+                <span
+                  key={p.id}
+                  style={{
+                    background: 'rgba(255, 193, 7, 0.25)',
+                    border: '2px solid #ffc107',
+                    color: '#fff',
+                    padding: '3px 10px',
+                    borderRadius: '8px',
+                    fontWeight: 'bold',
+                    fontSize: '0.95vw',
+                    backdropFilter: 'blur(10px)',
+                    boxShadow: '0 0 12px rgba(255, 193, 7, 0.6)'
+                  }}
+                >
+                  #{p.deviceNumber || '?'} {p.name} {isTeamMode && p.teamName ? `[${p.teamName}]` : ''}
+                </span>
               ))}
             </div>
-          </div>
-        ) : missingCount > 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <span style={{ color: '#ffc107', fontWeight: 'bold', fontSize: '0.95vw', textTransform: 'uppercase', textShadow: '0 0 10px #ffc107' }}>
-              GAIDĀM ATBILDES ({missingCount}):
+          ) : (
+            <span style={{ color: '#28a745', fontSize: '1.2vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(40,167,69,0.8)' }}>
+              ✅ Visas atbildes saņemtas!
             </span>
-            {unvotedPlayers.map((p) => (
-              <span
-                key={p.id}
-                style={{
-                  background: 'rgba(255, 193, 7, 0.25)',
-                  border: '2px solid #ffc107',
-                  color: '#fff',
-                  padding: '3px 10px',
-                  borderRadius: '8px',
-                  fontWeight: 'bold',
-                  fontSize: '0.95vw',
-                  backdropFilter: 'blur(10px)',
-                  boxShadow: '0 0 12px rgba(255, 193, 7, 0.6)'
-                }}
-              >
-                #{p.deviceNumber || '?'} {p.name} {isTeamMode && p.teamName ? `[${p.teamName}]` : ''}
-              </span>
-            ))}
+          )}
+        </div>
+
+        {hasTimer && (
+          <div style={{ ...timerBadge, borderColor: isPaused ? '#ff9800' : 'orange' }}>
+            <Timer
+              endTime={scene?.endTime}
+              isPaused={isPaused}
+              pausedRemainingMs={scene?.pausedRemainingMs}
+            />
           </div>
-        ) : (
-          <span style={{ color: '#28a745', fontSize: '1.2vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(40,167,69,0.8)' }}>
-            ✅ Visas atbildes saņemtas!
-          </span>
         )}
+
+        <div style={statsBadge}>
+          👥 {votedCount} / {participantCount}
+        </div>
+
+        <div style={pointsBadge}>
+          ⭐ {isRevealed ? 'REZULTĀTS' : `${currentPoints} / ${maxPoints} PTS`}
+        </div>
       </div>
 
-      {hasTimer && (
-        <div style={{ ...timerBadge, borderColor: isPaused ? '#ff9800' : 'orange' }}>
-          <Timer
-            endTime={scene?.endTime}
-            isPaused={isPaused}
-            pausedRemainingMs={scene?.pausedRemainingMs}
-          />
+      {showLargeQr && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            background: 'rgba(0,0,0,0.88)',
+            backdropFilter: 'blur(18px)',
+            zIndex: 99999,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          onClick={() => setShowLargeQr(false)}
+        >
+          <div
+            style={{
+              background: 'rgba(20, 20, 20, 0.95)',
+              padding: '35px',
+              borderRadius: '24px',
+              border: '3px solid #00ff00',
+              textAlign: 'center',
+              boxShadow: '0 20px 70px rgba(0,0,0,0.95)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ color: '#00ff00', margin: '0 0 15px 0', fontSize: '2vw', fontWeight: 'bold' }}>📲 PIEVIENOJIES SPĒLEI!</h2>
+            <img src={qrCodeUrl} alt="Lielais QR" style={{ width: '280px', height: '280px', borderRadius: '16px', background: '#fff', padding: '10px' }} />
+            <div style={{ fontSize: '2.5vw', fontWeight: 'bold', color: '#fff', marginTop: '15px' }}>
+              PIN: <span style={{ color: '#00ff00' }}>{pin}</span>
+            </div>
+            <button
+              onClick={() => setShowLargeQr(false)}
+              style={{
+                marginTop: '15px',
+                padding: '10px 25px',
+                background: '#444',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '1.1vw',
+                fontWeight: 'bold',
+                cursor: 'pointer'
+              }}
+            >
+              Aizvērt [Q / ✕]
+            </button>
+          </div>
         </div>
       )}
-
-      <div style={statsBadge}>
-        👥 {votedCount} / {participantCount}
-      </div>
-
-      <div style={pointsBadge}>
-        ⭐ {isRevealed ? 'REZULTĀTS' : `${currentPoints} / ${maxPoints} PTS`}
-      </div>
-    </div>
+    </>
   );
 };
 
@@ -401,6 +580,8 @@ export default function Presentation() {
   const [scene, setScene] = useState<any>(null);
   const [subState, setSubState] = useState<string>('IDLE');
   const [summaryStats, setSummaryStats] = useState<any>(null);
+  const [showLargeQr, setShowLargeQr] = useState<boolean>(false);
+
   const [voteData, setVoteData] = useState<{ summary: Record<string, number>; votedCount: number; votedPlayerIds?: string[] }>({
     summary: {},
     votedCount: 0,
@@ -492,7 +673,7 @@ export default function Presentation() {
       (el.type === 'AUDIO' || el.type === 'VIDEO') &&
       el.content &&
       String(el.content).trim() !== '' &&
-      (el.visibility === 'ALWAYS' || el.visibility === 'DURING_QUESTION')
+      (el.visibility === 'ALWAYS' || el.visibility === 'DURING_QUESTION' || el.visibility === 'UNTIL_REVEAL')
   );
 
   useEffect(() => {
@@ -606,6 +787,7 @@ export default function Presentation() {
     };
 
     const handleToggleChart = () => setIsStatsVisible((prev) => !prev);
+    const handleToggleLargeQr = () => setShowLargeQr((prev) => !prev);
 
     const handleToggleTeamView = (data?: { view?: 'TEAMS' | 'INDIVIDUAL'; page?: number }) => {
       if (data?.view) {
@@ -656,6 +838,7 @@ export default function Presentation() {
     socket.on('results-revealed', handleResultsRevealed);
     socket.on('toggle-audience-chart', handleToggleChart);
     socket.on('toggle-team-leaderboard', handleToggleTeamView);
+    socket.on('toggle-large-qr', handleToggleLargeQr);
     socket.on('player-buzzer-test', handleBuzzerTest);
     socket.on('leaderboard-update', handleLeaderboardUpdate);
     socket.on('team-leaderboard-update', handleTeamLeaderboardUpdate);
@@ -670,6 +853,9 @@ export default function Presentation() {
         e.preventDefault();
         setShowTeamLeaderboard((prev) => !prev);
         setLeaderboardPage(0);
+      } else if (e.key === 'q' || e.key === 'Q') {
+        e.preventDefault();
+        setShowLargeQr((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -688,6 +874,7 @@ export default function Presentation() {
       socket.off('results-revealed', handleResultsRevealed);
       socket.off('toggle-audience-chart', handleToggleChart);
       socket.off('toggle-team-leaderboard', handleToggleTeamView);
+      socket.off('toggle-large-qr', handleToggleLargeQr);
       socket.off('player-buzzer-test', handleBuzzerTest);
       socket.off('leaderboard-update', handleLeaderboardUpdate);
       socket.off('team-leaderboard-update', handleTeamLeaderboardUpdate);
@@ -709,7 +896,6 @@ export default function Presentation() {
   const isFinalLb = scene?.type === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
   const isFullContent = scene?.type === 'BILLBOARD' || scene?.type === 'LEADERBOARD';
 
-  // KONTROLĒTA AUDIO ATSKAŅOŠANA
   useEffect(() => {
     if (!isMediaReady || !audioBank.current) return;
 
@@ -773,7 +959,7 @@ export default function Presentation() {
   if (isSessionClosed) {
     return (
       <div style={fullScreenCenter}>
-        <div style={{ textAlign: 'center', background: 'rgba(20, 20, 20, 0.95)', backdropFilter: 'blur(16px)', padding: '40px', borderRadius: '24px', border: '2px solid rgba(255,255,255,0.2)', boxShadow: '0 20px 60px rgba(0,0,0,0.9)' }}>
+        <div style={{ textAlign: 'center', background: 'rgba(20, 20, 20, 0.95)', backdropFilter: 'blur(16px)', padding: '40px', borderRadius: '24px', border: 'none', boxShadow: '0 20px 60px rgba(0,0,0,0.9)' }}>
           <h1 style={{ color: '#ffc107', fontSize: '3vw', margin: '0 0 15px 0', textShadow: '0 2px 10px #000' }}>👋 SPĒLES SESIJA IR BEIGUSIES</h1>
           <p style={{ color: '#ccc', fontSize: '1.4vw', margin: '0 0 25px 0' }}>Vadītājs ir noslēdzis šo sesiju. Šo logu var droši aizvērt.</p>
           <button onClick={() => window.close()} style={bigBtn}>
@@ -798,7 +984,7 @@ export default function Presentation() {
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
 
-  // 1. SĀKUMA REĢISTRĀCIJAS EKRĀNS (LOBBY)
+  // 1. SĀKUMA LOBBY EKRĀNS
   if (!scene) {
     const lobbyMode = branding?.lobbyMode || 'CIRCLE';
 
@@ -984,11 +1170,14 @@ export default function Presentation() {
     backgroundImage: scene?.config?.backgroundUrl ? `url(${MEDIA_BASE_URL}/${scene.config.backgroundUrl})` : 'none',
     backgroundSize: 'cover',
     backgroundPosition: 'center',
-    transition: 'background 1s ease-in-out'
+    transition: 'background 1s ease-in-out',
+    position: 'relative'
   };
 
-  const optionsList: string[] = (scene?.config?.options || []).filter((opt: string) => opt && opt.trim() !== '');
-  const optLayout = scene?.config?.optionsLayout || 'GRID';
+  const rawOptions: string[] = scene?.config?.options || (scene?.config?.optionsCount ? ['A', 'B', 'C', 'D', 'E', 'F'].slice(0, scene.config.optionsCount) : []);
+  const optionsList: string[] = rawOptions.length > 0 ? rawOptions : ['A', 'B', 'C', 'D'];
+
+  const optLayout = scene?.config?.optionsLayout || 'INDIVIDUAL';
   const optPositions = scene?.config?.optionsPositions || {};
 
   const sortedLeaderboard = [...leaderboard]
@@ -1023,11 +1212,35 @@ export default function Presentation() {
   const effectiveCorrectAnswers = isRevealed ? (revealedCorrectAnswers.length > 0 ? revealedCorrectAnswers : (scene?.config?.correctAnswers || [])) : [];
   const effectiveCorrectnessMap = isRevealed ? (Object.keys(revealedCorrectnessMap).length > 0 ? revealedCorrectnessMap : (scene?.config?.answerCorrectness || {})) : {};
 
+  const optCustomBg = scene?.config?.optionsBgColor || '#000000';
+  const optCustomOpacity = scene?.config?.optionsBgOpacity ?? 85;
+  const optCustomColor = scene?.config?.optionsColor || '#ffffff';
+  const optCorrectColor = scene?.config?.optionsCorrectColor || '#00ff00';
+
   return (
     <div style={containerStyle}>
+      {/* 🔮 PULSĀCIJAS ANIMĀCIJA PAREIZAJAI ATBILDEI */}
+      <style>{`
+        @keyframes correctGlowPulse {
+          0% {
+            transform: scale(1);
+            box-shadow: 0 0 20px ${optCorrectColor}, inset 0 0 10px #ffffff;
+          }
+          50% {
+            transform: scale(1.08);
+            box-shadow: 0 0 45px ${optCorrectColor}, 0 0 80px ${optCorrectColor}, inset 0 0 18px #ffffff;
+          }
+          100% {
+            transform: scale(1);
+            box-shadow: 0 0 20px ${optCorrectColor}, inset 0 0 10px #ffffff;
+          }
+        }
+      `}</style>
+
       {!isFullContent && (
         <TopBar
           pin={pin}
+          qrCodeUrl={qrCodeUrl}
           scene={scene}
           subState={subState}
           summaryStats={summaryStats}
@@ -1036,22 +1249,26 @@ export default function Presentation() {
           players={players}
           isRevealed={isRevealed}
           isTeamMode={isTeamMode}
+          showLargeQr={showLargeQr}
+          setShowLargeQr={setShowLargeQr}
         />
       )}
 
+      {/* 🎯 1:1 REZOLŪCIJAS & KOORDINĀTU KANVA (BEZ PADDING NOBĪDES) */}
       <div
         style={{
-          flex: 1,
-          position: 'relative',
+          position: 'absolute',
+          top: 0,
+          left: 0,
           width: '100%',
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: isFullContent ? 'center' : 'flex-start',
-          paddingTop: !isFullContent ? '90px' : '0px',
           boxSizing: 'border-box',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          zIndex: 10
         }}
       >
         {scene?.config?.layout?.map((el: any, idx: number) => (
@@ -1060,24 +1277,35 @@ export default function Presentation() {
             el={el}
             subState={currentSub}
             isRevealed={isRevealed}
+            sceneDuration={scene?.config?.duration || scene?.config?.timeLimit || 30}
+            endTime={scene?.endTime}
             onCustomMediaEnded={handleCustomMediaEnded}
           />
         ))}
 
+        {/* ATBILŽU VARIANTU IZKĀRTOJUMS AR 1:1 SAKRITĪBU UN TĪRU BURTA SPĪDĒŠANU */}
         {shouldShowOptions && (
           optLayout === 'INDIVIDUAL' ? (
             optionsList.map((opt: string, i: number) => {
               const pos = optPositions[i] || optPositions[opt] || {
-                x: 10 + (i % 2) * 45,
-                y: 55 + Math.floor(i / 2) * 14,
-                w: 40,
+                x: 10 + (i % 2) * 42,
+                y: 58 + Math.floor(i / 2) * 13,
+                w: 38,
                 h: 10
               };
-              const isCorrect = isRevealed && effectiveCorrectAnswers.includes(opt);
               const letter = String.fromCharCode(65 + i);
+              const optKey = (opt && opt.trim() !== '') ? opt : letter;
+
+              const isCorrect = isRevealed && (
+                effectiveCorrectAnswers.includes(optKey) ||
+                effectiveCorrectAnswers.includes(letter) ||
+                (opt && opt.trim() !== '' && effectiveCorrectAnswers.includes(opt))
+              );
+
               const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
-              const pct = effectiveCorrectnessMap[opt];
+              const pct = effectiveCorrectnessMap[optKey] ?? effectiveCorrectnessMap[letter];
               const isOnlyLetter = !opt || opt.trim() === '';
+              const isZeroOpacity = optCustomOpacity === 0;
 
               return (
                 <div
@@ -1086,14 +1314,18 @@ export default function Presentation() {
                     position: 'absolute',
                     left: `${pos.x}%`,
                     top: `${pos.y}%`,
-                    width: isOnlyLetter ? 'auto' : `${pos.w}%`,
-                    minHeight: `${pos.h}%`,
+                    width: isOnlyLetter ? `${pos.w || 8}%` : `${pos.w}%`,
+                    minHeight: isOnlyLetter ? `${pos.h || 8}%` : `${pos.h}%`,
                     height: 'auto',
                     ...optionCard,
-                    background: isOnlyLetter ? 'transparent' : isCorrect ? '#28a745' : 'rgba(0, 0, 0, 0.85)',
-                    borderColor: isOnlyLetter ? 'transparent' : isCorrect ? '#00ff00' : 'rgba(255,255,255,0.2)',
-                    boxShadow: isOnlyLetter ? 'none' : isCorrect ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 8px 25px rgba(0,0,0,0.8)',
-                    padding: isOnlyLetter ? '0' : '12px 20px',
+                    background: isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optCustomBg, optCustomOpacity),
+                    backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(14px)',
+                    boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 8px 25px rgba(0,0,0,0.8)',
+                    border: 'none',
+                    padding: isOnlyLetter ? '0' : isZeroOpacity ? '4px 8px' : '12px 20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: isOnlyLetter ? 'center' : 'space-between',
                     zIndex: 10
                   }}
                 >
@@ -1102,22 +1334,36 @@ export default function Presentation() {
                       width: '55px',
                       height: '55px',
                       borderRadius: '50%',
-                      background: isCorrect ? '#28a745' : '#111',
-                      border: '3px solid #ffc107',
-                      boxShadow: '0 0 20px rgba(0,0,0,0.9), 0 0 10px rgba(255,193,7,0.4)',
+                      background: isCorrect ? optCorrectColor : '#111',
+                      border: isCorrect ? `3px solid #ffffff` : '3px solid #ffc107',
+                      color: isCorrect ? '#000000' : '#ffc107',
+                      animation: isCorrect ? 'correctGlowPulse 1.4s infinite ease-in-out' : 'none',
+                      boxShadow: isCorrect ? `0 0 30px ${optCorrectColor}` : '0 0 20px rgba(0,0,0,0.9), 0 0 10px rgba(255,193,7,0.4)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       fontWeight: '900',
                       fontSize: '2vw',
-                      color: '#ffc107'
+                      flexShrink: 0,
+                      transition: 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                     }}
                   >
                     {letter}
                   </div>
 
                   {!isOnlyLetter && (
-                    <span style={{ fontSize: '1.8vw', fontWeight: 'bold', flex: 1, marginLeft: '15px', textShadow: '0 2px 8px #000' }}>
+                    <span
+                      style={{
+                        fontSize: getOptionFontSize(opt),
+                        color: isCorrect ? '#ffffff' : optCustomColor,
+                        fontWeight: 'bold',
+                        flex: 1,
+                        marginLeft: '15px',
+                        textShadow: '0 2px 10px #000, 0 0 15px #000',
+                        wordBreak: 'break-word',
+                        lineHeight: 1.2
+                      }}
+                    >
                       {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
                     </span>
                   )}
@@ -1128,33 +1374,47 @@ export default function Presentation() {
                 </div>
               );
             })
-          ) : (
+          ) : optLayout === 'RIGHT_COLUMN' ? (
             <div
               style={{
                 position: 'absolute',
-                bottom: '30px',
-                width: '85%',
-                display: 'grid',
-                gridTemplateColumns: optLayout === 'COLUMN' ? '1fr' : '1fr 1fr',
-                gap: '15px',
+                right: '4%',
+                top: '14%',
+                bottom: '5%',
+                width: '40%',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                gap: '12px',
                 zIndex: 10
               }}
             >
               {optionsList.map((opt: string, i: number) => {
-                const isCorrect = isRevealed && effectiveCorrectAnswers.includes(opt);
                 const letter = String.fromCharCode(65 + i);
+                const optKey = (opt && opt.trim() !== '') ? opt : letter;
+
+                const isCorrect = isRevealed && (
+                  effectiveCorrectAnswers.includes(optKey) ||
+                  effectiveCorrectAnswers.includes(letter) ||
+                  (opt && opt.trim() !== '' && effectiveCorrectAnswers.includes(opt))
+                );
+
                 const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
-                const pct = effectiveCorrectnessMap[opt];
+                const pct = effectiveCorrectnessMap[optKey] ?? effectiveCorrectnessMap[letter];
                 const isOnlyLetter = !opt || opt.trim() === '';
+                const isZeroOpacity = optCustomOpacity === 0;
 
                 return (
                   <div
-                    key={`grp-opt-${i}`}
+                    key={`col-opt-${i}`}
                     style={{
                       ...optionCard,
-                      background: isOnlyLetter ? 'transparent' : isCorrect ? '#28a745' : 'rgba(0, 0, 0, 0.85)',
-                      borderColor: isOnlyLetter ? 'transparent' : isCorrect ? '#00ff00' : 'rgba(255,255,255,0.2)',
-                      boxShadow: isOnlyLetter ? 'none' : isCorrect ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 8px 25px rgba(0,0,0,0.8)'
+                      background: isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optCustomBg, optCustomOpacity),
+                      backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(14px)',
+                      boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 8px 25px rgba(0,0,0,0.8)',
+                      border: 'none',
+                      justifyContent: isOnlyLetter ? 'center' : 'space-between',
+                      padding: isOnlyLetter ? '0' : isZeroOpacity ? '4px 8px' : '10px 18px'
                     }}
                   >
                     <div
@@ -1162,23 +1422,122 @@ export default function Presentation() {
                         width: '50px',
                         height: '50px',
                         borderRadius: '50%',
-                        background: isCorrect ? '#28a745' : '#111',
-                        border: '2px solid #ffc107',
-                        boxShadow: '0 0 15px rgba(0,0,0,0.8)',
+                        background: isCorrect ? optCorrectColor : '#111',
+                        border: isCorrect ? `3px solid #ffffff` : '2px solid #ffc107',
+                        color: isCorrect ? '#000000' : '#ffc107',
+                        animation: isCorrect ? 'correctGlowPulse 1.4s infinite ease-in-out' : 'none',
+                        boxShadow: isCorrect ? `0 0 30px ${optCorrectColor}` : '0 0 15px rgba(0,0,0,0.8)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         fontWeight: 'bold',
                         fontSize: '1.6vw',
-                        color: '#ffc107',
-                        marginRight: '12px'
+                        marginRight: isOnlyLetter ? '0' : '12px',
+                        flexShrink: 0,
+                        transition: 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
                       {letter}
                     </div>
 
                     {!isOnlyLetter && (
-                      <span style={{ fontSize: '1.8vw', fontWeight: 'bold', flex: 1, textShadow: '0 2px 8px #000' }}>
+                      <span
+                        style={{
+                          fontSize: getOptionFontSize(opt),
+                          color: isCorrect ? '#ffffff' : optCustomColor,
+                          fontWeight: 'bold',
+                          flex: 1,
+                          textShadow: '0 2px 10px #000, 0 0 15px #000',
+                          wordBreak: 'break-word',
+                          lineHeight: 1.2
+                        }}
+                      >
+                        {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
+                      </span>
+                    )}
+
+                    {isStatsVisible && (currentSub === 'STATS' || currentSub === 'SUMMARY' || isRevealed) && (
+                      <span style={voteBadge}>{count}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '30px',
+                width: '85%',
+                display: 'grid',
+                gridTemplateColumns: optionsList.length > 4 ? '1fr 1fr' : '1fr 1fr',
+                gap: '15px',
+                zIndex: 10
+              }}
+            >
+              {optionsList.map((opt: string, i: number) => {
+                const letter = String.fromCharCode(65 + i);
+                const optKey = (opt && opt.trim() !== '') ? opt : letter;
+
+                const isCorrect = isRevealed && (
+                  effectiveCorrectAnswers.includes(optKey) ||
+                  effectiveCorrectAnswers.includes(letter) ||
+                  (opt && opt.trim() !== '' && effectiveCorrectAnswers.includes(opt))
+                );
+
+                const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
+                const pct = effectiveCorrectnessMap[optKey] ?? effectiveCorrectnessMap[letter];
+                const isOnlyLetter = !opt || opt.trim() === '';
+                const isZeroOpacity = optCustomOpacity === 0;
+
+                return (
+                  <div
+                    key={`grp-opt-${i}`}
+                    style={{
+                      ...optionCard,
+                      background: isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optCustomBg, optCustomOpacity),
+                      backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(14px)',
+                      boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 8px 25px rgba(0,0,0,0.8)',
+                      border: 'none',
+                      justifyContent: isOnlyLetter ? 'center' : 'space-between',
+                      padding: isOnlyLetter ? '0' : isZeroOpacity ? '4px 8px' : '12px 20px'
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: '50px',
+                        height: '50px',
+                        borderRadius: '50%',
+                        background: isCorrect ? optCorrectColor : '#111',
+                        border: isCorrect ? `3px solid #ffffff` : '2px solid #ffc107',
+                        color: isCorrect ? '#000000' : '#ffc107',
+                        animation: isCorrect ? 'correctGlowPulse 1.4s infinite ease-in-out' : 'none',
+                        boxShadow: isCorrect ? `0 0 30px ${optCorrectColor}` : '0 0 15px rgba(0,0,0,0.8)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 'bold',
+                        fontSize: '1.6vw',
+                        marginRight: isOnlyLetter ? '0' : '12px',
+                        flexShrink: 0,
+                        transition: 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                      }}
+                    >
+                      {letter}
+                    </div>
+
+                    {!isOnlyLetter && (
+                      <span
+                        style={{
+                          fontSize: getOptionFontSize(opt),
+                          color: isCorrect ? '#ffffff' : optCustomColor,
+                          fontWeight: 'bold',
+                          flex: 1,
+                          textShadow: '0 2px 10px #000, 0 0 15px #000',
+                          wordBreak: 'break-word',
+                          lineHeight: 1.2
+                        }}
+                      >
                         {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
                       </span>
                     )}
@@ -1407,38 +1766,38 @@ const topBarStyle: React.CSSProperties = {
   top: 0,
   left: 0,
   width: '100%',
-  height: '75px',
-  background: 'rgba(20, 20, 20, 0.92)',
+  height: '70px',
+  background: 'rgba(20, 20, 20, 0.88)',
   backdropFilter: 'blur(12px)',
   display: 'flex',
   alignItems: 'center',
   padding: '0 30px',
   gap: '20px',
-  borderBottom: '2px solid rgba(255,255,255,0.15)',
+  borderBottom: '2px solid rgba(255,255,255,0.12)',
   zIndex: 30,
   boxSizing: 'border-box'
 };
 
 const pinBadge: React.CSSProperties = {
   background: 'rgba(0,0,0,0.85)',
-  padding: '8px 18px',
+  padding: '6px 16px',
   borderRadius: '10px',
-  fontSize: '1.4rem',
+  fontSize: '1.3rem',
   fontWeight: 'bold',
   border: '2px solid #0f0'
 };
 
 const timerBadge: React.CSSProperties = {
-  minWidth: '55px',
-  height: '55px',
-  padding: '0 12px',
-  borderRadius: '28px',
+  minWidth: '50px',
+  height: '50px',
+  padding: '0 10px',
+  borderRadius: '25px',
   border: '3px solid orange',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   fontWeight: 'bold',
-  fontSize: '1.2rem',
+  fontSize: '1.1rem',
   background: 'rgba(0,0,0,0.7)',
   backdropFilter: 'blur(8px)'
 };
@@ -1451,11 +1810,11 @@ const votersBox: React.CSSProperties = {
 };
 
 const statsBadge: React.CSSProperties = { 
-  fontSize: '1.3rem', 
+  fontSize: '1.2rem', 
   fontWeight: 'bold',
   background: 'rgba(0,0,0,0.7)',
   backdropFilter: 'blur(8px)',
-  padding: '6px 14px',
+  padding: '5px 12px',
   borderRadius: '10px',
   border: '1px solid rgba(255,255,255,0.15)'
 };
@@ -1463,10 +1822,10 @@ const statsBadge: React.CSSProperties = {
 const pointsBadge: React.CSSProperties = {
   background: '#fff',
   color: '#000',
-  padding: '8px 18px',
+  padding: '6px 16px',
   borderRadius: '25px',
   fontWeight: 'bold',
-  fontSize: '1.1rem',
+  fontSize: '1rem',
   boxShadow: '0 4px 15px rgba(0,0,0,0.5)'
 };
 
@@ -1485,7 +1844,7 @@ const bigBtn: React.CSSProperties = {
 const optionCard: React.CSSProperties = {
   padding: '12px 20px',
   borderRadius: '14px',
-  border: '2px solid rgba(255,255,255,0.15)',
+  border: 'none',
   backdropFilter: 'blur(14px)',
   display: 'flex',
   justifyContent: 'space-between',
@@ -1559,7 +1918,7 @@ const leaderboardOverlay: React.CSSProperties = {
   width: '68vw',
   maxHeight: '75vh',
   zIndex: 40,
-  border: '2px solid rgba(255, 255, 255, 0.18)',
+  border: 'none',
   boxShadow: '0 20px 60px rgba(0,0,0,0.95)',
   display: 'flex',
   flexDirection: 'column'
@@ -1608,7 +1967,7 @@ const podiumTitleBox: React.CSSProperties = {
   backdropFilter: 'blur(14px)',
   padding: '8px 32px',
   borderRadius: '16px',
-  border: '1px solid rgba(255, 215, 0, 0.4)',
+  border: 'none',
   marginBottom: 'clamp(10px, 2.5vh, 25px)',
   boxShadow: '0 10px 30px rgba(0,0,0,0.85)'
 };
@@ -1637,7 +1996,7 @@ const podiumTextBadge: React.CSSProperties = {
   backdropFilter: 'blur(14px)',
   padding: '6px 14px',
   borderRadius: '12px',
-  border: '1px solid rgba(255, 255, 255, 0.2)',
+  border: 'none',
   marginBottom: '6px',
   boxShadow: '0 8px 25px rgba(0,0,0,0.9)',
   width: 'clamp(160px, 20vw, 280px)',

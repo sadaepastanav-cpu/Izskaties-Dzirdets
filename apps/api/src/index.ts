@@ -8,7 +8,7 @@ import crypto from 'crypto';
 import { createServer } from 'http';
 import { Server, Socket } from 'socket.io';
 import multer from 'multer';
-import { spawn, exec, ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import rateLimit from 'express-rate-limit';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
@@ -827,6 +827,12 @@ io.on('connection', (socket: Socket) => {
     saveSnapshot(data.pin, true);
   });
 
+  // QR KODA PALIELINĀŠANAS KOMANDA [Q]
+  socket.on('host:toggle-qr-zoom', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    io.to(data.pin).emit('toggle-large-qr');
+  });
+
   socket.on('host:update-player', (data: any) => {
     if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const players = sessionScores.get(data.pin);
@@ -920,9 +926,7 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // =========================================================================
-  // SPACE VADĪBAS DZINĒJS AR DAUDZATBILŽU (2/2, 1/2, 0/2) PRECIZITĀTI
-  // =========================================================================
+  // SPACE VADĪBAS DZINĒJS
   socket.on('host:advance', (data: { pin: string; hostToken: string; force?: boolean } | string) => {
     const pin = typeof data === 'string' ? data : data?.pin;
     const token = typeof data === 'string' ? undefined : data?.hostToken;
@@ -1007,7 +1011,7 @@ io.on('connection', (socket: Socket) => {
       return;
     }
 
-    // 1. PĀREJA UZ NĀKAMO SLAIDU
+    // 1. PĀREJA UZ NĀKAMO SLAIDU (AR ⚡ AUTO-START ATBALSTU)
     if (
       s.subState === 'IDLE' ||
       s.subState === 'REVEAL' ||
@@ -1027,13 +1031,53 @@ io.on('connection', (socket: Socket) => {
       s.isPaused = false;
       s.isRevealed = false;
       s.revealReadyToAdvance = false;
-      s.subState = 'READY';
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
       s.finalLeaderboardView = s.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL';
       delete s.summaryStats;
 
-      emitStateUpdate(pin, s.currentScene, 'READY');
+      const isAutoStart = !!s.currentScene?.config?.autoStart && (s.currentScene.type === 'QUESTION' || s.currentScene.type === 'MAJORITY');
+
+      if (isAutoStart) {
+        s.subState = 'ACTIVE';
+        s.questionStartTime = Date.now();
+        const dur = s.currentScene?.config?.duration || s.currentScene?.config?.timeLimit || 30;
+        s.currentScene.endTime = Date.now() + dur * 1000;
+        emitStateUpdate(pin, s.currentScene, 'ACTIVE');
+
+        clearSessionTimer(pin);
+        const timer = setTimeout(() => {
+          const currentSession = sessions.get(pin);
+          if (currentSession?.subState === 'ACTIVE') {
+            currentSession.subState = 'STATS';
+            if (currentSession.currentScene) currentSession.currentScene.endTime = Date.now();
+            emitStateUpdate(pin, currentSession.currentScene, 'STATS');
+            io.to(pin).emit('video-command', 'pause');
+            saveSnapshot(pin, true);
+          }
+        }, dur * 1000);
+        sessionTimers.set(pin, timer);
+
+        const options = s.currentScene?.config?.options || [];
+        if (playersMap) {
+          playersMap.forEach((p, id) => {
+            if (p.isBot && !p.isDisabled) {
+              const delay = Math.random() * Math.max(0.5, dur - 1) * 1000;
+              setTimeout(() => {
+                const currentSession = sessions.get(pin);
+                if (currentSession?.subState === 'ACTIVE') {
+                  const selectedOption =
+                    options.length > 0 ? [options[Math.floor(Math.random() * options.length)]] : ['A'];
+                  handleVote(pin, selectedOption, id);
+                }
+              }, delay);
+            }
+          });
+        }
+      } else {
+        s.subState = 'READY';
+        emitStateUpdate(pin, s.currentScene, 'READY');
+      }
 
       if (s.currentScene.type === 'LEADERBOARD' && playersMap) {
         const isRound = s.currentScene?.config?.lbType === 'ROUND';
@@ -1094,7 +1138,7 @@ io.on('connection', (socket: Socket) => {
       io.to(pin).emit('video-command', 'pause');
       saveSnapshot(pin, true);
     } 
-    // 4. STATS -> SUMMARY (KOPSAVILKUMS AR DAUDZATBILŽU ANALĪZI: 2/2, 1/2, 0/2)
+    // 4. STATS -> SUMMARY
     else if (s.subState === 'STATS') {
       s.subState = 'SUMMARY';
       s.isPaused = false;
@@ -1165,7 +1209,6 @@ io.on('connection', (socket: Socket) => {
         fullCorrectPct,
         partialCorrectPct,
         incorrectPct,
-        // Standarta 1 atbildes jautājumiem:
         correctCount: fullCorrectCount,
         correctPct: fullCorrectPct
       };
@@ -1173,7 +1216,7 @@ io.on('connection', (socket: Socket) => {
       emitStateUpdate(pin, s.currentScene, 'SUMMARY', { summaryStats: s.summaryStats });
       saveSnapshot(pin, true);
     } 
-    // 5. SUMMARY -> REVEAL (PUNKTU IESKAITĪŠANA: 100%, 50%, 0%)
+    // 5. SUMMARY -> REVEAL
     else if (s.subState === 'SUMMARY') {
       s.subState = 'REVEAL';
       s.isRevealed = true;
@@ -1221,7 +1264,7 @@ io.on('connection', (socket: Socket) => {
         }
       });
 
-      // DAUDZATBILŽU PROPORCIONĀLA PUNKTU PIEŠĶIRŠANA (100%, 50%, 0%)
+      // DAUDZATBILŽU PUNKTU PIEŠĶIRŠANA (100%, 50%, 0%)
       sortedVotes.forEach((v: any) => {
         let earnedPercentage = 0;
         if (Array.isArray(v.optionIds)) {
