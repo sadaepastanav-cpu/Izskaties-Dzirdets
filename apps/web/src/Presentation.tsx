@@ -602,6 +602,9 @@ export default function Presentation() {
   const [isMediaReady, setIsMediaReady] = useState(false);
   const [isSessionClosed, setIsSessionClosed] = useState(false);
 
+  // ⚡ 2. FĀZE: ĀTRĀS PULTS STATUSS PREZENTĀCIJĀ
+  const [buzzerWinnerData, setBuzzerWinnerData] = useState<any>(null);
+
   const [branding, setBranding] = useState<any>({
     lobbyMode: 'CIRCLE',
     optionsRevealTiming: 'ON_ACTIVE',
@@ -622,6 +625,39 @@ export default function Presentation() {
     reveal: HTMLAudioElement;
     finals: HTMLAudioElement;
   } | null>(null);
+
+  // 🔊 2. FĀZE: WEBAUDIO SINTEZATORS & SKAŅU EFEKTI
+  const playSynthesizedSfx = (type: string) => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (type === 'buzzer_hit' || type === 'wrong') {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(150, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(70, ctx.currentTime + 0.35);
+        gain.gain.setValueAtTime(0.4, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.35);
+      } else if (type === 'correct') {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+        osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1);
+        osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.2);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.4);
+      }
+    } catch {}
+  };
 
   useEffect(() => {
     if (!audioBank.current) {
@@ -746,6 +782,7 @@ export default function Presentation() {
           setRevealedCorrectnessMap({});
           setIsStatsVisible(false);
           setSummaryStats(null);
+          setBuzzerWinnerData(null);
         }
         return newScene;
       });
@@ -784,6 +821,19 @@ export default function Presentation() {
       setIsRevealed(true);
       if (data?.correctAnswers) setRevealedCorrectAnswers(data.correctAnswers);
       if (data?.correctnessMap) setRevealedCorrectnessMap(data.correctnessMap);
+    };
+
+    // 🔊 2. FĀZE: SKAŅU DĒĻA KLAUSĪŠANĀS
+    const handlePlaySfx = (data: { sfx: string }) => {
+      playSynthesizedSfx(data.sfx);
+    };
+
+    // ⚡ 2. FĀZE: ĀTRĀS PULTS PIRMĀ REAKCIJA
+    const handleBuzzerRacePress = (data: { winner: any }) => {
+      if (data?.winner?.position === 1) {
+        setBuzzerWinnerData(data.winner);
+        playSynthesizedSfx('buzzer_hit');
+      }
     };
 
     const handleToggleChart = () => setIsStatsVisible((prev) => !prev);
@@ -836,6 +886,8 @@ export default function Presentation() {
     socket.on('votes-updated', handleVotesUpdated);
     socket.on('presence-update', handlePresenceUpdate);
     socket.on('results-revealed', handleResultsRevealed);
+    socket.on('play-sfx', handlePlaySfx);
+    socket.on('buzzer-race-press', handleBuzzerRacePress);
     socket.on('toggle-audience-chart', handleToggleChart);
     socket.on('toggle-team-leaderboard', handleToggleTeamView);
     socket.on('toggle-large-qr', handleToggleLargeQr);
@@ -872,6 +924,8 @@ export default function Presentation() {
       socket.off('votes-updated', handleVotesUpdated);
       socket.off('presence-update', handlePresenceUpdate);
       socket.off('results-revealed', handleResultsRevealed);
+      socket.off('play-sfx', handlePlaySfx);
+      socket.off('buzzer-race-press', handleBuzzerRacePress);
       socket.off('toggle-audience-chart', handleToggleChart);
       socket.off('toggle-team-leaderboard', handleToggleTeamView);
       socket.off('toggle-large-qr', handleToggleLargeQr);
@@ -890,7 +944,8 @@ export default function Presentation() {
     scene?.type === 'QUESTION' ||
     scene?.type === 'QUIZ' ||
     scene?.type === 'MAJORITY' ||
-    scene?.type === 'VOTE';
+    scene?.type === 'VOTE' ||
+    scene?.type === 'ORDERING';
 
   const isRoundLb = (scene?.config?.lbType || leaderboardType) === 'ROUND';
   const isFinalLb = scene?.type === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
@@ -984,7 +1039,7 @@ export default function Presentation() {
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
 
-  // 1. SĀKUMA LOBBY EKRĀNS
+  // 1. SĀKUMA REĢISTRĀCIJAS EKRĀNS (LOBBY)
   if (!scene) {
     const lobbyMode = branding?.lobbyMode || 'CIRCLE';
 
@@ -1219,7 +1274,6 @@ export default function Presentation() {
 
   return (
     <div style={containerStyle}>
-      {/* 🔮 PULSĀCIJAS ANIMĀCIJA PAREIZAJAI ATBILDEI */}
       <style>{`
         @keyframes correctGlowPulse {
           0% {
@@ -1254,7 +1308,7 @@ export default function Presentation() {
         />
       )}
 
-      {/* 🎯 1:1 REZOLŪCIJAS & KOORDINĀTU KANVA (BEZ PADDING NOBĪDES) */}
+      {/* 🎯 1:1 REZOLŪCIJAS & KOORDINĀTU KANVA */}
       <div
         style={{
           position: 'absolute',
@@ -1283,8 +1337,73 @@ export default function Presentation() {
           />
         ))}
 
-        {/* ATBILŽU VARIANTU IZKĀRTOJUMS AR 1:1 SAKRITĪBU UN TĪRU BURTA SPĪDĒŠANU */}
-        {shouldShowOptions && (
+        {/* ⚡ 2. FĀZE: ĀTRĀS PULTS (BUZZER RACE) TV SKATS */}
+        {scene?.type === 'BUZZER_RACE' && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+            {buzzerWinnerData ? (
+              <div
+                style={{
+                  background: 'rgba(20, 15, 0, 0.94)',
+                  border: '4px solid #ffc107',
+                  borderRadius: '24px',
+                  padding: '30px 50px',
+                  textAlign: 'center',
+                  boxShadow: '0 0 60px rgba(255, 193, 7, 0.8), 0 0 120px rgba(255, 193, 7, 0.4)',
+                  animation: 'correctGlowPulse 1.2s infinite ease-in-out'
+                }}
+              >
+                <div style={{ fontSize: '3vw', color: '#ffc107', fontWeight: '900', letterSpacing: '2px', marginBottom: '8px' }}>
+                  🚨 ĀTRĀKĀ PULTS NOPIKSTĒJA! 🚨
+                </div>
+                <div style={{ fontSize: '4.5vw', color: '#ffffff', fontWeight: '900', margin: '10px 0', textShadow: '0 0 25px gold' }}>
+                  #{buzzerWinnerData.deviceNumber} {buzzerWinnerData.name}
+                </div>
+                {buzzerWinnerData.teamName && (
+                  <div style={{ fontSize: '2.5vw', color: '#00e5ff', fontWeight: 'bold', marginBottom: '10px' }}>
+                    👥 {buzzerWinnerData.teamName}
+                  </div>
+                )}
+                <div style={{ fontSize: '2vw', color: '#00ff00', fontWeight: 'bold' }}>
+                  ⏱️ Reakcijas laiks: {formatThinkingTime(buzzerWinnerData.timeSpentMs)}
+                </div>
+              </div>
+            ) : (
+              <div style={{ background: 'rgba(0,0,0,0.8)', border: '2px solid #00e5ff', padding: '25px 40px', borderRadius: '20px', textAlign: 'center' }}>
+                <h1 style={{ fontSize: '3.5vw', color: '#ffc107', margin: 0, letterSpacing: '2px' }}>⚡ ĀTRĀ PULTS ⚡</h1>
+                <p style={{ fontSize: '1.8vw', color: '#fff', marginTop: '10px' }}>Gatavojieties spiest pogu telefonā!</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 🔢 2. FĀZE: SECĪBAS KĀRTOŠANAS ATKLĀŠANA (ORDERING) */}
+        {scene?.type === 'ORDERING' && (
+          <div style={{ position: 'absolute', bottom: '35px', width: '85%', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 10 }}>
+            {optionsList.map((item: string, idx: number) => {
+              const isCorrectOrderRevealed = isRevealed;
+              return (
+                <div
+                  key={item}
+                  style={{
+                    ...optionCard,
+                    background: isCorrectOrderRevealed ? 'rgba(40, 167, 69, 0.85)' : hexToRgba(optCustomBg, optCustomOpacity),
+                    border: isCorrectOrderRevealed ? '2px solid #00ff00' : 'none',
+                    padding: '12px 24px',
+                    boxShadow: isCorrectOrderRevealed ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 8px 25px rgba(0,0,0,0.8)'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                    <span style={{ fontSize: '2vw', color: isCorrectOrderRevealed ? '#fff' : '#00e5ff', fontWeight: '900' }}>#{idx + 1}</span>
+                    <span style={{ fontSize: getOptionFontSize(item), color: '#ffffff', fontWeight: 'bold' }}>{item}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ATBILŽU VARIANTU IZKĀRTOJUMS */}
+        {shouldShowOptions && scene?.type !== 'ORDERING' && scene?.type !== 'BUZZER_RACE' && (
           optLayout === 'INDIVIDUAL' ? (
             optionsList.map((opt: string, i: number) => {
               const pos = optPositions[i] || optPositions[opt] || {
@@ -1553,7 +1672,7 @@ export default function Presentation() {
         )}
 
         {/* 2. REGULĀRĀ LĪDERU TABULA */}
-        {scene.type === 'LEADERBOARD' && !isFinalLb && (
+        {scene?.type === 'LEADERBOARD' && !isFinalLb && (
           <div style={leaderboardOverlay}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
               <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: 0, textShadow: '0 2px 10px #000' }}>
@@ -1603,7 +1722,7 @@ export default function Presentation() {
         )}
 
         {/* 3. FINĀLA APBALVOŠANA (PODIJS) */}
-        {scene.type === 'LEADERBOARD' && isFinalLb && (
+        {scene?.type === 'LEADERBOARD' && isFinalLb && (
           <div style={podiumWrapper}>
             {podiumStage < 4 && (
               <div style={podiumFlexContainer}>
@@ -1614,7 +1733,6 @@ export default function Presentation() {
                 </div>
 
                 <div style={podiumStagesContainer}>
-                  {/* 2. VIETA */}
                   {secondPlace && (
                     <div
                       style={{
@@ -1641,7 +1759,6 @@ export default function Presentation() {
                     </div>
                   )}
 
-                  {/* 1. VIETA */}
                   {firstPlace && (
                     <div
                       style={{
@@ -1671,7 +1788,6 @@ export default function Presentation() {
                     </div>
                   )}
 
-                  {/* 3. VIETA */}
                   {thirdPlace && (
                     <div
                       style={{
@@ -1701,7 +1817,6 @@ export default function Presentation() {
               </div>
             )}
 
-            {/* 4. SOLIS: PILNAIS SARAKSTS NO 4. VIETAS */}
             {podiumStage >= 4 && (
               <div style={leaderboardOverlay}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
@@ -1759,7 +1874,10 @@ const fullScreen: React.CSSProperties = {
   position: 'relative'
 };
 
-const fullScreenCenter: React.CSSProperties = { ...fullScreen, justifyContent: 'center' };
+const fullScreenCenter: React.CSSProperties = {
+  ...fullScreen,
+  justifyContent: 'center'
+};
 
 const topBarStyle: React.CSSProperties = {
   position: 'fixed',

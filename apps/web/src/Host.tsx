@@ -7,6 +7,15 @@ const formatThinkingTime = (ms?: number): string => {
   return (ms / 1000).toFixed(2) + 's';
 };
 
+const escapeHtml = (unsafe: string = ''): string => {
+  return String(unsafe)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+};
+
 export default function Host() {
   const [pin, setPin] = useState<string | null>(localStorage.getItem('active_pin'));
   const [hostToken, setHostToken] = useState<string | null>(localStorage.getItem('active_host_token'));
@@ -26,6 +35,7 @@ export default function Host() {
   const [teamLeaderboard, setTeamLeaderboard] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER' | 'TEAMS'>('SCENES');
   const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('ORDER');
+  const [buzzerRaceWinner, setBuzzerRaceWinner] = useState<any>(null);
 
   const [connectionMode, setConnectionMode] = useState<'LAN' | 'TUNNEL'>(
     (localStorage.getItem('event_conn_mode') as any) || 'TUNNEL'
@@ -202,6 +212,7 @@ export default function Host() {
     setPodiumStage(0);
     setPlayersList([]);
     setTeamLeaderboard([]);
+    setBuzzerRaceWinner(null);
     localStorage.removeItem('active_pin');
     localStorage.removeItem('active_host_token');
   };
@@ -219,6 +230,27 @@ export default function Host() {
     if (!pin || !hostToken) return;
     if (window.confirm('Vai tiešām vēlies sākt šo jautājumu no jauna? Balsis tiks notīrītas.')) {
       socket.emit('host:restart-scene', { pin, hostToken });
+    }
+  };
+
+  // ⬅️ SOLIS ATPAKAĻ
+  const handleBacktrack = () => {
+    if (!pin || !hostToken) return;
+    socket.emit('host:backtrack', { pin, hostToken });
+  };
+
+  // 🔊 SKAŅU DĒĻA ATSKAŅOŠANA
+  const playSfx = (sfx: string) => {
+    if (pin && hostToken) {
+      socket.emit('host:play-sfx', { pin, hostToken, sfx });
+    }
+  };
+
+  // ⚡ ĀTRĀS PULTS PUNKTI
+  const awardBuzzerPoints = (playerId: string, points: number) => {
+    if (pin && hostToken) {
+      socket.emit('host:award-buzzer-points', { pin, hostToken, playerId, points });
+      setBuzzerRaceWinner(null);
     }
   };
 
@@ -258,7 +290,7 @@ export default function Host() {
     printWin.document.write(`
       <html>
         <head>
-          <title>Top 3 Diplomi - PIN ${pin}</title>
+          <title>Top 3 Diplomi - PIN ${escapeHtml(pin || '')}</title>
           <style>
             body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #fff; text-align: center; }
             .diploma { page-break-after: always; height: 95vh; display: flex; flex-direction: column; justify-content: center; align-items: center; border: 15px solid #ffc107; margin: 20px; box-sizing: border-box; }
@@ -274,9 +306,9 @@ export default function Host() {
             <div class="diploma">
               <h1>🏆 DIPLOMS 🏆</h1>
               <h2>Par iegūto ${idx + 1}. vietu spēlē</h2>
-              <div class="winner">${p.name} ${branding?.teamModeEnabled && p.teamName ? `(${p.teamName})` : ''}</div>
-              <div class="score">Iegūtie punkti: <strong>${p.score || 0} pt</strong></div>
-              <div class="footer">Event Studio • Spēles PIN: ${pin} • ${new Date().toLocaleDateString('lv-LV')}</div>
+              <div class="winner">${escapeHtml(p.name)} ${branding?.teamModeEnabled && p.teamName ? `(${escapeHtml(p.teamName)})` : ''}</div>
+              <div class="score">Iegūtie punkti: <strong>${Number(p.score || 0)} pt</strong></div>
+              <div class="footer">Event Studio • Spēles PIN: ${escapeHtml(pin || '')} • ${new Date().toLocaleDateString('lv-LV')}</div>
             </div>
           `).join('')}
           <script>window.print();</script>
@@ -302,7 +334,6 @@ export default function Host() {
     }
   };
 
-  // PALIELINĀT / PASLĒPT QR KODU EKRĀNĀ [Q]
   const toggleLargeQr = () => {
     if (pin && hostToken) {
       socket.emit('host:toggle-qr-zoom', { pin, hostToken });
@@ -329,6 +360,7 @@ export default function Host() {
 
     const handleStateUpdate = (s: any) => {
       setCurrentScene(s);
+      setBuzzerRaceWinner(null);
       if (s?.type === 'LEADERBOARD') {
         setLeaderboardPage(0);
         setPodiumStage(0);
@@ -351,12 +383,17 @@ export default function Host() {
       setTeamLeaderboard(list);
     };
 
+    const handleBuzzerPress = (data: { winner: any }) => {
+      setBuzzerRaceWinner(data.winner);
+    };
+
     socket.on('session-info', handleSessionInfo);
     socket.on('state-update', handleStateUpdate);
     socket.on('presence-update', handlePresence);
     socket.on('leaderboard-update', handleLeaderboard);
     socket.on('team-leaderboard-update', handleTeamLeaderboard);
     socket.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
+    socket.on('buzzer-race-press', handleBuzzerPress);
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
@@ -369,6 +406,9 @@ export default function Host() {
 
         if (currentScene?.subState === 'ACTIVE') return;
         socket.emit('host:advance', { pin, hostToken });
+      } else if (e.key === 'Backspace' && pin && hostToken) {
+        e.preventDefault();
+        handleBacktrack();
       } else if ((e.key === 'p' || e.key === 'P') && pin && hostToken) {
         e.preventDefault();
         handlePauseResume();
@@ -393,6 +433,7 @@ export default function Host() {
       socket.off('leaderboard-update', handleLeaderboard);
       socket.off('team-leaderboard-update', handleTeamLeaderboard);
       socket.off('podium-stage-change');
+      socket.off('buzzer-race-press');
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [pin, hostToken, currentScene?.subState]);
@@ -556,6 +597,15 @@ export default function Host() {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* ⬅️ SOLIS ATPAKAĻ POGA */}
+          <button
+            onClick={handleBacktrack}
+            style={{ ...btnGray, background: '#ff9800', color: '#000', fontWeight: 'bold' }}
+            title="Solis atpakaļ [Backspace]"
+          >
+            ⬅️ Atpakaļ [Backspace]
+          </button>
+
           {(isCurrentActive || isCurrentPaused) && (
             <button
               onClick={handlePauseResume}
@@ -576,7 +626,6 @@ export default function Host() {
             📊 Statistika [C]
           </button>
 
-          {/* QR KODA PALIELINĀŠANAS POGA VADĪTĀJAM [Q] */}
           <button onClick={toggleLargeQr} style={{ ...btnPurple, background: '#007bff' }} title="Palielināt / Paslēpt QR kodu lielajā ekrānā [Q]">
             📱 QR [Q]
           </button>
@@ -630,6 +679,33 @@ export default function Host() {
           </button>
         </div>
       </div>
+
+      {/* 🔊 2. FĀZE: VADĪTĀJA SKAŅU DĒLIS (SOUNDBOARD) */}
+      <div style={soundboardContainer}>
+        <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#ffc107', marginRight: '8px' }}>🔊 SKAŅU DĒLIS:</span>
+        <button onClick={() => playSfx('applause')} style={btnSfx}>👏 Aplausi</button>
+        <button onClick={() => playSfx('correct')} style={{ ...btnSfx, borderColor: '#28a745' }}>✅ Pareizi</button>
+        <button onClick={() => playSfx('wrong')} style={{ ...btnSfx, borderColor: '#dc3545' }}>❌ Nepareizi</button>
+        <button onClick={() => playSfx('drumroll')} style={btnSfx}>🥁 Bungas</button>
+        <button onClick={() => playSfx('laugh')} style={btnSfx}>😂 Smiekli</button>
+        <button onClick={() => playSfx('suspense')} style={btnSfx}>⚡ Spriedze</button>
+      </div>
+
+      {/* ⚡ 2. FĀZE: ĀTRĀS PULTS (BUZZER RACE) REĀLLAIKA PUNKTI */}
+      {currentScene?.type === 'BUZZER_RACE' && buzzerRaceWinner && (
+        <div style={{ background: '#261c02', border: '3px solid #ffc107', padding: '15px', borderRadius: '10px', textAlign: 'center', marginBottom: '15px', animation: 'pulse 1s infinite' }}>
+          <h2 style={{ color: '#ffc107', margin: '0 0 6px 0' }}>🚨 ĀTRĀKĀ PULTS: #{buzzerRaceWinner.deviceNumber} {buzzerRaceWinner.name} {buzzerRaceWinner.teamName && `[${buzzerRaceWinner.teamName}]`}</h2>
+          <div style={{ fontSize: '1.1rem', color: '#00e5ff', marginBottom: '10px' }}>⏱️ Reakcijas laiks: {formatThinkingTime(buzzerRaceWinner.timeSpentMs)}</div>
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+            <button onClick={() => awardBuzzerPoints(buzzerRaceWinner.playerId, currentScene.config?.points || 10)} style={{ ...btnNav, background: '#28a745', color: '#fff', fontSize: '1rem' }}>
+              ✅ Piešķirt +{currentScene.config?.points || 10} pt
+            </button>
+            <button onClick={() => awardBuzzerPoints(buzzerRaceWinner.playerId, 0)} style={{ ...btnNav, background: '#dc3545', color: '#fff', fontSize: '1rem' }}>
+              ❌ Nepareizi (0 pt)
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '15px', marginBottom: '15px' }}>
         <div style={instructionBox}>
@@ -1107,4 +1183,27 @@ const tableInput: React.CSSProperties = {
   borderRadius: '4px',
   fontSize: '0.9rem',
   boxSizing: 'border-box'
+};
+
+const soundboardContainer: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+  background: '#1a1a1a',
+  padding: '10px 15px',
+  borderRadius: '8px',
+  border: '1px solid #444',
+  marginBottom: '15px',
+  flexWrap: 'wrap'
+};
+
+const btnSfx: React.CSSProperties = {
+  padding: '6px 12px',
+  background: '#2a2a2a',
+  color: '#fff',
+  border: '1px solid #666',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontWeight: 'bold',
+  fontSize: '0.85rem'
 };

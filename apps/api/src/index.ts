@@ -217,6 +217,7 @@ const sanitizeSceneForPlayer = (scene: any, subState: string) => {
     if (!isReveal) {
       delete cleanScene.config.correctAnswers;
       delete cleanScene.config.answerCorrectness;
+      delete cleanScene.config.correctOrder;
     }
     delete cleanScene.config.notes;
   }
@@ -610,7 +611,7 @@ app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
 });
 
 // ==========================================
-// 7. SOCKET.IO REĀLLAIKA DZINĒJS
+// 7. SOCKET.IO REĀLLAIKA DZINĒJS (AR PILNO LOĢIKU)
 // ==========================================
 const io = new Server(httpServer, {
   cors: {
@@ -633,6 +634,33 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
   if (s.subState === 'ACTIVE') {
     const now = Date.now();
     const timeSpentMs = Math.max(0, now - (s.questionStartTime || now));
+
+    // ⚡ 1. ĀTRĀS PULTS (BUZZER RACE) MEHĀNIKA AR RINDU
+    if (s.currentScene?.type === 'BUZZER_RACE') {
+      if (!s.buzzerRaceWinners) s.buzzerRaceWinners = [];
+      const maxQueue = s.currentScene.config?.buzzerMaxQueue || 5;
+      const alreadyPressed = s.buzzerRaceWinners.some((w: any) => w.playerId === playerId);
+      if (alreadyPressed || s.buzzerRaceWinners.length >= maxQueue) return;
+
+      const position = s.buzzerRaceWinners.length + 1;
+      const winnerData = {
+        position,
+        playerId,
+        name: player.name,
+        deviceNumber: player.deviceNumber || 1,
+        teamName: player.teamName || '',
+        timeSpentMs,
+        status: position === 1 ? 'ACTIVE' : 'QUEUED'
+      };
+      s.buzzerRaceWinners.push(winnerData);
+
+      io.to(pin).emit('buzzer-race-press', { winner: winnerData, allWinners: s.buzzerRaceWinners });
+
+      if (position === 1) {
+        io.to(pin).emit('play-sfx', { sfx: 'buzzer_hit' });
+      }
+      return;
+    }
 
     const existingIndex = s.votes.findIndex((v: any) => v.playerId === playerId);
     if (existingIndex !== -1) {
@@ -681,17 +709,79 @@ io.on('connection', (socket: Socket) => {
     });
   });
 
-  socket.on('host:create-session', (data: any) => {
-    const incomingPin = data.existingPin;
-    
-    if (incomingPin && sessions.has(incomingPin)) {
-      const existingToken = sessionHostTokens.get(incomingPin);
-      if (existingToken && data.hostToken !== existingToken) {
-        return socket.emit('error-message', 'Nevar pārrakstīt aktīvu sesiju bez derīga vadītāja marķiera!');
+  // 🔊 VADĪTĀJA SKAŅU DĒLIS (SOUNDBOARD)
+  socket.on('host:play-sfx', (data: { pin: string; hostToken: string; sfx: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    io.to(data.pin).emit('play-sfx', { sfx: data.sfx });
+  });
+
+  // ⚡ ĀTRĀS PULTS PUNKTI NO VADĪTĀJA
+  socket.on('host:award-buzzer-points', (data: { pin: string; hostToken: string; playerId: string; points: number }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    const players = sessionScores.get(data.pin);
+    const s = sessions.get(data.pin);
+    if (players && players.has(data.playerId)) {
+      const p = players.get(data.playerId)!;
+      p.score = (p.score || 0) + data.points;
+      p.roundScore = (p.roundScore || 0) + data.points;
+
+      io.to(data.pin).emit('play-sfx', { sfx: data.points > 0 ? 'correct' : 'wrong' });
+
+      const sortedLb = getSortedLeaderboard(players, false);
+      const sortedTeams = getSortedTeamLeaderboard(players, s?.branding?.teamScoringMode || 'AVG', false);
+
+      io.to(data.pin).emit('leaderboard-update', { data: sortedLb, lbType: 'TOTAL' });
+      io.to(data.pin).emit('team-leaderboard-update', { data: sortedTeams, lbType: 'TOTAL' });
+      saveSnapshot(data.pin, true);
+    }
+  });
+
+  // ⚡ ĀTRĀS PULTS RINDAS PĀRBĪDĪŠANA (Nākamais rindā)
+  socket.on('host:buzzer-pass-next', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    const s = sessions.get(data.pin);
+    if (s && s.buzzerRaceWinners && s.buzzerRaceWinners.length > 0) {
+      const currentWinner = s.buzzerRaceWinners.find((w: any) => w.status === 'ACTIVE');
+      if (currentWinner) currentWinner.status = 'PASSED';
+
+      const nextWinner = s.buzzerRaceWinners.find((w: any) => w.status === 'QUEUED');
+      if (nextWinner) {
+        nextWinner.status = 'ACTIVE';
+        io.to(data.pin).emit('buzzer-race-press', { winner: nextWinner, allWinners: s.buzzerRaceWinners });
+        io.to(data.pin).emit('play-sfx', { sfx: 'buzzer_hit' });
+      } else {
+        io.to(data.pin).emit('buzzer-race-press', { winner: null, allWinners: s.buzzerRaceWinners });
       }
+      saveSnapshot(data.pin, true);
+    }
+  });
+
+  // ⚡ ĀTRĀS PULTS ATKĀRTOTA ATVĒRŠANA (Pēc kļūdainas atbildes)
+  socket.on('host:buzzer-reopen', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    const s = sessions.get(data.pin);
+    if (s && s.currentScene?.type === 'BUZZER_RACE') {
+      s.buzzerRaceWinners = [];
+      s.subState = 'ACTIVE';
+      s.questionStartTime = Date.now();
+      const dur = s.currentScene?.config?.duration || 30;
+      s.currentScene.endTime = Date.now() + dur * 1000;
+
+      emitStateUpdate(data.pin, s.currentScene, 'ACTIVE');
+      io.to(data.pin).emit('buzzer-race-press', { winner: null, allWinners: [] });
+      io.to(data.pin).emit('play-sfx', { sfx: 'suspense' });
+      saveSnapshot(data.pin, true);
+    }
+  });
+
+  socket.on('host:create-session', (data: any) => {
+    let pin = data.existingPin;
+    if (!pin) {
+      do {
+        pin = Math.floor(1000 + Math.random() * 9000).toString();
+      } while (sessions.has(pin));
     }
 
-    const pin = incomingPin || Math.floor(1000 + Math.random() * 9000).toString();
     const finalUrl = data.connectionUrl || publicTunnelUrl || `http://${getLocalIpAddress()}:5173`;
     const hostToken = sessionHostTokens.get(pin) || crypto.randomBytes(16).toString('hex');
 
@@ -702,6 +792,7 @@ io.on('connection', (socket: Socket) => {
       connectionUrl: finalUrl,
       subState: 'IDLE',
       votes: [],
+      buzzerRaceWinners: [],
       currentScene: null,
       isRevealed: false,
       revealReadyToAdvance: false,
@@ -773,6 +864,7 @@ io.on('connection', (socket: Socket) => {
     if (s && s.currentScene) {
       clearSessionTimer(data.pin);
       s.votes = [];
+      s.buzzerRaceWinners = [];
       s.isPaused = false;
       s.isRevealed = false;
       s.revealReadyToAdvance = false;
@@ -827,7 +919,6 @@ io.on('connection', (socket: Socket) => {
     saveSnapshot(data.pin, true);
   });
 
-  // QR KODA PALIELINĀŠANAS KOMANDA [Q]
   socket.on('host:toggle-qr-zoom', (data: { pin: string; hostToken: string }) => {
     if (!isHostAuthorized(data.pin, data.hostToken)) return;
     io.to(data.pin).emit('toggle-large-qr');
@@ -926,7 +1017,85 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // SPACE VADĪBAS DZINĒJS
+  // ⬅️ VADĪTĀJA SOLIS ATPAKAĻ (BACKTRACK / UNDO)
+  socket.on('host:backtrack', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    const s = sessions.get(data.pin);
+    const playersMap = sessionScores.get(data.pin);
+    if (!s) return;
+
+    clearSessionTimer(data.pin);
+
+    // 1. Fināla pjedestāla solis atpakaļ
+    if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
+      if (s.finalPodiumStage > 0) {
+        s.finalPodiumStage--;
+        io.to(data.pin).emit('podium-stage-change', s.finalPodiumStage);
+        saveSnapshot(data.pin, true);
+        return;
+      }
+    }
+
+    // 2. REVEAL -> SUMMARY ar punktu atritināšanu
+    if (s.subState === 'REVEAL') {
+      s.subState = 'SUMMARY';
+      s.isRevealed = false;
+      s.revealReadyToAdvance = false;
+
+      if (playersMap) {
+        playersMap.forEach((p) => {
+          if (p.roundScore) {
+            p.score = Math.max(0, p.score - p.roundScore);
+            p.roundScore = 0;
+          }
+        });
+      }
+
+      emitStateUpdate(data.pin, s.currentScene, 'SUMMARY', { summaryStats: s.summaryStats });
+      logEvent('INFO', `Backtrack uz SUMMARY sesijā: PIN ${data.pin}`);
+      saveSnapshot(data.pin, true);
+      return;
+    }
+
+    // 3. SUMMARY -> STATS
+    if (s.subState === 'SUMMARY') {
+      s.subState = 'STATS';
+      emitStateUpdate(data.pin, s.currentScene, 'STATS');
+      saveSnapshot(data.pin, true);
+      return;
+    }
+
+    // 4. STATS / ACTIVE / PAUSED -> READY
+    if (s.subState === 'STATS' || s.subState === 'ACTIVE' || s.subState === 'PAUSED') {
+      s.subState = 'READY';
+      s.isPaused = false;
+      emitStateUpdate(data.pin, s.currentScene, 'READY');
+      saveSnapshot(data.pin, true);
+      return;
+    }
+
+    // 5. READY / IDLE -> Iepriekšējais slaids
+    if (s.subState === 'READY' || s.subState === 'IDLE') {
+      if (s.currentSceneIdx > 0) {
+        s.currentSceneIdx--;
+        s.currentScene = s.scenes[s.currentSceneIdx];
+        s.votes = [];
+        s.buzzerRaceWinners = [];
+        s.isPaused = false;
+        s.isRevealed = false;
+        s.revealReadyToAdvance = false;
+        s.currentPaging = 0;
+        s.finalPodiumStage = 0;
+        s.subState = 'READY';
+
+        emitStateUpdate(data.pin, s.currentScene, 'READY');
+        logEvent('INFO', `Backtrack uz slaidu #${s.currentSceneIdx + 1} sesijā: PIN ${data.pin}`);
+        saveSnapshot(data.pin, true);
+      }
+    }
+  });
+
+  // SPACE VADĪBAS DZINĒJS (AR PILNO BOTU UN DILSTOŠO PUNKTU APRĒĶINU)
   socket.on('host:advance', (data: { pin: string; hostToken: string; force?: boolean } | string) => {
     const pin = typeof data === 'string' ? data : data?.pin;
     const token = typeof data === 'string' ? undefined : data?.hostToken;
@@ -1011,7 +1180,7 @@ io.on('connection', (socket: Socket) => {
       return;
     }
 
-    // 1. PĀREJA UZ NĀKAMO SLAIDU (AR ⚡ AUTO-START ATBALSTU)
+    // 1. PĀREJA UZ NĀKAMO SLAIDU
     if (
       s.subState === 'IDLE' ||
       s.subState === 'REVEAL' ||
@@ -1028,6 +1197,7 @@ io.on('connection', (socket: Socket) => {
 
       s.currentScene = s.scenes[s.currentSceneIdx];
       s.votes = [];
+      s.buzzerRaceWinners = [];
       s.isPaused = false;
       s.isRevealed = false;
       s.revealReadyToAdvance = false;
@@ -1036,7 +1206,7 @@ io.on('connection', (socket: Socket) => {
       s.finalLeaderboardView = s.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL';
       delete s.summaryStats;
 
-      const isAutoStart = !!s.currentScene?.config?.autoStart && (s.currentScene.type === 'QUESTION' || s.currentScene.type === 'MAJORITY');
+      const isAutoStart = !!s.currentScene?.config?.autoStart && ['QUESTION', 'MAJORITY', 'ORDERING', 'BUZZER_RACE'].includes(s.currentScene.type);
 
       if (isAutoStart) {
         s.subState = 'ACTIVE';
@@ -1058,6 +1228,7 @@ io.on('connection', (socket: Socket) => {
         }, dur * 1000);
         sessionTimers.set(pin, timer);
 
+        // 🤖 Botu balsošana pie Auto-Start
         const options = s.currentScene?.config?.options || [];
         if (playersMap) {
           playersMap.forEach((p, id) => {
@@ -1111,6 +1282,7 @@ io.on('connection', (socket: Socket) => {
       }, dur * 1000);
       sessionTimers.set(pin, timer);
 
+      // 🤖 Botu balsošana pie ACTIVE
       const options = s.currentScene?.config?.options || [];
       if (playersMap) {
         playersMap.forEach((p, id) => {
@@ -1147,7 +1319,9 @@ io.on('connection', (socket: Socket) => {
       const config = s.currentScene?.config || {};
       let correct = config.correctAnswers || [];
 
-      if (s.currentScene?.type === 'MAJORITY') {
+      if (s.currentScene?.type === 'ORDERING') {
+        correct = config.correctOrder || config.options || [];
+      } else if (s.currentScene?.type === 'MAJORITY') {
         const counts: Record<string, number> = {};
         s.votes.forEach((v: any) => {
           if (Array.isArray(v.optionIds)) {
@@ -1169,27 +1343,34 @@ io.on('connection', (socket: Socket) => {
       let incorrectCount = 0;
 
       s.votes.forEach((v: any) => {
-        let matchedCount = 0;
-        if (Array.isArray(v.optionIds)) {
-          v.optionIds.forEach((opt: string) => {
-            if (correct.includes(opt)) matchedCount++;
-          });
-        }
-
-        if (isAnyOneMode) {
-          if (matchedCount > 0) fullCorrectCount++;
+        if (s.currentScene?.type === 'ORDERING') {
+          const userOrder = v.optionIds || [];
+          const isExact = JSON.stringify(userOrder) === JSON.stringify(correct);
+          if (isExact) fullCorrectCount++;
           else incorrectCount++;
-        } else if (isMultiChoice) {
-          if (matchedCount === requiredCount && v.optionIds.length === requiredCount) {
-            fullCorrectCount++;
-          } else if (matchedCount > 0) {
-            partialCorrectCount++;
-          } else {
-            incorrectCount++;
-          }
         } else {
-          if (matchedCount === 1) fullCorrectCount++;
-          else incorrectCount++;
+          let matchedCount = 0;
+          if (Array.isArray(v.optionIds)) {
+            v.optionIds.forEach((opt: string) => {
+              if (correct.includes(opt)) matchedCount++;
+            });
+          }
+
+          if (isAnyOneMode) {
+            if (matchedCount > 0) fullCorrectCount++;
+            else incorrectCount++;
+          } else if (isMultiChoice) {
+            if (matchedCount === requiredCount && v.optionIds.length === requiredCount) {
+              fullCorrectCount++;
+            } else if (matchedCount > 0) {
+              partialCorrectCount++;
+            } else {
+              incorrectCount++;
+            }
+          } else {
+            if (matchedCount === 1) fullCorrectCount++;
+            else incorrectCount++;
+          }
         }
       });
 
@@ -1226,7 +1407,9 @@ io.on('connection', (socket: Socket) => {
       let correct = config.correctAnswers || [];
       const correctnessMap: Record<string, number> = config.answerCorrectness || {};
 
-      if (s.currentScene?.type === 'MAJORITY') {
+      if (s.currentScene?.type === 'ORDERING') {
+        correct = config.correctOrder || config.options || [];
+      } else if (s.currentScene?.type === 'MAJORITY') {
         const counts: Record<string, number> = {};
         s.votes.forEach((v: any) => {
           if (Array.isArray(v.optionIds)) {
@@ -1247,7 +1430,7 @@ io.on('connection', (socket: Socket) => {
       const votedPlayerIds = new Set(sortedVotes.map((v: any) => v.playerId));
       let correctCounter = 0;
 
-      // AFK DEAKTIVIZĀCIJA
+      // 💤 AFK DEAKTIVIZĀCIJA
       const maxMissed = s.branding?.maxMissedQuestions || 5;
       playersMap?.forEach((p) => {
         if (!p.isDisabled && !p.isBot) {
@@ -1264,24 +1447,30 @@ io.on('connection', (socket: Socket) => {
         }
       });
 
-      // DAUDZATBILŽU PUNKTU PIEŠĶIRŠANA (100%, 50%, 0%)
+      // 🎯 PUNKTU APRĒĶINS (Fiksēti, Dilstoši, Ātruma bonuss, Daļējie punkti)
       sortedVotes.forEach((v: any) => {
         let earnedPercentage = 0;
-        if (Array.isArray(v.optionIds)) {
-          v.optionIds.forEach((opt: string) => {
-            if (correct.includes(opt)) {
-              const pct =
-                correctnessMap[opt] !== undefined
-                  ? correctnessMap[opt]
-                  : isAnyOneMode
-                  ? 100
-                  : Math.round(100 / Math.max(1, correct.length));
-              earnedPercentage += pct;
-            }
-          });
-        }
 
-        earnedPercentage = Math.min(100, earnedPercentage);
+        if (s.currentScene?.type === 'ORDERING') {
+          const userOrder = v.optionIds || [];
+          const isExact = JSON.stringify(userOrder) === JSON.stringify(correct);
+          earnedPercentage = isExact ? 100 : 0;
+        } else {
+          if (Array.isArray(v.optionIds)) {
+            v.optionIds.forEach((opt: string) => {
+              if (correct.includes(opt)) {
+                const pct =
+                  correctnessMap[opt] !== undefined
+                    ? correctnessMap[opt]
+                    : isAnyOneMode
+                    ? 100
+                    : Math.round(100 / Math.max(1, correct.length));
+                earnedPercentage += pct;
+              }
+            });
+          }
+          earnedPercentage = Math.min(100, earnedPercentage);
+        }
 
         if (playersMap) {
           const p = playersMap.get(v.playerId);
@@ -1335,6 +1524,7 @@ io.on('connection', (socket: Socket) => {
       s.currentScene = { ...data.scene, endTime: null };
       s.subState = 'IDLE';
       s.votes = [];
+      s.buzzerRaceWinners = [];
       s.isPaused = false;
       s.isRevealed = false;
       s.revealReadyToAdvance = false;
@@ -1357,6 +1547,7 @@ io.on('connection', (socket: Socket) => {
       let playerObj = players.get(data.playerId);
       const sanitizedTeam = isTeamMode && data.teamName ? data.teamName.trim() : '';
 
+      // 👑 KOMANDAS NOSAUKUMA & KAPTEIŅA PĀRBAUDE
       if (isTeamMode && sanitizedTeam) {
         const teamLower = sanitizedTeam.toLowerCase();
         let teamCaptainExists: PlayerState | null = null;
@@ -1456,6 +1647,7 @@ io.on('connection', (socket: Socket) => {
     handleVote(data.pin, answerList, data.playerId);
   });
 
+  // 🔌 SPĒLĒTĀJA ATVIENOŠANĀS
   socket.on('disconnect', () => {
     socketPlayerMap.delete(socket.id);
     participants.forEach((set, pin) => {

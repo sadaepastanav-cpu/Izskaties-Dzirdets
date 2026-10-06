@@ -41,7 +41,14 @@ export default function Player() {
   const [showCaptainQrModal, setShowCaptainQrModal] = useState(false);
 
   const [myChoice, setMyChoice] = useState<string | null>(null);
+  const [stagedChoice, setStagedChoice] = useState<string | null>(null);
   const [selectedMultipleOptions, setSelectedMultipleOptions] = useState<string[]>([]);
+
+  // 🔢 SECĪBAS KĀRTOŠANAS SARAKSTS (ORDERING)
+  const [orderedItems, setOrderedItems] = useState<string[]>([]);
+  // ⚡ ĀTRĀS PULTS REĀLLAIKA STATUSS (BUZZER RACE)
+  const [buzzerPressedOrder, setBuzzerPressedOrder] = useState<number | null>(null);
+  const [isMyBuzzerTurn, setIsMyBuzzerTurn] = useState<boolean>(false);
 
   const [playersList, setPlayersList] = useState<any[]>([]);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
@@ -173,7 +180,13 @@ export default function Player() {
           return updated;
         });
       }
-      if (data?.currentScene) setScene(data.currentScene);
+      if (data?.currentScene) {
+        setScene(data.currentScene);
+        if (data.currentScene.type === 'ORDERING') {
+          const initialOpts = [...(data.currentScene.config?.options || [])];
+          setOrderedItems(initialOpts);
+        }
+      }
       const currentSub = (data?.subState || data?.currentScene?.subState || 'IDLE').toUpperCase();
       setSubState(currentSub);
       localStorage.setItem('player_pin', pin.trim());
@@ -203,8 +216,25 @@ export default function Player() {
       const newSub = (newScene?.subState || 'READY').toUpperCase();
       setSubState(newSub);
       setMyChoice(null);
+      setStagedChoice(null);
       setSelectedMultipleOptions([]);
+      setBuzzerPressedOrder(null);
+      setIsMyBuzzerTurn(false);
       setPodiumStage(0);
+
+      if (newScene?.type === 'ORDERING') {
+        const raw = [...(newScene.config?.options || [])];
+        setOrderedItems(raw);
+      }
+    });
+
+    s.on('buzzer-race-press', (data: { winner: any; allWinners: any[] }) => {
+      if (data?.winner?.playerId === playerId) {
+        setBuzzerPressedOrder(data.winner.position);
+        setIsMyBuzzerTurn(true);
+      } else {
+        setIsMyBuzzerTurn(false);
+      }
     });
 
     s.on('leaderboard-update', (payload: any) => {
@@ -239,9 +269,13 @@ export default function Player() {
       setIsDisabledAfk(false);
       setScene(null);
       setMyChoice(null);
+      setStagedChoice(null);
       setSelectedMultipleOptions([]);
       setDeviceNumber(null);
       setBuzzerTestPresses(0);
+      setOrderedItems([]);
+      setBuzzerPressedOrder(null);
+      setIsMyBuzzerTurn(false);
       setPin('');
       alert('Vadītājs ir beidzis spēles sesiju.');
     });
@@ -291,17 +325,31 @@ export default function Player() {
     }
   };
 
+  const rawOptions: string[] = scene?.config?.options || ['A', 'B', 'C', 'D'];
   const requiredCount = scene?.config?.requiredCount ?? (scene?.config?.correctAnswers?.length || 1);
   const isMultiSelectMode = scene?.config?.selectionMode === 'ALL' && requiredCount > 1;
   const maxRequiredChoices = requiredCount > 0 ? requiredCount : 1;
+  const submitMode = scene?.config?.submitMode || 'INSTANT';
 
-  const handleSingleVoteSubmit = (option: string, letter: string) => {
+  // ⚡ Vienas atbildes apstrāde
+  const handleSingleVoteClick = (option: string, letter: string) => {
     if (myChoice || !socket || subState === 'PAUSED' || isDisabledAfk) return;
-    try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
-    setMyChoice(option || letter);
 
-    const answers = [option, letter].filter(Boolean);
-    socket.emit('participant:submit-answer', { pin, answer: option || letter, answers, playerId });
+    if (submitMode === 'CONFIRM') {
+      try { if ('vibrate' in navigator) navigator.vibrate(40); } catch {}
+      setStagedChoice(option || letter);
+    } else {
+      try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
+      setMyChoice(option || letter);
+      socket.emit('participant:submit-answer', { pin, answer: option || letter, answers: [option || letter], playerId });
+    }
+  };
+
+  const handleConfirmSingleVote = () => {
+    if (!stagedChoice || myChoice || !socket || subState === 'PAUSED' || isDisabledAfk) return;
+    try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
+    setMyChoice(stagedChoice);
+    socket.emit('participant:submit-answer', { pin, answer: stagedChoice, answers: [stagedChoice], playerId });
   };
 
   const toggleMultiSelectOption = (item: string) => {
@@ -334,6 +382,53 @@ export default function Player() {
     });
   };
 
+  // ⚡ ĀTRĀS PULTS (BUZZER RACE) POGA AR IESILDĪŠANOS UN REĀLO KLIKŠĶI
+  const handleBuzzerPress = () => {
+    if (subState === 'READY') {
+      // Iesildīšanās pirms laika starta
+      try { if ('vibrate' in navigator) navigator.vibrate(40); } catch {}
+      return;
+    }
+    if (subState === 'ACTIVE' && !buzzerPressedOrder) {
+      try { if ('vibrate' in navigator) navigator.vibrate([100, 50, 100]); } catch {}
+      setBuzzerPressedOrder(1);
+      socket?.emit('participant:submit-answer', {
+        pin,
+        answer: 'BUZZ',
+        answers: ['BUZZ'],
+        playerId
+      });
+    }
+  };
+
+  // 🔢 Secības kārtošana
+  const moveOrderingItem = (index: number, direction: 'UP' | 'DOWN') => {
+    if (myChoice || subState !== 'ACTIVE' || isDisabledAfk) return;
+    const targetIdx = direction === 'UP' ? index - 1 : index + 1;
+    if (targetIdx < 0 || targetIdx >= orderedItems.length) return;
+
+    try { if ('vibrate' in navigator) navigator.vibrate(40); } catch {}
+    const updated = [...orderedItems];
+    const temp = updated[index];
+    updated[index] = updated[targetIdx];
+    updated[targetIdx] = temp;
+    setOrderedItems(updated);
+  };
+
+  const handleOrderingSubmit = () => {
+    if (myChoice || !socket || subState !== 'ACTIVE' || isDisabledAfk) return;
+    try { if ('vibrate' in navigator) navigator.vibrate(100); } catch {}
+
+    const orderStr = orderedItems.join(' ➔ ');
+    setMyChoice(orderStr);
+    socket.emit('participant:submit-answer', {
+      pin,
+      answer: orderStr,
+      answers: orderedItems,
+      playerId
+    });
+  };
+
   const handleTestBuzzer = () => {
     if (!socket) return;
     try { if ('vibrate' in navigator) navigator.vibrate(60); } catch {}
@@ -351,9 +446,13 @@ export default function Player() {
     setIsDisabledAfk(false);
     setScene(null);
     setMyChoice(null);
+    setStagedChoice(null);
     setSelectedMultipleOptions([]);
     setDeviceNumber(null);
     setBuzzerTestPresses(0);
+    setOrderedItems([]);
+    setBuzzerPressedOrder(null);
+    setIsMyBuzzerTurn(false);
     setPin('');
   };
 
@@ -394,6 +493,11 @@ export default function Player() {
   const baseHost = serverBaseUrl && serverBaseUrl.trim() !== '' ? serverBaseUrl.trim() : window.location.origin;
   const captainJoinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}&team=${encodeURIComponent(teamName)}`;
   const captainQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(captainJoinUrl)}`;
+
+  const isExactChoicesSelected = selectedMultipleOptions.length === maxRequiredChoices;
+  const isFinalLeaderboard = scene?.type === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
+  const isBuzzerRace = scene?.type === 'BUZZER_RACE';
+  const isOrdering = scene?.type === 'ORDERING';
 
   if (!isJoined) {
     return (
@@ -607,20 +711,6 @@ export default function Player() {
     );
   }
 
-  const slideType = (scene?.type || '').toUpperCase();
-  const currentSub = (subState || scene?.subState || 'IDLE').toUpperCase();
-
-  const rawOptions: string[] =
-    scene?.config?.options ||
-    scene?.options ||
-    (scene?.config?.optionsCount
-      ? ['A', 'B', 'C', 'D', 'E', 'F'].slice(0, scene.config.optionsCount)
-      : []);
-
-  const options = rawOptions.length > 0 ? rawOptions : ['A', 'B', 'C', 'D'];
-  const isExactChoicesSelected = selectedMultipleOptions.length === maxRequiredChoices;
-  const isFinalLeaderboard = slideType === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
-
   return (
     <div style={appBgStyle}>
       <div style={mobileHeader}>
@@ -633,7 +723,6 @@ export default function Player() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {/* KAPTEIŅA POGA - ATVER KOMANDAS QR KODU JEBKURĀ SPĒLES BRĪDĪ */}
           {isTeamMode && isCaptain && (
             <button
               onClick={() => setShowCaptainQrModal(true)}
@@ -651,7 +740,6 @@ export default function Player() {
         </div>
       </div>
 
-      {/* KAPTEIŅA IZLECOŠAIS LOGS AR KOMANDAS QR KODU */}
       {showCaptainQrModal && (
         <div
           style={{
@@ -726,7 +814,7 @@ export default function Player() {
 
       <div style={mobileBody}>
         {/* PAUZE */}
-        {currentSub === 'PAUSED' && (
+        {subState === 'PAUSED' && (
           <div style={{ ...infoCard, borderColor: '#ff9800', marginBottom: '15px' }}>
             <div style={{ fontSize: '3rem', marginBottom: '8px' }}>⏸️</div>
             <h2 style={{ color: '#ff9800', margin: '0 0 8px 0', fontSize: '1.4rem' }}>SPĒLE IR IEPAUZĒTA</h2>
@@ -736,8 +824,8 @@ export default function Player() {
           </div>
         )}
 
-        {/* BILLBOARD INFORMATĪVAIS SLAIDS */}
-        {slideType === 'BILLBOARD' && currentSub !== 'PAUSED' && (
+        {/* 🌟 BILLBOARD SLAIDS (SAGLABĀTS!) */}
+        {scene?.type === 'BILLBOARD' && subState !== 'PAUSED' && (
           <div style={infoCard}>
             <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>👀</div>
             <h2 style={{ color: '#ffc107', margin: '0 0 10px 0', fontSize: '1.4rem' }}>SEKOJIET EKRĀNAM!</h2>
@@ -747,8 +835,8 @@ export default function Player() {
           </div>
         )}
 
-        {/* LĪDERU TABULA UN REZULTĀTI */}
-        {slideType === 'LEADERBOARD' && currentSub !== 'PAUSED' && (
+        {/* 🌟 LĪDERU TABULAS & REZULTĀTI (SAGLABĀTS!) */}
+        {scene?.type === 'LEADERBOARD' && subState !== 'PAUSED' && (
           <div style={infoCard}>
             {isFinalLeaderboard && podiumStage < 3 ? (
               <div>
@@ -771,7 +859,7 @@ export default function Player() {
                     : 'KOPVĒRTĒJUMS'}
                 </h2>
 
-                {/* 1. Komandas rādītājs */}
+                {/* Komandas rādītājs */}
                 {isTeamMode && teamName && (
                   <div style={{ ...rankBadge, borderColor: '#00e5ff', background: '#0a1d2e', padding: '8px', margin: '6px 0' }}>
                     <div style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>
@@ -787,7 +875,7 @@ export default function Player() {
                   </div>
                 )}
 
-                {/* 2. Individuālais rādītājs */}
+                {/* Individuālais rādītājs */}
                 <div style={{ ...rankBadge, padding: '8px', margin: '6px 0' }}>
                   <div style={{ fontSize: '0.8rem', color: '#aaa' }}>
                     👤 Tavs individuālais sniegums:
@@ -810,11 +898,144 @@ export default function Player() {
           </div>
         )}
 
-        {/* JAUTĀJUMA / BALSOŠANAS FĀZES */}
-        {(slideType === 'QUESTION' || slideType === 'QUIZ' || slideType === 'VOTE' || slideType === 'MAJORITY' || slideType === '') && currentSub !== 'PAUSED' && (
-          <>
-            {/* GATAVĪBA (READY) */}
-            {currentSub === 'READY' && (
+        {/* ⚡ 2. FĀZE: ĀTRĀ PULTS (BUZZER RACE) AR IESILDĪŠANOS & ATBILDĒM */}
+        {isBuzzerRace && subState !== 'PAUSED' && (
+          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            {/* Ja spēlētājs ir #1 un vadītājs iestatījis variantus -> atveras varianti! */}
+            {isMyBuzzerTurn && scene?.config?.buzzerRaceType === 'WITH_OPTIONS' ? (
+              <div style={{ width: '100%', textAlign: 'center' }}>
+                <div style={textHeaderBadge}>🎉 TAVA KĀRTA! IZVĒLIES ATBILDI:</div>
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${rawOptions.length}, 1fr)`, gap: '6px', width: '100%', margin: '20px 0' }}>
+                  {rawOptions.map((opt, i) => (
+                    <button
+                      key={i}
+                      disabled={!!myChoice}
+                      onClick={() => handleSingleVoteClick(opt, String.fromCharCode(65 + i))}
+                      style={{
+                        ...buzzerBtnHorizontal,
+                        background: myChoice === opt ? '#28a745' : BUTTON_COLORS[i % BUTTON_COLORS.length]
+                      }}
+                    >
+                      <span style={{ fontSize: '1.8rem', fontWeight: '900' }}>{String.fromCharCode(65 + i)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* Milzīgā Ātrās Pults poga ar iesildīšanos pie READY */
+              <div style={{ textAlign: 'center', width: '100%' }}>
+                <div style={textHeaderBadge}>
+                  {subState === 'READY'
+                    ? '🔥 IESILDĪŠANĀS (GATAVOJIES!)'
+                    : buzzerPressedOrder
+                    ? `🎉 NOPIKSTINĀTS #${buzzerPressedOrder}!`
+                    : '🚨 SPIED POGU ĀTRĀK PAR CITIEM!'}
+                </div>
+
+                <button
+                  onClick={handleBuzzerPress}
+                  style={{
+                    width: '250px',
+                    height: '250px',
+                    borderRadius: '50%',
+                    background: buzzerPressedOrder
+                      ? '#28a745'
+                      : subState === 'READY'
+                      ? 'radial-gradient(circle at 35% 35%, #ff7700, #cc5500, #882200)'
+                      : 'radial-gradient(circle at 35% 35%, #ff4d4d, #cc0000, #800000)',
+                    border: '8px solid #ffffff',
+                    boxShadow: buzzerPressedOrder ? '0 0 50px #28a745' : '0 0 60px rgba(255, 0, 0, 0.8), inset 0 0 30px rgba(255,255,255,0.4)',
+                    color: '#fff',
+                    fontSize: '2.2rem',
+                    fontWeight: '900',
+                    cursor: 'pointer',
+                    margin: '25px auto',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'transform 0.1s ease',
+                    transform: 'scale(1)'
+                  }}
+                  onMouseDown={(e) => ((e.currentTarget as HTMLElement).style.transform = 'scale(0.92)')}
+                  onMouseUp={(e) => ((e.currentTarget as HTMLElement).style.transform = 'scale(1)')}
+                  onTouchStart={(e) => ((e.currentTarget as HTMLElement).style.transform = 'scale(0.92)')}
+                  onTouchEnd={(e) => ((e.currentTarget as HTMLElement).style.transform = 'scale(1)')}
+                >
+                  {buzzerPressedOrder ? '✅ GATAVS!' : subState === 'READY' ? '🔥 TESTĒ' : '⚡ SPIED!'}
+                </button>
+
+                <div style={{ color: subState === 'READY' ? '#ffc107' : '#00ff00', fontWeight: 'bold', fontSize: '1rem' }}>
+                  {subState === 'READY' ? 'Pārbaudi klikšķi! Gaidi, kad vadītājs startēs laiku...' : buzzerPressedOrder ? 'Atbilde pieņemta! Skaties lielo ekrānu!' : 'Tiklīdz rit laiks, spied pirmais!'}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 🔢 2. FĀZE: SECĪBAS KĀRTOŠANA (ORDERING) */}
+        {isOrdering && subState !== 'PAUSED' && (
+          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '10px 0' }}>
+            {subState === 'READY' && (
+              <div style={infoCard}>
+                <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>🔢</div>
+                <h2 style={{ color: '#ffc107', margin: '0 0 10px 0' }}>SECĪBAS KĀRTOŠANA</h2>
+                <p style={{ color: '#fff', fontSize: '1.05rem', fontWeight: 'bold' }}>Tūlīt parādīsies varianti, ko vajadzēs sakārtot pareizā secībā!</p>
+              </div>
+            )}
+
+            {subState === 'ACTIVE' && (
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', flex: 1, justifyContent: 'space-between' }}>
+                <div style={textHeaderBadge}>
+                  {myChoice ? '✅ SECĪBA IESNIEGTA' : '🔢 SAKĀRTO NO AUGŠAS UZ LEJU:'}
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '10px 0', flex: 1, overflowY: 'auto' }}>
+                  {orderedItems.map((item, idx) => (
+                    <div key={`order-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1c2833', border: '2px solid #00e5ff', borderRadius: '10px', padding: '12px 14px', color: '#fff', fontWeight: 'bold' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ color: '#00e5ff', fontSize: '1.2rem', fontWeight: '900' }}>#{idx + 1}</span>
+                        <span>{item}</span>
+                      </div>
+                      {!myChoice && (
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button onClick={() => moveOrderingItem(idx, 'UP')} disabled={idx === 0} style={{ ...btnMoveOrder, opacity: idx === 0 ? 0.3 : 1 }}>🔼</button>
+                          <button onClick={() => moveOrderingItem(idx, 'DOWN')} disabled={idx === orderedItems.length - 1} style={{ ...btnMoveOrder, opacity: idx === orderedItems.length - 1 ? 0.3 : 1 }}>🔽</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {!myChoice && (
+                  <button onClick={handleOrderingSubmit} style={{ ...btnJoin, width: '100%', padding: '14px', fontSize: '1.1rem' }}>
+                    🚀 IESNIEGT SECĪBU
+                  </button>
+                )}
+
+                {myChoice && (
+                  <div style={voteConfirmedBadge}>
+                    ✅ Mana secība: {myChoice}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {(subState === 'STATS' || subState === 'SUMMARY' || subState === 'REVEAL') && (
+              <div style={infoCard}>
+                <div style={{ fontSize: '3rem', marginBottom: '10px' }}>{subState === 'REVEAL' ? '🎉' : '⏳'}</div>
+                <h2 style={{ color: subState === 'REVEAL' ? '#28a745' : '#ffc107', margin: 0 }}>
+                  {subState === 'REVEAL' ? 'PAREIZĀ SECĪBA ATKLĀTA!' : 'BALSOŠANA NOSLĒGUSIES!'}
+                </h2>
+                <p style={{ color: '#ccc', marginTop: '8px' }}>Skaties pareizo atrisinājumu lielajā ekrānā!</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 🅰️ PARASTIE JAUTĀJUMI: 1 RINDAS HORIZONTĀLĀS POGAS (2 līdz 6 varianti) */}
+        {!isBuzzerRace && !isOrdering && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && subState !== 'PAUSED' && (
+          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0' }}>
+            {subState === 'READY' && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>⏳</div>
                 <h2 style={{ color: '#ffc107', margin: '0 0 12px 0', fontSize: '1.5rem' }}>UZMANĪBU!</h2>
@@ -824,127 +1045,105 @@ export default function Player() {
               </div>
             )}
 
-            {/* AKTĪVĀ BALSOŠANA (ACTIVE) */}
-            {currentSub === 'ACTIVE' && (
-              <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', boxSizing: 'border-box', padding: '5px 0' }}>
+            {subState === 'ACTIVE' && (
+              <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={textHeaderBadge}>
-                  {myChoice
-                    ? '✅ ATBILDE NOSŪTĪTA'
-                    : isMultiSelectMode
-                    ? `☑️ ATZĪMĒ TIEŠI ${maxRequiredChoices} VARIANTUS:`
-                    : 'SPIED ATBILDI:'}
+                  {myChoice ? '✅ ATBILDE NOSŪTĪTA' : isMultiSelectMode ? `☑️ ATZĪMĒ ${maxRequiredChoices} VARIANTUS:` : submitMode === 'CONFIRM' ? 'IZVĒLIES UN APSTIPRINI:' : 'SPIED ATBILDI:'}
                 </div>
 
+                {/* 🌟 1 RINDAS HORIZONTĀLAIS REŽĢIS */}
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: options.length > 4 ? '1fr 1fr' : '1fr',
+                    gridTemplateColumns: `repeat(${rawOptions.length}, 1fr)`,
                     gap: '8px',
                     width: '100%',
                     flex: 1,
-                    maxHeight: options.length > 4 ? '48vh' : '42vh',
-                    alignContent: 'center'
+                    alignContent: 'center',
+                    maxHeight: '45vh'
                   }}
                 >
-                  {options.map((opt, i) => {
+                  {rawOptions.map((opt, i) => {
                     const letter = String.fromCharCode(65 + i);
                     const itemKey = opt || letter;
-
                     const isSelectedMulti = selectedMultipleOptions.includes(itemKey) || selectedMultipleOptions.includes(opt) || selectedMultipleOptions.includes(letter);
                     const isChosenSingle = myChoice === opt || myChoice === letter;
-                    const isChosen = isMultiSelectMode ? isSelectedMulti : isChosenSingle;
+                    const isStaged = stagedChoice === opt || stagedChoice === letter;
+                    const isChosen = isMultiSelectMode ? isSelectedMulti : (myChoice ? isChosenSingle : isStaged);
 
                     return (
                       <button
                         key={i}
                         disabled={!!myChoice}
                         onClick={() => {
-                          if (isMultiSelectMode) {
-                            toggleMultiSelectOption(itemKey);
-                          } else {
-                            handleSingleVoteSubmit(opt, letter);
-                          }
+                          if (isMultiSelectMode) toggleMultiSelectOption(itemKey);
+                          else handleSingleVoteClick(opt, letter);
                         }}
                         style={{
-                          ...buzzerBtnCompact,
-                          minHeight: options.length > 4 ? '44px' : '50px',
-                          maxHeight: options.length > 4 ? '56px' : '62px',
+                          ...buzzerBtnHorizontal,
                           background: isChosen ? '#28a745' : BUTTON_COLORS[i % BUTTON_COLORS.length],
-                          border: isChosen ? '3px solid #fff' : 'none',
+                          border: isChosen ? '4px solid #fff' : 'none',
                           opacity: myChoice && !isChosen ? 0.35 : 1,
-                          boxShadow: isChosen ? '0 0 20px #28a745' : '0 4px 10px rgba(0,0,0,0.6)'
+                          boxShadow: isChosen ? '0 0 25px #28a745' : '0 4px 12px rgba(0,0,0,0.6)'
                         }}
                       >
-                        <span style={{ fontSize: '1.6rem', fontWeight: '900', marginRight: opt && opt.trim() !== '' ? '8px' : '0' }}>
-                          {isMultiSelectMode ? (isChosen ? '☑️ ' : '⬜ ') : ''}{letter}
+                        <span style={{ fontSize: rawOptions.length > 4 ? '1.8rem' : '2.4rem', fontWeight: '900' }}>
+                          {letter}
                         </span>
-                        {opt && opt.trim() !== '' && (
-                          <span style={{ fontSize: '1rem', fontWeight: 'bold', flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {opt}
-                          </span>
-                        )}
                       </button>
                     );
                   })}
                 </div>
 
+                {/* CONFIRM POGA */}
+                {!isMultiSelectMode && !myChoice && submitMode === 'CONFIRM' && (
+                  <button onClick={handleConfirmSingleVote} disabled={!stagedChoice} style={{ ...btnSubmitMulti, opacity: stagedChoice ? 1 : 0.4, background: stagedChoice ? 'linear-gradient(135deg, #28a745, #20c997)' : '#333' }}>
+                    {stagedChoice ? `🚀 APSTIPRINĀT ATBILDI (${stagedChoice})` : 'Izvēlies burtu...'}
+                  </button>
+                )}
+
+                {/* MULTI SUBMIT POGA */}
                 {isMultiSelectMode && !myChoice && (
-                  <button
-                    onClick={handleMultiVoteSubmit}
-                    disabled={!isExactChoicesSelected}
-                    style={{
-                      ...btnSubmitMulti,
-                      opacity: isExactChoicesSelected ? 1 : 0.4,
-                      cursor: isExactChoicesSelected ? 'pointer' : 'not-allowed',
-                      background: isExactChoicesSelected ? 'linear-gradient(135deg, #28a745, #20c997)' : '#333'
-                    }}
-                  >
-                    {isExactChoicesSelected
-                      ? `🚀 IESNIEGT ATBILDES (${selectedMultipleOptions.length}/${maxRequiredChoices})`
-                      : `Izvēlies vēl ${maxRequiredChoices - selectedMultipleOptions.length} (${selectedMultipleOptions.length}/${maxRequiredChoices})`}
+                  <button onClick={handleMultiVoteSubmit} disabled={!isExactChoicesSelected} style={{ ...btnSubmitMulti, opacity: isExactChoicesSelected ? 1 : 0.4, background: isExactChoicesSelected ? 'linear-gradient(135deg, #28a745, #20c997)' : '#333' }}>
+                    {isExactChoicesSelected ? `🚀 IESNIEGT (${selectedMultipleOptions.length}/${maxRequiredChoices})` : `Izvēlies ${maxRequiredChoices - selectedMultipleOptions.length} vēl`}
                   </button>
                 )}
 
                 {myChoice && (
-                  <div style={voteConfirmedBadge}>
-                    ✅ Atbilde ({myChoice}) pieņemta!
-                  </div>
+                  <div style={voteConfirmedBadge}>✅ Atbilde ({myChoice}) pieņemta!</div>
                 )}
               </div>
             )}
 
-            {/* STATS / SUMMARY / REVEAL FĀZES */}
-            {(currentSub === 'STATS' || currentSub === 'SUMMARY' || currentSub === 'REVEAL') && (
+            {(subState === 'STATS' || subState === 'SUMMARY' || subState === 'REVEAL') && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3rem', marginBottom: '10px' }}>
-                  {currentSub === 'SUMMARY' ? '⏳' : currentSub === 'REVEAL' ? '🎉' : '📊'}
+                  {subState === 'SUMMARY' ? '⏳' : subState === 'REVEAL' ? '🎉' : '📊'}
                 </div>
-                <h2 style={{ color: currentSub === 'SUMMARY' ? '#ffc107' : '#28a745', margin: '0 0 10px 0' }}>
-                  {currentSub === 'SUMMARY'
+                <h2 style={{ color: subState === 'SUMMARY' ? '#ffc107' : '#28a745', margin: '0 0 10px 0' }}>
+                  {subState === 'SUMMARY'
                     ? 'APKOPO REZULTĀTUS...'
-                    : currentSub === 'REVEAL'
+                    : subState === 'REVEAL'
                     ? 'PAREIZĀ ATBILDE ATKLĀTA!'
                     : 'BALSOŠANA NOSLĒGUSIES!'}
                 </h2>
                 <p style={{ color: '#ccc', fontSize: '1rem', margin: 0 }}>
-                  {currentSub === 'REVEAL'
+                  {subState === 'REVEAL'
                     ? 'Skaties rezultātus un punktus lielajā ekrānā!'
-                    : currentSub === 'SUMMARY'
+                    : subState === 'SUMMARY'
                     ? 'Skaties atbilžu kopsavilkumu lielajā ekrānā!'
                     : 'Gaidiet rezultātu atklāšanu...'}
                 </p>
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-// =========================================================================
 // STILI
-// =========================================================================
 const fullScreenMobile: React.CSSProperties = {
   position: 'fixed',
   top: 0,
@@ -953,15 +1152,12 @@ const fullScreenMobile: React.CSSProperties = {
   bottom: 0,
   width: '100vw',
   height: '100dvh',
-  maxHeight: '100dvh',
   color: '#fff',
   fontFamily: 'Segoe UI, Arial, sans-serif',
   display: 'flex',
   flexDirection: 'column',
   zIndex: 999999,
   overflow: 'hidden',
-  overscrollBehavior: 'none',
-  touchAction: 'manipulation',
   boxSizing: 'border-box'
 };
 
@@ -994,8 +1190,7 @@ const btnCaptainBadge: React.CSSProperties = {
   borderRadius: '6px',
   fontSize: '0.75rem',
   fontWeight: 'bold',
-  cursor: 'pointer',
-  boxShadow: '0 2px 6px rgba(255,193,7,0.4)'
+  cursor: 'pointer'
 };
 
 const btnExitSmall: React.CSSProperties = {
@@ -1028,8 +1223,7 @@ const loginCard: React.CSSProperties = {
   width: '85%',
   maxWidth: '360px',
   textAlign: 'center',
-  boxShadow: '0 10px 35px rgba(0,0,0,0.9)',
-  backdropFilter: 'blur(12px)'
+  boxShadow: '0 10px 35px rgba(0,0,0,0.9)'
 };
 
 const mobileInput: React.CSSProperties = {
@@ -1064,8 +1258,7 @@ const infoCard: React.CSSProperties = {
   padding: '20px 15px',
   width: '90%',
   maxWidth: '360px',
-  boxShadow: '0 10px 30px rgba(0,0,0,0.9)',
-  backdropFilter: 'blur(12px)'
+  boxShadow: '0 10px 30px rgba(0,0,0,0.9)'
 };
 
 const rankBadge: React.CSSProperties = {
@@ -1118,19 +1311,6 @@ const darkStatusStrip: React.CSSProperties = {
   borderTop: '1px solid rgba(255, 255, 255, 0.1)'
 };
 
-const buzzerBtnCompact: React.CSSProperties = {
-  width: '100%',
-  borderRadius: '10px',
-  color: '#fff',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '0 15px',
-  cursor: 'pointer',
-  boxSizing: 'border-box',
-  userSelect: 'none'
-};
-
 const testBuzzerBtn: React.CSSProperties = {
   width: '100%',
   padding: '14px',
@@ -1141,4 +1321,27 @@ const testBuzzerBtn: React.CSSProperties = {
   fontSize: '1rem',
   fontWeight: 'bold',
   cursor: 'pointer'
+};
+
+const btnMoveOrder: React.CSSProperties = {
+  background: '#333',
+  border: '1px solid #666',
+  color: '#fff',
+  padding: '6px 12px',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontSize: '1rem'
+};
+
+const buzzerBtnHorizontal: React.CSSProperties = {
+  width: '100%',
+  height: '110px',
+  borderRadius: '14px',
+  color: '#fff',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  boxSizing: 'border-box',
+  userSelect: 'none'
 };
