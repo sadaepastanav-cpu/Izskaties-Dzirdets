@@ -212,12 +212,15 @@ export default function Studio() {
     }
   };
 
-  const updateActiveSlide = (updater: (draft: Slide) => void) => {
+  // 🌟 VEIKTSPĒJAS LABOJUMS: recordHistory parametrs novērš vēstures piesārņošanu peles vilkšanas laikā
+  const updateActiveSlide = (updater: (draft: Slide) => void, recordHistory: boolean = true) => {
     setSlides((prev) => {
       const copy = JSON.parse(JSON.stringify(prev));
       if (!copy[activeSlideIdx]) return prev;
       updater(copy[activeSlideIdx]);
-      pushToHistory(copy);
+      if (recordHistory) {
+        pushToHistory(copy);
+      }
       return copy;
     });
   };
@@ -229,14 +232,14 @@ export default function Studio() {
           updater(el);
         }
       });
-    });
+    }, true);
   };
 
   const deleteSelectedElements = () => {
     if (selectedElementIds.length === 0) return;
     updateActiveSlide((s) => {
       s.config.layout = s.config.layout.filter((x) => !selectedElementIds.includes(x.id));
-    });
+    }, true);
     setSelectedElementIds([]);
   };
 
@@ -253,7 +256,7 @@ export default function Studio() {
         s.config.layout.push(cloned);
         newIds.push(cloned.id);
       });
-    });
+    }, true);
     if (newIds.length > 0) {
       setSelectedElementIds(newIds);
     }
@@ -265,7 +268,7 @@ export default function Studio() {
       const selected = s.config.layout.filter((el) => selectedElementIds.includes(el.id));
       const unselected = s.config.layout.filter((el) => !selectedElementIds.includes(el.id));
       s.config.layout = [...unselected, ...selected];
-    });
+    }, true);
   };
 
   const sendSelectedToBack = () => {
@@ -274,7 +277,7 @@ export default function Studio() {
       const selected = s.config.layout.filter((el) => selectedElementIds.includes(el.id));
       const unselected = s.config.layout.filter((el) => !selectedElementIds.includes(el.id));
       s.config.layout = [...selected, ...unselected];
-    });
+    }, true);
   };
 
   const uploadAndAddMedia = async (file: File) => {
@@ -791,6 +794,7 @@ export default function Studio() {
     });
   };
 
+  // 🌟 VEIKTSPĒJAS LABOJUMS: handleMouseMove neizsauc vēstures kopēšanu pie katra pikseļa
   const handleMouseMove = (e: React.MouseEvent) => {
     if (marqueeBox && canvasRef.current) {
       setMarqueeBox((prev) => (prev ? { ...prev, currentX: e.clientX, currentY: e.clientY } : null));
@@ -864,10 +868,15 @@ export default function Studio() {
           }
         }
       });
-    });
+    }, false);
   };
 
+  // 🌟 VEIKTSPĒJAS LABOJUMS: handleMouseUp vienu reizi piefiksē izmaiņas vēsturē
   const handleMouseUp = () => {
+    if (dragState) {
+      pushToHistory(slides);
+    }
+
     if (marqueeBox && canvasRef.current) {
       const rect = canvasRef.current.getBoundingClientRect();
       const x1 = Math.min(marqueeBox.startX, marqueeBox.currentX) - rect.left;
@@ -922,7 +931,7 @@ export default function Studio() {
       blurAmount: 12
     };
 
-    updateActiveSlide((s) => s.config.layout.push(newElement));
+    updateActiveSlide((s) => s.config.layout.push(newElement), true);
     setSelectedElementIds([newElement.id]);
   };
 
@@ -986,7 +995,7 @@ export default function Studio() {
     updateActiveSlide((s) => {
       s.config.options = opts;
       s.config.correctOrder = opts;
-    });
+    }, true);
   };
 
   const addOrderingItem = () => {
@@ -996,7 +1005,7 @@ export default function Studio() {
       s.config.options = opts;
       s.config.correctOrder = opts;
       s.config.optionsCount = opts.length;
-    });
+    }, true);
     setNewOrderingItemInput('');
   };
 
@@ -1006,7 +1015,7 @@ export default function Studio() {
       s.config.options = opts;
       s.config.correctOrder = opts;
       s.config.optionsCount = opts.length;
-    });
+    }, true);
   };
 
   const hasMultipleSelection = selectedElements.length > 1;
@@ -1142,7 +1151,7 @@ export default function Studio() {
                 bold: true,
                 visibility: 'ALWAYS'
               };
-              updateActiveSlide((s) => s.config.layout.push(newText));
+              updateActiveSlide((s) => s.config.layout.push(newText), true);
               setSelectedElementIds([newText.id]);
             }}
           >
@@ -1358,7 +1367,7 @@ export default function Studio() {
                           updateActiveSlide((s) => {
                             const item = s.config.layout.find((x) => x.id === el.id);
                             if (item) item.content = val;
-                          });
+                          }, true);
                         }}
                         onBlur={() => setEditingElementId(null)}
                         style={{
@@ -1441,7 +1450,7 @@ export default function Studio() {
               );
             })}
 
-            {/* ⏱️ JAUNĀ TAIMERA (TIMER) SLAIDA KANVAS SKATS */}
+            {/* ⏱️ TAIMERA (TIMER) SLAIDA KANVAS SKATS */}
             {activeSlide?.type === 'TIMER' && (
               <div
                 style={{
@@ -1492,7 +1501,7 @@ export default function Studio() {
                   <div
                     key={`order-card-preview-${idx}`}
                     style={{
-                      background: hexToRgba(activeSlide.config.optionsBgColor || '#000', activeSlide.config.optionsBgOpacity ?? 85),
+                      background: hexToRgba(activeSlide.config.optionsBgColor || '#00', activeSlide.config.optionsBgOpacity ?? 85),
                       padding: '8px 16px',
                       borderRadius: '8px',
                       border: '1px solid #333',
@@ -1647,7 +1656,7 @@ export default function Studio() {
                               s.config.answerCorrectness[newKey] = s.config.answerCorrectness[oldKey];
                               if (oldKey !== newKey) delete s.config.answerCorrectness[oldKey];
                             }
-                          });
+                          }, true);
                         }}
                         onBlur={() => setEditingElementId(null)}
                         style={inlineInput}
@@ -1700,7 +1709,7 @@ export default function Studio() {
                                   delete s.config.answerCorrectness[s.config.options[i]];
                                 }
                               }
-                            });
+                            }, true);
                           }}
                         />
 
@@ -1730,7 +1739,7 @@ export default function Studio() {
                                   const targetKey = (s.config.options[i] && s.config.options[i].trim() !== '') ? s.config.options[i] : letter;
                                   if (!s.config.answerCorrectness) s.config.answerCorrectness = {};
                                   s.config.answerCorrectness[targetKey] = val;
-                                });
+                                }, true);
                               }}
                               style={inputPercent}
                               title="% no punktiem"
@@ -2119,7 +2128,7 @@ export default function Studio() {
                 <select
                   style={selectStyle}
                   value={activeSlide.type}
-                  onChange={(e) => updateActiveSlide((s) => (s.type = e.target.value as any))}
+                  onChange={(e) => updateActiveSlide((s) => (s.type = e.target.value as any), true)}
                 >
                   <option value="QUESTION">Question (Jautājums)</option>
                   <option value="TIMER">⏱️ Timer (Taimeris / Pulkstenis)</option>
@@ -2136,7 +2145,7 @@ export default function Studio() {
                     <select
                       style={{ ...selectStyle, borderColor: '#ffc107', marginTop: '4px' }}
                       value={activeSlide.config.lbType || 'TOTAL'}
-                      onChange={(e) => updateActiveSlide((s) => (s.config.lbType = e.target.value as any))}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.lbType = e.target.value as any), true)}
                     >
                       <option value="TOTAL">⭐ Kopvērtējums (Visi punkti kopā)</option>
                       <option value="ROUND">🏆 Kārtas rezultāti (Tikai šīs kārtas punkti)</option>
@@ -2150,7 +2159,7 @@ export default function Studio() {
                     <input
                       type="checkbox"
                       checked={!!activeSlide.config.autoStart}
-                      onChange={(e) => updateActiveSlide((s) => (s.config.autoStart = e.target.checked))}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.autoStart = e.target.checked), true)}
                     />
                     ⚡ Automātiskais starts (Auto-Start)
                   </label>
@@ -2160,7 +2169,7 @@ export default function Studio() {
                 <textarea
                   style={{ ...inputStyle, minHeight: '50px', resize: 'vertical', fontSize: '0.85rem' }}
                   value={activeSlide.config.notes || ''}
-                  onChange={(e) => updateActiveSlide((s) => (s.config.notes = e.target.value))}
+                  onChange={(e) => updateActiveSlide((s) => (s.config.notes = e.target.value), true)}
                   placeholder="Ieraksti skaidrojumu vadītājam..."
                 />
               </div>
@@ -2181,7 +2190,7 @@ export default function Studio() {
                   <select
                     style={selectStyle}
                     value={activeSlide.config.timerType || 'COUNTDOWN'}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.timerType = e.target.value as any))}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.timerType = e.target.value as any), true)}
                   >
                     <option value="COUNTDOWN">⏳ Atpakaļskaitīšanas taimeris (Pārtraukums)</option>
                     <option value="CLOCK">🕒 Reālā laika pulkstenis (HH:MM:SS)</option>
@@ -2191,7 +2200,7 @@ export default function Studio() {
                   <select
                     style={selectStyle}
                     value={activeSlide.config.timerPlacement || 'CENTER'}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.timerPlacement = e.target.value as any))}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.timerPlacement = e.target.value as any), true)}
                   >
                     <option value="CENTER">🎯 Liels tieši pa centru</option>
                     <option value="TOP_RIGHT">↗️ Mazāks augšā labajā stūrī</option>
@@ -2201,7 +2210,7 @@ export default function Studio() {
                   <input
                     style={inputStyle}
                     value={activeSlide.config.timerLabel || ''}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.timerLabel = e.target.value))}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.timerLabel = e.target.value), true)}
                     placeholder="Piemēram: Pārtraukums līdz 15:30"
                   />
 
@@ -2212,7 +2221,7 @@ export default function Studio() {
                         type="number"
                         style={inputStyle}
                         value={activeSlide.config.timerDuration ?? 300}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.timerDuration = Number(e.target.value)))}
+                        onChange={(e) => updateActiveSlide((s) => (s.config.timerDuration = Number(e.target.value)), true)}
                       />
                     </>
                   )}
@@ -2221,7 +2230,7 @@ export default function Studio() {
                   <select
                     style={selectStyle}
                     value={activeSlide.config.timerBgVideo || ''}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.timerBgVideo = e.target.value))}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.timerBgVideo = e.target.value), true)}
                   >
                     <option value="">(Bez video fona)</option>
                     {mediaList.filter((f) => /\.(mp4|mov|webm)$/i.test(f)).map((f) => (
@@ -2261,7 +2270,7 @@ export default function Studio() {
                               s.config.options = updated.slice(0, 6);
                               s.config.requiredCount = 2;
                             }
-                          });
+                          }, true);
                         }}
                       >
                         <option value="AUTO">✨ Auto (Pēc teksta satura)</option>
@@ -2276,7 +2285,7 @@ export default function Studio() {
                           <input
                             style={inputStyle}
                             value={activeSlide.config.musicCategoryTop || '🎤 Izpildītājs'}
-                            onChange={(e) => updateActiveSlide((s) => (s.config.musicCategoryTop = e.target.value))}
+                            onChange={(e) => updateActiveSlide((s) => (s.config.musicCategoryTop = e.target.value), true)}
                             placeholder="Piemēram: Izpildītājs"
                           />
 
@@ -2284,7 +2293,7 @@ export default function Studio() {
                           <input
                             style={inputStyle}
                             value={activeSlide.config.musicCategoryBottom || '🎵 Dziesmas nosaukums'}
-                            onChange={(e) => updateActiveSlide((s) => (s.config.musicCategoryBottom = e.target.value))}
+                            onChange={(e) => updateActiveSlide((s) => (s.config.musicCategoryBottom = e.target.value), true)}
                             placeholder="Piemēram: Dziesmas nosaukums"
                           />
                         </div>
@@ -2298,7 +2307,7 @@ export default function Studio() {
                       <select
                         style={{ ...selectStyle, borderColor: '#ffc107', marginTop: '4px' }}
                         value={activeSlide.config.buzzerRaceType || 'WITH_OPTIONS'}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerRaceType = e.target.value as any))}
+                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerRaceType = e.target.value as any), true)}
                       >
                         <option value="WITH_OPTIONS">🅰️ Ar variantiem (Pirmais atbild telefonā)</option>
                         <option value="ORAL">🗣️ Mutisks (Pirmais runā ar balsi)</option>
@@ -2308,7 +2317,7 @@ export default function Studio() {
                       <select
                         style={selectStyle}
                         value={activeSlide.config.buzzerEvaluationMode || 'AUTO'}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerEvaluationMode = e.target.value as any))}
+                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerEvaluationMode = e.target.value as any), true)}
                       >
                         <option value="AUTO">🤖 Automātisks (Pārbauda sistēma ar Space)</option>
                         <option value="MANUAL">👨‍💼 Manuāls (Vadītājs vērtē Pareizi/Nepareizi)</option>
@@ -2318,7 +2327,7 @@ export default function Studio() {
                       <select
                         style={selectStyle}
                         value={activeSlide.config.buzzerMaxQueue || 5}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerMaxQueue = Number(e.target.value)))}
+                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerMaxQueue = Number(e.target.value)), true)}
                       >
                         <option value="1">Tikai #1</option>
                         <option value="3">Top 3 rindā</option>
@@ -2345,7 +2354,7 @@ export default function Studio() {
                                 updateActiveSlide((s) => {
                                   s.config.options[idx] = val;
                                   s.config.correctOrder = [...s.config.options];
-                                });
+                                }, true);
                               }}
                             />
                             <button onClick={() => moveOrderingItem(idx, 'UP')} disabled={idx === 0} style={iconBtnSmall}>▲</button>
@@ -2376,7 +2385,7 @@ export default function Studio() {
                       <select
                         style={selectStyle}
                         value={activeSlide.config.submitMode || 'INSTANT'}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.submitMode = e.target.value as any))}
+                        onChange={(e) => updateActiveSlide((s) => (s.config.submitMode = e.target.value as any), true)}
                       >
                         <option value="INSTANT">⚡ Tūlītējs (Katrs klikšķis fiksējas savā laikā)</option>
                         <option value="CONFIRM">🔒 Ar apstiprinājumu (Spiež "Iesniegt")</option>
@@ -2395,7 +2404,7 @@ export default function Studio() {
                                 const updated: string[] = [];
                                 for (let i = 0; i < num; i++) updated.push(cur[i] !== undefined ? cur[i] : `Variants ${String.fromCharCode(65 + i)}`);
                                 s.config.options = updated;
-                              });
+                              }, true);
                             }}
                           >
                             {num}
@@ -2409,7 +2418,7 @@ export default function Studio() {
                           <select
                             style={selectStyle}
                             value={activeSlide.config.selectionMode || 'ALL'}
-                            onChange={(e) => updateActiveSlide((s) => (s.config.selectionMode = e.target.value as any))}
+                            onChange={(e) => updateActiveSlide((s) => (s.config.selectionMode = e.target.value as any), true)}
                           >
                             <option value="ALL">☑️ Visas pareizās</option>
                             <option value="ANY_ONE">☝️ Jebkura viena pareizā</option>
@@ -2425,7 +2434,7 @@ export default function Studio() {
                               value={activeSlide.config.requiredCount || activeSlide.config.correctAnswers.length || 1}
                               onChange={(e) => {
                                 const val = Math.max(1, Number(e.target.value));
-                                updateActiveSlide((s) => (s.config.requiredCount = val));
+                                updateActiveSlide((s) => (s.config.requiredCount = val), true);
                               }}
                               style={inputStyle}
                             />
@@ -2437,7 +2446,7 @@ export default function Studio() {
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px', marginTop: '4px' }}>
                         <button
                           type="button"
-                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'INDIVIDUAL'))}
+                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'INDIVIDUAL'), true)}
                           style={{
                             padding: '6px 2px',
                             color: '#fff',
@@ -2453,7 +2462,7 @@ export default function Studio() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'RIGHT_COLUMN'))}
+                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'RIGHT_COLUMN'), true)}
                           style={{
                             padding: '6px 2px',
                             color: '#fff',
@@ -2469,7 +2478,7 @@ export default function Studio() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'GRID'))}
+                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'GRID'), true)}
                           style={{
                             padding: '6px 2px',
                             color: '#fff',
@@ -2491,7 +2500,7 @@ export default function Studio() {
                   <select
                     style={selectStyle}
                     value={activeSlide.config.scoringMode || 'FIXED'}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.scoringMode = e.target.value as any))}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.scoringMode = e.target.value as any), true)}
                   >
                     <option value="FIXED">Fiksēti punkti</option>
                     <option value="DECREASING">Dilstoši punkti</option>
@@ -2509,7 +2518,7 @@ export default function Studio() {
                             const val = Number(e.target.value);
                             s.config.points = val;
                             s.config.pointsMax = val;
-                          })
+                          }, true)
                         }
                       />
                     </div>
@@ -2520,7 +2529,7 @@ export default function Studio() {
                           type="number"
                           style={inputStyle}
                           value={activeSlide.config.pointsMin ?? 1}
-                          onChange={(e) => updateActiveSlide((s) => (s.config.pointsMin = Number(e.target.value)))}
+                          onChange={(e) => updateActiveSlide((s) => (s.config.pointsMin = Number(e.target.value)), true)}
                         />
                       </div>
                     )}
@@ -2543,7 +2552,7 @@ export default function Studio() {
                 <select
                   style={selectStyle}
                   value={activeSlide.config.backgroundUrl || ''}
-                  onChange={(e) => updateActiveSlide((s) => (s.config.backgroundUrl = e.target.value))}
+                  onChange={(e) => updateActiveSlide((s) => (s.config.backgroundUrl = e.target.value), true)}
                 >
                   <option value="">(Melns fons)</option>
                   {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
@@ -2557,7 +2566,7 @@ export default function Studio() {
                     <input
                       type="color"
                       value={activeSlide.config.optionsColor || '#ffffff'}
-                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsColor = e.target.value))}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsColor = e.target.value), true)}
                       style={colorPicker}
                     />
                   </div>
@@ -2566,7 +2575,7 @@ export default function Studio() {
                     <input
                       type="color"
                       value={activeSlide.config.optionsBgColor || '#000000'}
-                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgColor = e.target.value))}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgColor = e.target.value), true)}
                       style={colorPicker}
                     />
                   </div>
@@ -2575,7 +2584,7 @@ export default function Studio() {
                     <input
                       type="color"
                       value={activeSlide.config.optionsCorrectColor || '#00ff00'}
-                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsCorrectColor = e.target.value))}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsCorrectColor = e.target.value), true)}
                       style={colorPicker}
                     />
                   </div>
@@ -2594,7 +2603,7 @@ export default function Studio() {
                     max="100"
                     step="5"
                     value={activeSlide.config.optionsBgOpacity ?? 85}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgOpacity = Number(e.target.value)))}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgOpacity = Number(e.target.value)), true)}
                     style={{ width: '100%', accentColor: '#00ff00', cursor: 'pointer' }}
                   />
                 </div>
@@ -2612,7 +2621,7 @@ export default function Studio() {
         >
           <div style={diplomaModalCard} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #333', paddingBottom: '10px' }}>
-              <h2 style={{ margin: 0, color: '#d63384' }}>🏆 Diplomus Dizains & Priekšskatījums</h2>
+              <h2 style={{ margin: 0, color: '#d63384' }}>🏆 Diplomi: Dizains & Priekšskatījums</h2>
               <button
                 onClick={() => setShowDiplomaModal(false)}
                 style={{ background: 'transparent', border: 'none', color: '#ff4d4d', fontSize: '1.5rem', cursor: 'pointer', fontWeight: 'bold' }}

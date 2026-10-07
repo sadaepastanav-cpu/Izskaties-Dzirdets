@@ -32,6 +32,21 @@ const getDynamicOrbConfig = (count: number) => {
   return { size: 18, numFont: '0.38rem', nameFont: '0.3rem', maxW: 22, gap: 4, showName: false };
 };
 
+// 🌟 GLOBĀLS AUDIOCONTEXT SINGLETONS (Novērš AudioContext atmiņas noplūdi)
+let sharedAudioCtx: AudioContext | null = null;
+const getSharedAudioContext = (): AudioContext | null => {
+  if (!sharedAudioCtx) {
+    const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioCtxClass) {
+      sharedAudioCtx = new AudioCtxClass();
+    }
+  }
+  if (sharedAudioCtx && sharedAudioCtx.state === 'suspended') {
+    sharedAudioCtx.resume().catch(() => {});
+  }
+  return sharedAudioCtx;
+};
+
 const MediaLayoutItem: React.FC<{
   el: any;
   subState: string;
@@ -612,9 +627,12 @@ export default function Presentation() {
     }
   }, [scene?.id, scene?.type, scene?.config?.timerDuration, scene?.config?.timerType]);
 
+  // 🌟 Sintētisko skaņu dzinējs izmantojot vienoto AudioContext singletonu
   const playSynthesizedSfx = (type: string) => {
     try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const ctx = getSharedAudioContext();
+      if (!ctx) return;
+
       if (type === 'buzzer_hit' || type === 'wrong') {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -977,6 +995,7 @@ export default function Presentation() {
 
   const handleStartPresentation = async () => {
     setIsMediaReady(true);
+    getSharedAudioContext()?.resume().catch(() => {});
     if (!audioBank.current) return;
 
     for (const sound of Object.values(audioBank.current)) {

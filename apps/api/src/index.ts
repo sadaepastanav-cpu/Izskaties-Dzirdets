@@ -238,7 +238,7 @@ const sanitizeSceneForPlayer = (scene: any, subState: string) => {
   return cleanScene;
 };
 
-// 🌟 STĀVOKĻA IZPLATĪŠANA (Arī vadītāja tālrunim)
+// 🌟 STĀVOKĻA IZPLATĪŠANA (DROŠĪBAS LABOJUMS: Spēlētājiem sanitizēts, Vadītājam privātā istabā pilnais)
 const emitStateUpdate = (pin: string, scene: any, subState: string, extra: any = {}) => {
   const sanitized = sanitizeSceneForPlayer(scene, subState);
   io.to(pin).emit('state-update', { ...sanitized, subState, ...extra });
@@ -249,7 +249,7 @@ const emitStateUpdate = (pin: string, scene: any, subState: string, extra: any =
     const nextScene = s.scenes[s.currentSceneIdx + 1];
     const activeParticipants = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
 
-    io.to(pin).emit('host-state-update', {
+    io.to(`${pin}_host`).emit('host-state-update', {
       currentScene: scene,
       subState,
       currentSceneIdx: s.currentSceneIdx,
@@ -812,13 +812,15 @@ io.on('connection', (socket: Socket) => {
     socket.emit('tunnel-ready', { url: publicTunnelUrl });
   }
 
-  // 🌟 VADĪTĀJA TĀLRUŅA PULTS PIESLĒGŠANĀS
+  // 🌟 VADĪTĀJA TĀLRUŅA PULTS PIESLĒGŠANĀS (DROŠĪBA: Pievieno `${data.pin}_host`)
   socket.on('host:join-remote', (data: { pin: string; hostToken: string; hostName?: string }) => {
     if (!isHostAuthorized(data.pin, data.hostToken)) {
       return socket.emit('error-message', 'Neautorizēta vadītāja piekļuve!');
     }
 
     socket.join(data.pin);
+    socket.join(`${data.pin}_host`);
+
     const s = sessions.get(data.pin);
     const playersMap = sessionScores.get(data.pin);
     if (!s) return;
@@ -982,6 +984,7 @@ io.on('connection', (socket: Socket) => {
     if (!participants.has(pin)) participants.set(pin, new Set());
 
     socket.join(pin);
+    socket.join(`${pin}_host`);
     socket.emit('session-info', { pin, hostToken, state: sessionData });
     logEvent('INFO', `Izveidota jauna spēles sesija: PIN ${pin}`);
     saveSnapshot(pin, true);
@@ -1020,7 +1023,7 @@ io.on('connection', (socket: Socket) => {
         if (currentSession?.subState === 'ACTIVE') {
           currentSession.subState = 'STATS';
           if (currentSession.currentScene) currentSession.currentScene.endTime = Date.now();
-          emitStateUpdate(data.pin, currentSession.currentScene, 'STATS');
+          emitStateUpdate(pin, currentSession.currentScene, 'STATS');
           io.to(data.pin).emit('video-command', 'pause');
           saveSnapshot(data.pin, true);
         }
