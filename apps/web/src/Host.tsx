@@ -37,6 +37,10 @@ export default function Host() {
   const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('ORDER');
   const [buzzerRaceWinner, setBuzzerRaceWinner] = useState<any>(null);
 
+  // 📱 Vadītāja tālruņa savienojums & Lielais QR logs
+  const [isRemoteConnected, setIsRemoteConnected] = useState<boolean>(false);
+  const [showLargeRemoteQr, setShowLargeRemoteQr] = useState<boolean>(false);
+
   const [connectionMode, setConnectionMode] = useState<'LAN' | 'TUNNEL'>(
     (localStorage.getItem('event_conn_mode') as any) || 'TUNNEL'
   );
@@ -87,6 +91,7 @@ export default function Host() {
     };
   }, []);
 
+  // 🌟 AKTĪVĀ BĀZES ADRESE (5173. ports vai Cloudflare tunelis)
   const activeBaseUrl =
     connectionMode === 'TUNNEL' && customTunnelUrl.trim() !== ''
       ? (customTunnelUrl.trim().startsWith('http') ? customTunnelUrl.trim() : `https://${customTunnelUrl.trim()}`).replace(/\/$/, '')
@@ -213,6 +218,8 @@ export default function Host() {
     setPlayersList([]);
     setTeamLeaderboard([]);
     setBuzzerRaceWinner(null);
+    setIsRemoteConnected(false);
+    setShowLargeRemoteQr(false);
     localStorage.removeItem('active_pin');
     localStorage.removeItem('active_host_token');
   };
@@ -233,20 +240,17 @@ export default function Host() {
     }
   };
 
-  // ⬅️ SOLIS ATPAKAĻ
   const handleBacktrack = () => {
     if (!pin || !hostToken) return;
     socket.emit('host:backtrack', { pin, hostToken });
   };
 
-  // 🔊 SKAŅU DĒĻA ATSKAŅOŠANA
   const playSfx = (sfx: string) => {
     if (pin && hostToken) {
       socket.emit('host:play-sfx', { pin, hostToken, sfx });
     }
   };
 
-  // ⚡ ĀTRĀS PULTS PUNKTI
   const awardBuzzerPoints = (playerId: string, points: number) => {
     if (pin && hostToken) {
       socket.emit('host:award-buzzer-points', { pin, hostToken, playerId, points });
@@ -279,10 +283,23 @@ export default function Host() {
     }
   };
 
+  // 🏆 DIPLOMU DRUKA (Ar pielāgoto Studijas dizainu & Ink-Saver režīmu)
   const handlePrintDiplomas = () => {
-    const sorted = [...playersList].filter((p) => !p.isDisabled).sort((a, b) => (b.score || 0) - (a.score || 0));
+    const isTeam = !!branding?.teamModeEnabled;
+    const sorted = isTeam
+      ? [...teamLeaderboard].sort((a, b) => (b.score || 0) - (a.score || 0))
+      : [...playersList].filter((p) => !p.isDisabled).sort((a, b) => (b.score || 0) - (a.score || 0));
+
     const top3 = sorted.slice(0, 3);
-    if (top3.length === 0) return alert('Nav spēlētāju diplomu ģenerēšanai!');
+    if (top3.length === 0) return alert('Nav dalībnieku diplomu ģenerēšanai!');
+
+    const dCfg = branding?.diplomaConfig || {};
+    const isInkSaver = dCfg.theme === 'GOLD_WHITE_PRINT' || !!dCfg.inkSaverMode;
+
+    const bgCss = isInkSaver ? '#ffffff' : (dCfg.bgColor || '#111111');
+    const textCss = isInkSaver ? '#111111' : (dCfg.titleColor || '#ffffff');
+    const borderCss = dCfg.borderColor || '#ffc107';
+    const winnerCss = dCfg.winnerColor || (isInkSaver ? '#007bff' : '#ffd700');
 
     const printWin = window.open('', '_blank');
     if (!printWin) return;
@@ -292,23 +309,23 @@ export default function Host() {
         <head>
           <title>Top 3 Diplomi - PIN ${escapeHtml(pin || '')}</title>
           <style>
-            body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #fff; text-align: center; }
-            .diploma { page-break-after: always; height: 95vh; display: flex; flex-direction: column; justify-content: center; align-items: center; border: 15px solid #ffc107; margin: 20px; box-sizing: border-box; }
-            h1 { font-size: 3rem; color: #333; margin: 0; text-transform: uppercase; }
-            h2 { font-size: 2rem; color: #ffc107; margin: 10px 0; }
-            .winner { font-size: 3.5rem; font-weight: bold; color: #007bff; margin: 20px 0; }
-            .score { font-size: 1.8rem; color: #555; }
-            .footer { margin-top: 40px; font-size: 1.2rem; color: #888; }
+            body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: ${bgCss}; color: ${textCss}; text-align: center; }
+            .diploma { page-break-after: always; height: 95vh; display: flex; flex-direction: column; justify-content: center; align-items: center; border: 15px solid ${borderCss}; margin: 20px; box-sizing: border-box; background: ${bgCss}; padding: 30px; }
+            h1 { font-size: 3.2rem; color: ${textCss}; margin: 0; text-transform: uppercase; letter-spacing: 2px; }
+            h2 { font-size: 2rem; color: ${borderCss}; margin: 12px 0; }
+            .winner { font-size: 3.6rem; font-weight: 900; color: ${winnerCss}; margin: 25px 0; }
+            .score { font-size: 2rem; color: ${textCss}; }
+            .footer { margin-top: 50px; font-size: 1.1rem; color: ${isInkSaver ? '#666' : '#aaa'}; }
           </style>
         </head>
         <body>
           ${top3.map((p, idx) => `
             <div class="diploma">
-              <h1>🏆 DIPLOMS 🏆</h1>
-              <h2>Par iegūto ${idx + 1}. vietu spēlē</h2>
-              <div class="winner">${escapeHtml(p.name)} ${branding?.teamModeEnabled && p.teamName ? `(${escapeHtml(p.teamName)})` : ''}</div>
+              <h1>${escapeHtml(dCfg.customTitle || '🏆 DIPLOMS 🏆')}</h1>
+              <h2>${escapeHtml(dCfg.customSubtitle || `Par iegūto ${idx + 1}. vietu spēlē`)}</h2>
+              <div class="winner">${escapeHtml(p.name)} ${isTeam ? `(${p.memberCount || ''} dalībnieki)` : (p.teamName ? `[${escapeHtml(p.teamName)}]` : '')}</div>
               <div class="score">Iegūtie punkti: <strong>${Number(p.score || 0)} pt</strong></div>
-              <div class="footer">Event Studio • Spēles PIN: ${escapeHtml(pin || '')} • ${new Date().toLocaleDateString('lv-LV')}</div>
+              <div class="footer">${escapeHtml(dCfg.footerText || 'Event Studio')} • Spēles PIN: ${escapeHtml(pin || '')} • ${new Date().toLocaleDateString('lv-LV')}</div>
             </div>
           `).join('')}
           <script>window.print();</script>
@@ -387,6 +404,10 @@ export default function Host() {
       setBuzzerRaceWinner(data.winner);
     };
 
+    const handleRemoteConnected = () => {
+      setIsRemoteConnected(true);
+    };
+
     socket.on('session-info', handleSessionInfo);
     socket.on('state-update', handleStateUpdate);
     socket.on('presence-update', handlePresence);
@@ -394,6 +415,7 @@ export default function Host() {
     socket.on('team-leaderboard-update', handleTeamLeaderboard);
     socket.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
     socket.on('buzzer-race-press', handleBuzzerPress);
+    socket.on('host-remote-connected', handleRemoteConnected);
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
@@ -434,14 +456,26 @@ export default function Host() {
       socket.off('team-leaderboard-update', handleTeamLeaderboard);
       socket.off('podium-stage-change');
       socket.off('buzzer-race-press');
+      socket.off('host-remote-connected', handleRemoteConnected);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [pin, hostToken, currentScene?.subState]);
 
   const isTeamMode = !!branding?.teamModeEnabled;
   const isFinalLb = currentScene?.type === 'LEADERBOARD' && currentScene?.config?.lbType === 'FINAL';
+
+  // 1. Spēlētāju pieslēgšanās saite & QR
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
+
+  // 2. 📱 VADĪTĀJA TĀLRUŅA PULTS SAITE (Vite 5173 / Tunelis)
+  const hostRemoteUrl = pin && hostToken
+    ? `${activeBaseUrl}/host-remote?pin=${pin}&token=${hostToken}`
+    : '';
+
+  const hostRemoteQrUrl = hostRemoteUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${encodeURIComponent(hostRemoteUrl)}`
+    : '';
 
   const sortedPlayers = [...playersList].sort((a, b) => {
     if (sortMode === 'SCORE') {
@@ -597,7 +631,6 @@ export default function Host() {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* ⬅️ SOLIS ATPAKAĻ POGA */}
           <button
             onClick={handleBacktrack}
             style={{ ...btnGray, background: '#ff9800', color: '#000', fontWeight: 'bold' }}
@@ -680,7 +713,7 @@ export default function Host() {
         </div>
       </div>
 
-      {/* 🔊 2. FĀZE: VADĪTĀJA SKAŅU DĒLIS (SOUNDBOARD) */}
+      {/* 🔊 SKAŅU DĒLIS */}
       <div style={soundboardContainer}>
         <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#ffc107', marginRight: '8px' }}>🔊 SKAŅU DĒLIS:</span>
         <button onClick={() => playSfx('applause')} style={btnSfx}>👏 Aplausi</button>
@@ -691,7 +724,7 @@ export default function Host() {
         <button onClick={() => playSfx('suspense')} style={btnSfx}>⚡ Spriedze</button>
       </div>
 
-      {/* ⚡ 2. FĀZE: ĀTRĀS PULTS (BUZZER RACE) REĀLLAIKA PUNKTI */}
+      {/* ⚡ ĀTRĀS PULTS REĀLLAIKA PUNKTI */}
       {currentScene?.type === 'BUZZER_RACE' && buzzerRaceWinner && (
         <div style={{ background: '#261c02', border: '3px solid #ffc107', padding: '15px', borderRadius: '10px', textAlign: 'center', marginBottom: '15px', animation: 'pulse 1s infinite' }}>
           <h2 style={{ color: '#ffc107', margin: '0 0 6px 0' }}>🚨 ĀTRĀKĀ PULTS: #{buzzerRaceWinner.deviceNumber} {buzzerRaceWinner.name} {buzzerRaceWinner.teamName && `[${buzzerRaceWinner.teamName}]`}</h2>
@@ -817,18 +850,52 @@ export default function Host() {
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <img
-              src={qrCodeUrl}
-              alt="QR"
-              style={{ width: '45px', height: '45px', borderRadius: '4px', cursor: 'pointer', border: '1px solid #fff' }}
-              title="Atvērt spēles saiti"
-              onClick={() => window.open(joinUrl, '_blank')}
-            />
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>QR Kods gatavs</div>
-              <div style={{ fontSize: '0.75rem', color: '#888', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {activeBaseUrl}
+          {/* 🌟 SPĒLĒTĀJU QR & 📱 VADĪTĀJA PULTS QR KODS */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            {/* 1. Vadītāja tālruņa QR kods (Uzklikšķinot atveras liels) */}
+            <div
+              onClick={() => setShowLargeRemoteQr(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                background: isRemoteConnected ? 'rgba(0,255,0,0.1)' : 'rgba(255,193,7,0.1)',
+                border: isRemoteConnected ? '1px solid #00ff00' : '1px solid #ffc107',
+                padding: '4px 10px',
+                borderRadius: '8px',
+                cursor: 'pointer'
+              }}
+              title="Klikšķini, lai palielinātu vadītāja tālruņa QR kodu"
+            >
+              <img
+                src={hostRemoteQrUrl}
+                alt="Host QR"
+                style={{ width: '40px', height: '40px', borderRadius: '4px', background: '#fff', padding: '2px' }}
+              />
+              <div style={{ textAlign: 'left' }}>
+                <div style={{ fontSize: '0.8rem', color: isRemoteConnected ? '#00ff00' : '#ffc107', fontWeight: 'bold' }}>
+                  {isRemoteConnected ? '🟢 Tālrunis pieslēgts' : '📱 Vadītāja pults'}
+                </div>
+                <div style={{ fontSize: '0.7rem', color: '#aaa' }}>
+                  {isRemoteConnected ? 'Pults aktīva' : 'Skenēt QR [🔍]'}
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Spēlētāju QR kods */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <img
+                src={qrCodeUrl}
+                alt="Player QR"
+                style={{ width: '40px', height: '40px', borderRadius: '4px', cursor: 'pointer', border: '1px solid #fff' }}
+                title="Atvērt spēles saiti"
+                onClick={() => window.open(joinUrl, '_blank')}
+              />
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>Spēlētāju QR</div>
+                <div style={{ fontSize: '0.75rem', color: '#888', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {activeBaseUrl}
+                </div>
               </div>
             </div>
           </div>
@@ -970,6 +1037,34 @@ export default function Host() {
           </div>
         )}
       </div>
+
+      {/* 🌟 PALIELINĀTĀ VADĪTĀJA QR KODA MODĀLAIS LOGS */}
+      {showLargeRemoteQr && (
+        <div
+          style={modalOverlay}
+          onClick={() => setShowLargeRemoteQr(false)}
+        >
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ color: '#00e5ff', margin: '0 0 10px 0' }}>📱 Vadītāja tālruņa pults</h2>
+            <p style={{ color: '#ccc', fontSize: '0.9rem', marginBottom: '15px' }}>
+              Noskenē šo QR kodu ar tālruņa kameru, lai atvērtu vadītāja špikleri un pulti:
+            </p>
+
+            <div style={{ background: '#fff', padding: '12px', borderRadius: '16px', display: 'inline-block' }}>
+              <img src={hostRemoteQrUrl} alt="Lielais QR" style={{ width: '280px', height: '280px', display: 'block' }} />
+            </div>
+
+            <div style={{ marginTop: '15px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <span style={{ fontSize: '0.9rem', color: isRemoteConnected ? '#00ff00' : '#ffc107', fontWeight: 'bold' }}>
+                {isRemoteConnected ? '🟢 Tālrunis ir veiksmīgi pieslēgts!' : '🟡 Gaidām savienojumu ar tālruni...'}
+              </span>
+              <button onClick={() => setShowLargeRemoteQr(false)} style={btnCloseModal}>
+                Aizvērt [✕]
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1200,10 +1295,45 @@ const soundboardContainer: React.CSSProperties = {
 const btnSfx: React.CSSProperties = {
   padding: '6px 12px',
   background: '#2a2a2a',
-  color: '#fff',
+  color: '#00e5ff',
   border: '1px solid #666',
   borderRadius: '6px',
   cursor: 'pointer',
   fontWeight: 'bold',
   fontSize: '0.85rem'
+};
+
+const modalOverlay: React.CSSProperties = {
+  position: 'fixed',
+  top: 0,
+  left: 0,
+  width: '100vw',
+  height: '100vh',
+  background: 'rgba(0,0,0,0.85)',
+  backdropFilter: 'blur(12px)',
+  zIndex: 99999,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center'
+};
+
+const modalCard: React.CSSProperties = {
+  background: '#1a1a1a',
+  border: '2px solid #00e5ff',
+  borderRadius: '20px',
+  padding: '30px',
+  textAlign: 'center',
+  boxShadow: '0 20px 60px rgba(0,0,0,0.95)',
+  maxWidth: '380px'
+};
+
+const btnCloseModal: React.CSSProperties = {
+  padding: '10px 20px',
+  background: '#444',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '8px',
+  fontWeight: 'bold',
+  cursor: 'pointer',
+  marginTop: '6px'
 };

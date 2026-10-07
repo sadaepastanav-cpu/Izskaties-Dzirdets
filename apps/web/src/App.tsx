@@ -4,9 +4,10 @@ import Player from './player';
 import Host from './host';
 import Presentation from './presentation';
 import Studio from './studio';
+import HostRemote from './HostRemote';
 import { BACKEND_URL } from './config';
 
-// Droša servera puses autentifikācijas aizsardzība
+// Droša servera puses autentifikācijas aizsardzība datora panelim
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     return sessionStorage.getItem('isAdminAuthorized') === 'true';
@@ -100,10 +101,17 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Spēlētāju pults */}
         <Route path="/" element={<Player />} />
         <Route path="/player" element={<Player />} />
+
+        {/* Lielā ekrāna TV prezentācija */}
         <Route path="/present/:pin" element={<Presentation />} />
 
+        {/* 📱 Vadītāja tālruņa pults (Host Remote) */}
+        <Route path="/host-remote" element={<HostRemote />} />
+
+        {/* Datora administrācijas paneļi */}
         <Route
           path="/host"
           element={

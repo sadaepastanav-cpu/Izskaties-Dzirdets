@@ -3,6 +3,8 @@ import { socket } from './socket';
 import { useParams } from 'react-router-dom';
 import Timer from './Timer';
 import { BACKEND_URL } from './config';
+import { CanvasElement, BuzzerWinner } from './types';
+import { hexToRgba, getPresentationFontSize, getOptionFontSize, formatThinkingTime } from './utils/formatting';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 
@@ -28,53 +30,6 @@ const getDynamicOrbConfig = (count: number) => {
   if (count <= 150) return { size: 30, numFont: '0.62rem', nameFont: '0.45rem', maxW: 34, gap: 6, showName: true };
   if (count <= 250) return { size: 24, numFont: '0.5rem', nameFont: '0.35rem', maxW: 28, gap: 5, showName: false };
   return { size: 18, numFont: '0.38rem', nameFont: '0.3rem', maxW: 22, gap: 4, showName: false };
-};
-
-const hexToRgba = (hex: string = '#000000', opacityPercent: number = 80) => {
-  let c = hex.replace('#', '');
-  if (c.length === 3) c = c.split('').map((x) => x + x).join('');
-  const num = parseInt(c, 16);
-  const r = (num >> 16) & 255;
-  const g = (num >> 8) & 255;
-  const b = num & 255;
-  return `rgba(${r}, ${g}, ${b}, ${opacityPercent / 100})`;
-};
-
-export const getPresentationFontSize = (fontSize?: number | string): string => {
-  const scaleMultiplier = 1.35;
-  if (typeof fontSize === 'number') {
-    return `${fontSize * scaleMultiplier}vw`;
-  }
-  if (typeof fontSize === 'string') {
-    const num = parseFloat(fontSize);
-    if (!isNaN(num)) {
-      return `${num * scaleMultiplier}vw`;
-    }
-    return fontSize;
-  }
-  return `${2.2 * scaleMultiplier}vw`;
-};
-
-const getOptionFontSize = (text: string = ''): string => {
-  const len = text.trim().length;
-  if (len <= 15) return 'clamp(1.1rem, 1.6vw, 2.0rem)';
-  if (len <= 30) return 'clamp(0.95rem, 1.35vw, 1.7rem)';
-  if (len <= 55) return 'clamp(0.8rem, 1.1vw, 1.4rem)';
-  return 'clamp(0.7rem, 0.95vw, 1.2rem)';
-};
-
-export const formatThinkingTime = (totalMs: number = 0): string => {
-  if (!totalMs || totalMs <= 0) return '0 sek un 000 ms';
-  const ms = Math.floor(totalMs % 1000);
-  const totalSeconds = Math.floor(totalMs / 1000);
-  const seconds = totalSeconds % 60;
-  const minutes = Math.floor(totalSeconds / 60);
-  const msStr = String(ms).padStart(3, '0');
-
-  if (minutes > 0) {
-    return `${minutes} min ${seconds} sek un ${msStr} ms`;
-  }
-  return `${seconds} sek un ${msStr} ms`;
 };
 
 const MediaLayoutItem: React.FC<{
@@ -121,11 +76,10 @@ const MediaLayoutItem: React.FC<{
     }
   }, [shouldPlay, currentSub, isRevealPhase, el.trimStart, el.volume]);
 
-  // 🌫️ DINAMISKĀ BLUR MATEMĀTIKA
+  // Dinamiskā blur matemātika
   const initialBlurAmount = el.blurAmount || 12;
   const [currentBlurPx, setCurrentBlurPx] = useState<number>(() => {
-    if (el.blurMode === 'STATIC') return initialBlurAmount;
-    if (el.blurMode === 'PROGRESSIVE') return initialBlurAmount;
+    if (el.blurMode === 'STATIC' || el.blurMode === 'PROGRESSIVE') return initialBlurAmount;
     return 0;
   });
 
@@ -334,7 +288,6 @@ const TopBar: React.FC<TopBarProps> = ({
   setShowLargeQr
 }) => {
   const votedCount = voteData.votedCount || 0;
-  
   const unvotedPlayers = players.filter(
     (p) => !p.isDisabled && !(voteData.votedPlayerIds || []).includes(p.id)
   );
@@ -355,7 +308,6 @@ const TopBar: React.FC<TopBarProps> = ({
       setCurrentPoints(maxPoints);
       return;
     }
-
     if (isPaused) return;
 
     const interval = setInterval(() => {
@@ -602,8 +554,11 @@ export default function Presentation() {
   const [isMediaReady, setIsMediaReady] = useState(false);
   const [isSessionClosed, setIsSessionClosed] = useState(false);
 
-  // ⚡ 2. FĀZE: ĀTRĀS PULTS STATUSS PREZENTĀCIJĀ
-  const [buzzerWinnerData, setBuzzerWinnerData] = useState<any>(null);
+  // ⏱️ Reāllaika pulksteņa un atpakaļskaitīšanas stāvoklis
+  const [realClockTime, setRealClockTime] = useState('');
+  const [timerRemainingSeconds, setTimerRemainingSeconds] = useState(0);
+
+  const [buzzerWinnerData, setBuzzerWinnerData] = useState<BuzzerWinner | null>(null);
 
   const [branding, setBranding] = useState<any>({
     lobbyMode: 'CIRCLE',
@@ -626,7 +581,37 @@ export default function Presentation() {
     finals: HTMLAudioElement;
   } | null>(null);
 
-  // 🔊 2. FĀZE: WEBAUDIO SINTEZATORS & SKAŅU EFEKTI
+  // ⏱️ Pulksteņa atjaunošana katru sekundi
+  useEffect(() => {
+    const updateClock = () => {
+      const d = new Date();
+      setRealClockTime(d.toTimeString().split(' ')[0]);
+    };
+    updateClock();
+    const interval = setInterval(updateClock, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ⏱️ Atpakaļskaitīšanas taimera atskaite pie TIMER slaida
+  useEffect(() => {
+    if (scene?.type === 'TIMER' && scene.config?.timerType !== 'CLOCK') {
+      const initial = scene.config?.timerDuration || 300;
+      setTimerRemainingSeconds(initial);
+
+      const interval = setInterval(() => {
+        setTimerRemainingSeconds((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(interval);
+    }
+  }, [scene?.id, scene?.type, scene?.config?.timerDuration, scene?.config?.timerType]);
+
   const playSynthesizedSfx = (type: string) => {
     try {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -823,12 +808,10 @@ export default function Presentation() {
       if (data?.correctnessMap) setRevealedCorrectnessMap(data.correctnessMap);
     };
 
-    // 🔊 2. FĀZE: SKAŅU DĒĻA KLAUSĪŠANĀS
     const handlePlaySfx = (data: { sfx: string }) => {
       playSynthesizedSfx(data.sfx);
     };
 
-    // ⚡ 2. FĀZE: ĀTRĀS PULTS PIRMĀ REAKCIJA
     const handleBuzzerRacePress = (data: { winner: any }) => {
       if (data?.winner?.position === 1) {
         setBuzzerWinnerData(data.winner);
@@ -949,7 +932,7 @@ export default function Presentation() {
 
   const isRoundLb = (scene?.config?.lbType || leaderboardType) === 'ROUND';
   const isFinalLb = scene?.type === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
-  const isFullContent = scene?.type === 'BILLBOARD' || scene?.type === 'LEADERBOARD';
+  const isFullContent = scene?.type === 'BILLBOARD' || scene?.type === 'LEADERBOARD' || scene?.type === 'TIMER';
 
   useEffect(() => {
     if (!isMediaReady || !audioBank.current) return;
@@ -1272,6 +1255,9 @@ export default function Presentation() {
   const optCustomColor = scene?.config?.optionsColor || '#ffffff';
   const optCorrectColor = scene?.config?.optionsCorrectColor || '#00ff00';
 
+  const timerMin = Math.floor(timerRemainingSeconds / 60);
+  const timerSec = String(timerRemainingSeconds % 60).padStart(2, '0');
+
   return (
     <div style={containerStyle}>
       <style>{`
@@ -1290,6 +1276,26 @@ export default function Presentation() {
           }
         }
       `}</style>
+
+      {/* ⏱️ TAIMERA SLAIDA VIDEO FONS */}
+      {scene?.type === 'TIMER' && scene.config?.timerBgVideo && (
+        <video
+          src={`${MEDIA_BASE_URL}/${scene.config.timerBgVideo}`}
+          autoPlay
+          loop={scene.config.timerBgVideoLoop !== false}
+          muted
+          playsInline
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            zIndex: 1
+          }}
+        />
+      )}
 
       {!isFullContent && (
         <TopBar
@@ -1337,7 +1343,55 @@ export default function Presentation() {
           />
         ))}
 
-        {/* ⚡ 2. FĀZE: ĀTRĀS PULTS (BUZZER RACE) TV SKATS */}
+        {/* ⏱️ TAIMERA / PULKSTEŅA EKRĀNS */}
+        {scene?.type === 'TIMER' && (
+          <div
+            style={{
+              position: 'absolute',
+              left: scene.config?.timerPlacement === 'TOP_RIGHT' ? 'auto' : '50%',
+              right: scene.config?.timerPlacement === 'TOP_RIGHT' ? '50px' : 'auto',
+              top: scene.config?.timerPlacement === 'TOP_RIGHT' ? '40px' : '50%',
+              transform: scene.config?.timerPlacement === 'TOP_RIGHT' ? 'none' : 'translate(-50%, -50%)',
+              background: 'rgba(10, 10, 10, 0.88)',
+              border: '4px solid #ffc107',
+              borderRadius: '28px',
+              padding: scene.config?.timerPlacement === 'TOP_RIGHT' ? '20px 35px' : '40px 90px',
+              textAlign: 'center',
+              boxShadow: '0 20px 80px rgba(0,0,0,0.9), 0 0 50px rgba(255, 193, 7, 0.4)',
+              backdropFilter: 'blur(16px)',
+              zIndex: 30
+            }}
+          >
+            {scene.config?.timerLabel && (
+              <div
+                style={{
+                  fontSize: scene.config?.timerPlacement === 'TOP_RIGHT' ? '1.4vw' : '2.2vw',
+                  color: '#00e5ff',
+                  fontWeight: 'bold',
+                  marginBottom: '10px',
+                  letterSpacing: '1px',
+                  textShadow: '0 2px 10px #000'
+                }}
+              >
+                {scene.config.timerLabel}
+              </div>
+            )}
+            <div
+              style={{
+                fontSize: scene.config?.timerPlacement === 'TOP_RIGHT' ? '3.8vw' : '7.5vw',
+                fontWeight: '900',
+                color: '#ffc107',
+                letterSpacing: '4px',
+                lineHeight: 1,
+                textShadow: '0 0 35px gold, 0 4px 15px #000'
+              }}
+            >
+              {scene.config?.timerType === 'CLOCK' ? realClockTime : `${timerMin}:${timerSec}`}
+            </div>
+          </div>
+        )}
+
+        {/* ⚡ ĀTRĀS PULTS (BUZZER RACE) TV SKATS */}
         {scene?.type === 'BUZZER_RACE' && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
             {buzzerWinnerData ? (
@@ -1376,7 +1430,7 @@ export default function Presentation() {
           </div>
         )}
 
-        {/* 🔢 2. FĀZE: SECĪBAS KĀRTOŠANAS ATKLĀŠANA (ORDERING) */}
+        {/* 🔢 SECĪBAS KĀRTOŠANAS ATKLĀŠANA (ORDERING) */}
         {scene?.type === 'ORDERING' && (
           <div style={{ position: 'absolute', bottom: '35px', width: '85%', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 10 }}>
             {optionsList.map((item: string, idx: number) => {
@@ -1403,7 +1457,7 @@ export default function Presentation() {
         )}
 
         {/* ATBILŽU VARIANTU IZKĀRTOJUMS */}
-        {shouldShowOptions && scene?.type !== 'ORDERING' && scene?.type !== 'BUZZER_RACE' && (
+        {shouldShowOptions && scene?.type !== 'ORDERING' && scene?.type !== 'BUZZER_RACE' && scene?.type !== 'TIMER' && (
           optLayout === 'INDIVIDUAL' ? (
             optionsList.map((opt: string, i: number) => {
               const pos = optPositions[i] || optPositions[opt] || {
@@ -1589,7 +1643,7 @@ export default function Presentation() {
                 bottom: '30px',
                 width: '85%',
                 display: 'grid',
-                gridTemplateColumns: optionsList.length > 4 ? '1fr 1fr' : '1fr 1fr',
+                gridTemplateColumns: '1fr 1fr',
                 gap: '15px',
                 zIndex: 10
               }}

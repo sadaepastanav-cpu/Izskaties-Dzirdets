@@ -20,12 +20,28 @@ export interface CanvasElement {
   visibility?: 'ALWAYS' | 'DURING_QUESTION' | 'UNTIL_REVEAL' | 'AFTER_REVEAL';
   blurMode?: 'NONE' | 'STATIC' | 'PROGRESSIVE';
   blurAmount?: number;
+  loop?: boolean;
+}
+
+export interface DiplomaConfig {
+  theme?: 'GOLD_DARK' | 'GOLD_WHITE_PRINT' | 'CUSTOM';
+  bgColor?: string;
+  bgImage?: string;
+  borderColor?: string;
+  titleColor?: string;
+  winnerColor?: string;
+  customTitle?: string;
+  customSubtitle?: string;
+  showLogo?: boolean;
+  logoPosition?: 'TOP' | 'CENTER' | 'BOTTOM';
+  footerText?: string;
+  inkSaverMode?: boolean;
 }
 
 export interface Slide {
   id: string;
   title: string;
-  type: 'QUESTION' | 'BILLBOARD' | 'LEADERBOARD' | 'MAJORITY' | 'ORDERING' | 'BUZZER_RACE';
+  type: 'QUESTION' | 'BILLBOARD' | 'LEADERBOARD' | 'MAJORITY' | 'ORDERING' | 'BUZZER_RACE' | 'TIMER';
   config: {
     duration: number;
     points: number;
@@ -58,6 +74,16 @@ export interface Slide {
     backgroundUrl?: string;
     lbType?: 'ROUND' | 'TOTAL' | 'FINAL';
     layout: CanvasElement[];
+    playerUIMode?: 'AUTO' | 'CLASSIC_GRID' | 'TEXT_CARDS' | 'MUSIC_DUAL';
+    musicCategoryTop?: string;
+    musicCategoryBottom?: string;
+    // ⏱️ Jaunā TAIMERA slaida iestatījumi:
+    timerType?: 'COUNTDOWN' | 'CLOCK';
+    timerPlacement?: 'CENTER' | 'TOP_RIGHT';
+    timerLabel?: string;
+    timerDuration?: number; // Sekundēs (piem., 300 = 5 minūtes)
+    timerBgVideo?: string;
+    timerBgVideoLoop?: boolean;
   };
 }
 
@@ -74,6 +100,10 @@ export interface MobileBranding {
   teamScoringMode?: 'AVG' | 'SUM';
   predefinedTeams?: string[];
   maxMissedQuestions?: number;
+  // 🌟 Spēles logo pozīcija un diplomu dizains:
+  gameLogoPosition?: 'NONE' | 'TOP' | 'BOTTOM';
+  diplomaConfig?: DiplomaConfig;
+  hostName?: string;
 }
 
 export interface BuzzerWinner {
@@ -84,4 +114,11 @@ export interface BuzzerWinner {
   teamName?: string;
   timeSpentMs: number;
   status?: 'ACTIVE' | 'PASSED' | 'AWARDED' | 'FAILED';
+}
+
+export interface VoteAnswerDetail {
+  optionId: string;
+  timeReceived: number;
+  timeSpentMs: number;
+  category?: 'TOP' | 'BOTTOM' | 'SINGLE';
 }
