@@ -34,35 +34,52 @@ export default function HostRemote() {
     let wakeLock: any = null;
     const requestLock = async () => {
       if ('wakeLock' in navigator && (navigator as any).wakeLock) {
-        try { wakeLock = await (navigator as any).wakeLock.request('screen'); } catch {}
+        try { 
+          wakeLock = await (navigator as any).wakeLock.request('screen'); 
+        } catch {}
       }
     };
     requestLock();
-    return () => { if (wakeLock) wakeLock.release().catch(() => {}); };
+    return () => { 
+      if (wakeLock) wakeLock.release().catch(() => {}); 
+    };
   }, []);
 
-  // 2. Haptiskā vibrācija pie fāžu maiņas [C punkts]
+  // 2. Haptiskā vibrācija pie fāžu maiņas
   useEffect(() => {
     const curSub = gameState?.subState;
     if (curSub && curSub !== prevSubStateRef.current) {
-      if (curSub === 'ACTIVE') {
-        try { if ('vibrate' in navigator) navigator.vibrate(60); } catch {}
-      } else if (curSub === 'STATS') {
-        try { if ('vibrate' in navigator) navigator.vibrate([80, 60, 80]); } catch {}
-      } else if (curSub === 'REVEAL') {
-        try { if ('vibrate' in navigator) navigator.vibrate([100, 50, 100, 50, 150]); } catch {}
+      if ('vibrate' in navigator) {
+        try {
+          if (curSub === 'ACTIVE') {
+            navigator.vibrate(60);
+          } else if (curSub === 'STATS') {
+            navigator.vibrate([80, 60, 80]);
+          } else if (curSub === 'REVEAL') {
+            navigator.vibrate([100, 50, 100, 50, 150]);
+          }
+        } catch {}
       }
       prevSubStateRef.current = curSub;
     }
   }, [gameState?.subState]);
 
+  // 3. Socket inicializēšana vienu reizi
   useEffect(() => {
     const s = io(BACKEND_URL, { reconnection: true });
     setSocket(s);
 
     s.on('connect', () => {
-      if (pin && hostToken) {
-        s.emit('host:join-remote', { pin: pin.trim(), hostToken: hostToken.trim(), hostName: hostName.trim() });
+      const initialPin = params.get('pin') || localStorage.getItem('host_remote_pin');
+      const initialToken = params.get('token') || localStorage.getItem('host_remote_token');
+      const initialName = localStorage.getItem('host_name') || '';
+
+      if (initialPin && initialToken) {
+        s.emit('host:join-remote', { 
+          pin: initialPin.trim(), 
+          hostToken: initialToken.trim(), 
+          hostName: initialName.trim() 
+        });
       }
     });
 
@@ -85,8 +102,10 @@ export default function HostRemote() {
       setIsAuthorized(false);
     });
 
-    return () => { s.disconnect(); };
-  }, [pin, hostToken]);
+    return () => { 
+      s.disconnect(); 
+    };
+  }, []);
 
   const handleConnect = (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,19 +126,25 @@ export default function HostRemote() {
 
   // Vadības komandas
   const handleAdvance = () => {
-    if (gameState?.subState === 'ACTIVE') return; // Bloķēts, kamēr rit laiks!
-    try { if ('vibrate' in navigator) navigator.vibrate(50); } catch {}
+    if (gameState?.subState === 'ACTIVE') return;
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate(50); } catch {}
+    }
     socket?.emit('host:advance', { pin, hostToken, force: true });
   };
 
   const handleBacktrack = () => {
     if (!window.confirm('Vai tiešām vēlies spert soli atpakaļ?')) return;
-    try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate(80); } catch {}
+    }
     socket?.emit('host:backtrack', { pin, hostToken });
   };
 
   const handleTogglePause = () => {
-    try { if ('vibrate' in navigator) navigator.vibrate(40); } catch {}
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate(40); } catch {}
+    }
     if (gameState?.subState === 'PAUSED') {
       socket?.emit('host:resume-session', { pin, hostToken });
     } else {
@@ -129,23 +154,31 @@ export default function HostRemote() {
 
   const handleRestartScene = () => {
     if (!window.confirm('Restartēt šo jautājumu no jauna?')) return;
-    try { if ('vibrate' in navigator) navigator.vibrate(100); } catch {}
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate(100); } catch {}
+    }
     socket?.emit('host:restart-scene', { pin, hostToken });
   };
 
   const handleToggleStageQr = () => {
-    try { if ('vibrate' in navigator) navigator.vibrate(35); } catch {}
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate(35); } catch {}
+    }
     socket?.emit('host:toggle-qr-zoom', { pin, hostToken });
   };
 
   const handleJumpToScene = (sceneIndex: number) => {
-    try { if ('vibrate' in navigator) navigator.vibrate(70); } catch {}
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate(70); } catch {}
+    }
     socket?.emit('host:jump-to-scene', { pin, hostToken, sceneIndex });
     setActiveTab('REMOTE');
   };
 
   const handlePlaySfx = (sfx: string) => {
-    try { if ('vibrate' in navigator) navigator.vibrate(30); } catch {}
+    if ('vibrate' in navigator) {
+      try { navigator.vibrate(30); } catch {}
+    }
     socket?.emit('host:play-sfx', { pin, hostToken, sfx });
   };
 
@@ -191,7 +224,6 @@ export default function HostRemote() {
   const notes = config.notes || '';
   const isTimeActive = subState === 'ACTIVE';
 
-  // Slaidu saraksta meklētājs [E punkts]
   const filteredScenes = (gameState?.allScenes || []).filter((sc) =>
     sc.title.toLowerCase().includes(slideSearchQuery.toLowerCase()) ||
     (sc.question && sc.question.toLowerCase().includes(slideSearchQuery.toLowerCase()))
@@ -221,7 +253,7 @@ export default function HostRemote() {
         </div>
       </div>
 
-      {/* 2. CILNE: SLAIDU SARAKSTS AR MEKLĒTĀJU & TIEŠO LĒKŠANU */}
+      {/* 2. CILNE: SLAIDU SARAKSTS AR MEKLĒTĀJU */}
       {activeTab === 'SLIDES' ? (
         <div style={{ flex: 1, padding: '12px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <input
@@ -266,10 +298,8 @@ export default function HostRemote() {
           </div>
         </div>
       ) : (
-        /* 3. CILNE: GALVENĀ VADĪBAS PULTS AR ŠPIKERI */
+        /* 3. CILNE: GALVENĀ VADĪBAS PULTS */
         <div style={{ flex: 1, padding: '10px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          
-          {/* Host Vārda atgādinājums */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#181818', padding: '4px 8px', borderRadius: '6px' }}>
             <span style={{ fontSize: '0.75rem', color: '#888' }}>Vadītājs:</span>
             <input
@@ -280,7 +310,6 @@ export default function HostRemote() {
             />
           </div>
 
-          {/* Pašreizējais slaids */}
           <div style={sectionBox}>
             <div style={{ fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold' }}>
               📋 PAŠREIZĒJAIS SLAIDS:
@@ -295,11 +324,10 @@ export default function HostRemote() {
             )}
           </div>
 
-          {/* 🌟 PAREIZĀ ATBILDE (ŠPIKERIS) */}
           {correctAnswers.length > 0 && (
             <div style={{ ...sectionBox, border: '2px solid #00ff00', background: 'rgba(0, 255, 0, 0.08)' }}>
               <div style={{ fontSize: '0.75rem', color: '#00ff00', fontWeight: 'bold' }}>
-                ✅ PAREIZĀ ATBILDE:
+                ✅ PAREIZĀ ATBILDE (ŠPIKERIS):
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: '900', color: '#00ff00', marginTop: '2px' }}>
                 {correctAnswers.join(' | ')}
@@ -307,7 +335,6 @@ export default function HostRemote() {
             </div>
           )}
 
-          {/* 📝 PIEZĪMES VADĪTĀJAM (HOST NOTES) */}
           {notes && (
             <div style={{ ...sectionBox, border: '1px solid #ffc107', background: 'rgba(255, 193, 7, 0.08)' }}>
               <div style={{ fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold' }}>
@@ -319,12 +346,10 @@ export default function HostRemote() {
             </div>
           )}
 
-          {/* Nākamais slaids */}
           <div style={{ fontSize: '0.75rem', color: '#888', textAlign: 'center' }}>
             🔜 Nākamais: <strong style={{ color: '#aaa' }}>{gameState?.nextSceneTitle}</strong>
           </div>
 
-          {/* 🔊 ĀTRAIS SKAŅU DĒLIS */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '4px' }}>
             <button onClick={() => handlePlaySfx('correct')} style={btnSfx}>🔔 Pareizi</button>
             <button onClick={() => handlePlaySfx('wrong')} style={btnSfx}>❌ Kļūda</button>
@@ -332,7 +357,6 @@ export default function HostRemote() {
             <button onClick={() => handlePlaySfx('suspense')} style={btnSfx}>🥁 Spriedze</button>
           </div>
 
-          {/* Avārijas pogas */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
             <button onClick={handleBacktrack} style={btnSecondary}>↩️ Atpakaļ</button>
             <button onClick={handleTogglePause} style={{ ...btnSecondary, color: '#ff9800' }}>
@@ -343,7 +367,7 @@ export default function HostRemote() {
         </div>
       )}
 
-      {/* 🚀 MILZĪGĀ SPACE / TĀLĀK POGA AR LIVE SKAITĪTĀJU [B punkts] */}
+      {/* 🚀 MILZĪGĀ SPACE / TĀLĀK POGA AR LIVE SKAITĪTĀJU */}
       <div style={{ padding: '10px 12px', background: '#181818', borderTop: '1px solid #333' }}>
         <button
           onClick={handleAdvance}
@@ -356,7 +380,8 @@ export default function HostRemote() {
               : subState === 'PAUSED'
               ? '#ff9800'
               : 'linear-gradient(135deg, #28a745, #20c997)',
-            cursor: isTimeActive ? 'not-allowed' : 'pointer'
+            cursor: isTimeActive ? 'not-allowed' : 'pointer',
+            touchAction: 'manipulation'
           }}
         >
           {isTimeActive ? (
@@ -367,7 +392,6 @@ export default function HostRemote() {
             <span>SPACE / TĀLĀK 🚀</span>
           )}
 
-          {/* Live balsošanas progress uz pogas */}
           {gameState && (
             <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '2px', opacity: 0.9 }}>
               [ {gameState.votedCount} / {gameState.totalParticipantsCount} nobalsojuši ]

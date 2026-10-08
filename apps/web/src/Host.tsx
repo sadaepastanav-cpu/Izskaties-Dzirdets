@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { socket } from './socket';
 import { BACKEND_URL, getAdminHeaders, getAdminKey } from './config';
 
@@ -48,7 +48,7 @@ export default function Host() {
   const [customTunnelUrl, setCustomTunnelUrl] = useState<string>('');
   const [isTunnelAutoDetected, setIsTunnelAutoDetected] = useState(false);
 
-  const lastSpacePress = React.useRef<number>(0);
+  const lastSpacePress = useRef<number>(0);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -91,7 +91,6 @@ export default function Host() {
     };
   }, []);
 
-  // 🌟 AKTĪVĀ BĀZES ADRESE (5173. ports vai Cloudflare tunelis)
   const activeBaseUrl =
     connectionMode === 'TUNNEL' && customTunnelUrl.trim() !== ''
       ? (customTunnelUrl.trim().startsWith('http') ? customTunnelUrl.trim() : `https://${customTunnelUrl.trim()}`).replace(/\/$/, '')
@@ -283,7 +282,6 @@ export default function Host() {
     }
   };
 
-  // 🏆 DIPLOMU DRUKA (Ar pielāgoto Studijas dizainu & Ink-Saver režīmu)
   const handlePrintDiplomas = () => {
     const isTeam = !!branding?.teamModeEnabled;
     const sorted = isTeam
@@ -322,7 +320,7 @@ export default function Host() {
           ${top3.map((p, idx) => `
             <div class="diploma">
               <h1>${escapeHtml(dCfg.customTitle || '🏆 DIPLOMS 🏆')}</h1>
-              <h2>${escapeHtml(dCfg.customSubtitle || `Par iegūto ${idx + 1}. vietu spēlē`)}</h2>
+              <h2>${escapeHtml(dCfg.customSubtitle || (idx === 0 ? 'Par iegūto 1. vietu (Absolūtais čempions)' : idx === 1 ? 'Par iegūto 2. vietu (Vicečempions)' : 'Par iegūto 3. vietu (Bronzas goda vieta)'))}</h2>
               <div class="winner">${escapeHtml(p.name)} ${isTeam ? `(${p.memberCount || ''} dalībnieki)` : (p.teamName ? `[${escapeHtml(p.teamName)}]` : '')}</div>
               <div class="score">Iegūtie punkti: <strong>${Number(p.score || 0)} pt</strong></div>
               <div class="footer">${escapeHtml(dCfg.footerText || 'Event Studio')} • Spēles PIN: ${escapeHtml(pin || '')} • ${new Date().toLocaleDateString('lv-LV')}</div>
@@ -360,6 +358,14 @@ export default function Host() {
   const updatePlayer = (playerId: string, updates: any) => {
     if (!pin || !hostToken) return;
     socket.emit('host:update-player', { pin, hostToken, playerId, ...updates });
+  };
+
+  // 🌟 PĀRSLĒGT PREZENTĀCIJAS TĒMU TIEŠI NO VADĪTĀJA PULTS
+  const handleLiveThemeChange = (newTheme: string) => {
+    setBranding((prev: any) => ({ ...prev, presentationTheme: newTheme }));
+    if (pin) {
+      socket.emit('theme-changed', newTheme);
+    }
   };
 
   useEffect(() => {
@@ -423,7 +429,7 @@ export default function Host() {
       if (e.code === 'Space' && pin && hostToken) {
         e.preventDefault();
         const now = Date.now();
-        if (now - lastSpacePress.current < 350) return;
+        if (now - lastSpacePress.current < 250) return;
         lastSpacePress.current = now;
 
         if (currentScene?.subState === 'ACTIVE') return;
@@ -464,11 +470,9 @@ export default function Host() {
   const isTeamMode = !!branding?.teamModeEnabled;
   const isFinalLb = currentScene?.type === 'LEADERBOARD' && currentScene?.config?.lbType === 'FINAL';
 
-  // 1. Spēlētāju pieslēgšanās saite & QR
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
 
-  // 2. 📱 VADĪTĀJA TĀLRUŅA PULTS SAITE (Vite 5173 / Tunelis)
   const hostRemoteUrl = pin && hostToken
     ? `${activeBaseUrl}/host-remote?pin=${pin}&token=${hostToken}`
     : '';
@@ -631,6 +635,27 @@ export default function Host() {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* 🌟 ĀTRĀ TV TĒMAS MAIŅA NO VADĪTĀJA PULTS */}
+          <select
+            value={branding?.presentationTheme || 'TV_SHOW'}
+            onChange={(e) => handleLiveThemeChange(e.target.value)}
+            style={{
+              background: '#1a1a2e',
+              color: '#ffd700',
+              border: '2px solid #ffd700',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              fontWeight: 'bold',
+              cursor: 'pointer'
+            }}
+            title="Pārslēgt TV ekrāna stilu reāllaikā"
+          >
+            <option value="TV_SHOW">👑 TV Show</option>
+            <option value="ARENA">⚡ Arena</option>
+            <option value="MINIMAL">🍏 Minimal</option>
+            <option value="NEON">🔮 Neon</option>
+          </select>
+
           <button
             onClick={handleBacktrack}
             style={{ ...btnGray, background: '#ff9800', color: '#000', fontWeight: 'bold' }}
@@ -726,7 +751,7 @@ export default function Host() {
 
       {/* ⚡ ĀTRĀS PULTS REĀLLAIKA PUNKTI */}
       {currentScene?.type === 'BUZZER_RACE' && buzzerRaceWinner && (
-        <div style={{ background: '#261c02', border: '3px solid #ffc107', padding: '15px', borderRadius: '10px', textAlign: 'center', marginBottom: '15px', animation: 'pulse 1s infinite' }}>
+        <div style={{ background: '#261c02', border: '3px solid #ffc107', padding: '15px', borderRadius: '10px', textAlign: 'center', marginBottom: '15px' }}>
           <h2 style={{ color: '#ffc107', margin: '0 0 6px 0' }}>🚨 ĀTRĀKĀ PULTS: #{buzzerRaceWinner.deviceNumber} {buzzerRaceWinner.name} {buzzerRaceWinner.teamName && `[${buzzerRaceWinner.teamName}]`}</h2>
           <div style={{ fontSize: '1.1rem', color: '#00e5ff', marginBottom: '10px' }}>⏱️ Reakcijas laiks: {formatThinkingTime(buzzerRaceWinner.timeSpentMs)}</div>
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
@@ -783,15 +808,16 @@ export default function Host() {
         </div>
       )}
 
+      {/* 🌟 FINĀLA APBALVOŠANA (VIENSKAITLIS: VICEČEMPIONS / ABSOLŪTAIS ČEMPIONS) */}
       {isFinalLb && (
         <div style={{ background: '#1c3d1c', border: '2px solid #28a745', padding: '15px', borderRadius: '8px', textAlign: 'center', marginBottom: '20px' }}>
           <h3 style={{ margin: '0 0 8px 0', color: '#00ff00' }}>🥇 FINĀLA APBALVOŠANA NORIT</h3>
           <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>
             Pašreizējais solis: {podiumStage === 0 && 'Gatavībā'}
-            {podiumStage === 1 && '🥉 3. vieta parādīta'}
-            {podiumStage === 2 && '🥈 2. vieta parādīta'}
-            {podiumStage === 3 && '👑 1. VIETA PARĀDĪTA (Uzvarētājs)'}
-            {podiumStage >= 4 && '📋 Pilnais saraksts'}
+            {podiumStage === 1 && '🥉 3. vieta: BRONZAS GODA VIETA'}
+            {podiumStage === 2 && '🥈 2. vieta: VICEČEMPIONS'}
+            {podiumStage === 3 && '👑 1. VIETA: ABSOLŪTAIS ČEMPIONS'}
+            {podiumStage >= 4 && '📋 Pilnais saraksts no 4. vietas'}
           </div>
         </div>
       )}
@@ -850,9 +876,7 @@ export default function Host() {
             )}
           </div>
 
-          {/* 🌟 SPĒLĒTĀJU QR & 📱 VADĪTĀJA PULTS QR KODS */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-            {/* 1. Vadītāja tālruņa QR kods (Uzklikšķinot atveras liels) */}
             <div
               onClick={() => setShowLargeRemoteQr(true)}
               style={{
@@ -882,7 +906,6 @@ export default function Host() {
               </div>
             </div>
 
-            {/* 2. Spēlētāju QR kods */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <img
                 src={qrCodeUrl}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, memo } from 'react';
 import { socket } from './socket';
 import { useParams } from 'react-router-dom';
 import Timer from './Timer';
@@ -8,6 +8,8 @@ import { hexToRgba, getPresentationFontSize, getOptionFontSize, formatThinkingTi
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 
+export type PresentationTheme = 'NEON' | 'TV_SHOW' | 'ARENA' | 'MINIMAL';
+
 const NEON_PALETTE = [
   { base: '#00f0ff', glow: '#00f0ff', dark: '#00838f', text: '#000' },
   { base: '#ff007f', glow: '#ff007f', dark: '#99004d', text: '#fff' },
@@ -16,9 +18,7 @@ const NEON_PALETTE = [
   { base: '#b537f2', glow: '#b537f2', dark: '#6a1b9a', text: '#fff' },
   { base: '#ff6b35', glow: '#ff6b35', dark: '#c43d0e', text: '#fff' },
   { base: '#00e5ff', glow: '#00e5ff', dark: '#0097a7', text: '#000' },
-  { base: '#f72585', glow: '#f72585', dark: '#7209b7', text: '#fff' },
-  { base: '#76ff03', glow: '#76ff03', dark: '#388e3c', text: '#000' },
-  { base: '#ff9100', glow: '#ff9100', dark: '#b26500', text: '#000' }
+  { base: '#f72585', glow: '#f72585', dark: '#7209b7', text: '#fff' }
 ];
 
 const getDynamicOrbConfig = (count: number) => {
@@ -32,7 +32,7 @@ const getDynamicOrbConfig = (count: number) => {
   return { size: 18, numFont: '0.38rem', nameFont: '0.3rem', maxW: 22, gap: 4, showName: false };
 };
 
-// 🌟 GLOBĀLS AUDIOCONTEXT SINGLETONS (Novērš AudioContext atmiņas noplūdi)
+// 🌟 GLOBĀLS AUDIOCONTEXT SINGLETONS
 let sharedAudioCtx: AudioContext | null = null;
 const getSharedAudioContext = (): AudioContext | null => {
   if (!sharedAudioCtx) {
@@ -46,6 +46,221 @@ const getSharedAudioContext = (): AudioContext | null => {
   }
   return sharedAudioCtx;
 };
+
+// ⏱️ REĀLLAIKA PULKSTENIS
+const ClockDisplay: React.FC = memo(() => {
+  const [timeStr, setTimeStr] = useState<string>(() => new Date().toTimeString().split(' ')[0]);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimeStr(new Date().toTimeString().split(' ')[0]);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+  return <span>{timeStr}</span>;
+});
+
+// ⏳ TAIMERA SKAITĪTĀJS
+const CountdownDisplay: React.FC<{ durationSeconds: number }> = memo(({ durationSeconds }) => {
+  const [remaining, setRemaining] = useState<number>(durationSeconds);
+  useEffect(() => {
+    setRemaining(durationSeconds);
+    const interval = setInterval(() => {
+      setRemaining((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [durationSeconds]);
+  const min = Math.floor(remaining / 60);
+  const sec = String(remaining % 60).padStart(2, '0');
+  return <span>{min}:{sec}</span>;
+});
+
+// 🌟 ZELTA KONFETI UN DZIRKSTEĻU DZINĒJS (Čempionam)
+const ConfettiCanvas: React.FC<{ active: boolean }> = memo(({ active }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const particles: Array<{
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      vy: number;
+      vx: number;
+      color: string;
+      rotation: number;
+      rotSpeed: number;
+    }> = [];
+
+    const colors = ['#ffd700', '#fff', '#ffea75', '#ff9800', '#f6e05e', '#d69e2e'];
+    for (let i = 0; i < 140; i++) {
+      particles.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * -canvas.height,
+        w: Math.random() * 12 + 6,
+        h: Math.random() * 8 + 4,
+        vy: Math.random() * 4 + 2.5,
+        vx: (Math.random() - 0.5) * 3,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        rotation: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 0.1
+      });
+    }
+
+    let animId: number;
+    const render = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particles.forEach((p) => {
+        p.y += p.vy;
+        p.x += p.vx;
+        p.rotation += p.rotSpeed;
+
+        if (p.y > canvas.height) {
+          p.y = -20;
+          p.x = Math.random() * canvas.width;
+        }
+
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rotation);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.restore();
+      });
+      animId = requestAnimationFrame(render);
+    };
+
+    render();
+    return () => cancelAnimationFrame(animId);
+  }, [active]);
+
+  if (!active) return null;
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        zIndex: 50
+      }}
+    />
+  );
+});
+
+// 🌟 SKATUVES PROŽEKTORU STARI (Fonam)
+const SpotlightBeams: React.FC = memo(() => {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        pointerEvents: 'none',
+        zIndex: 2
+      }}
+    >
+      <div className="spotlight-beam-left" />
+      <div className="spotlight-beam-right" />
+    </div>
+  );
+});
+
+// 🌟 CIRKULĀRAIS TAIMERIS (MINIMAL tēmai)
+const CircularTimer: React.FC<{
+  remainingSec: number;
+  totalSec: number;
+  isPaused: boolean;
+}> = memo(({ remainingSec, totalSec, isPaused }) => {
+  const radius = 28;
+  const circumference = 2 * Math.PI * radius;
+  const progress = totalSec > 0 ? remainingSec / totalSec : 1;
+  const strokeDashoffset = circumference * (1 - progress);
+  const isCritical = remainingSec <= 5 && !isPaused;
+
+  return (
+    <div style={{ position: 'relative', width: '70px', height: '70px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <svg width="70" height="70" style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx="35" cy="35" r={radius} stroke="rgba(255,255,255,0.15)" strokeWidth="5" fill="none" />
+        <circle
+          cx="35"
+          cy="35"
+          r={radius}
+          stroke={isCritical ? '#ff3b30' : '#ffffff'}
+          strokeWidth="5"
+          fill="none"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          style={{ transition: 'stroke-dashoffset 0.2s linear, stroke 0.3s ease' }}
+        />
+      </svg>
+      <div
+        style={{
+          position: 'absolute',
+          fontWeight: '900',
+          fontSize: '1.25rem',
+          color: isCritical ? '#ff3b30' : '#fff'
+        }}
+      >
+        {remainingSec}
+      </div>
+    </div>
+  );
+});
+
+// 🌟 DINAMISKĀ LAIKA PROGRESA JOSLA EKRĀNA AUGŠĀ
+const TopTimeProgressBar: React.FC<{
+  remainingSec: number;
+  totalSec: number;
+  isPaused: boolean;
+  isActive: boolean;
+}> = memo(({ remainingSec, totalSec, isPaused, isActive }) => {
+  if (!isActive || totalSec <= 0) return null;
+  const pct = Math.max(0, Math.min(100, (remainingSec / totalSec) * 100));
+  const isDanger = remainingSec <= 5 && !isPaused;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: isDanger ? '7px' : '4px',
+        background: 'rgba(0,0,0,0.5)',
+        zIndex: 9999,
+        transition: 'height 0.3s ease'
+      }}
+    >
+      <div
+        style={{
+          width: `${pct}%`,
+          height: '100%',
+          background: isDanger
+            ? 'linear-gradient(90deg, #ff0055, #ff3b30)'
+            : 'linear-gradient(90deg, #00e5ff, #00ff66)',
+          boxShadow: isDanger ? '0 0 15px #ff3b30, 0 0 30px #ff3b30' : '0 0 10px #00e5ff',
+          transition: 'width 0.15s linear, background 0.3s ease'
+        }}
+      />
+    </div>
+  );
+});
 
 const MediaLayoutItem: React.FC<{
   el: any;
@@ -77,7 +292,9 @@ const MediaLayoutItem: React.FC<{
   useEffect(() => {
     const m = mediaRef.current;
     if (!m) return;
-    m.volume = (el.volume !== undefined ? el.volume : 100) / 100;
+    try {
+      m.volume = Math.max(0, Math.min(1, (el.volume !== undefined ? el.volume : 100) / 100));
+    } catch {}
 
     if (shouldPlay) {
       if (m.paused) {
@@ -91,7 +308,6 @@ const MediaLayoutItem: React.FC<{
     }
   }, [shouldPlay, currentSub, isRevealPhase, el.trimStart, el.volume]);
 
-  // Dinamiskā blur matemātika
   const initialBlurAmount = el.blurAmount || 12;
   const [currentBlurPx, setCurrentBlurPx] = useState<number>(() => {
     if (el.blurMode === 'STATIC' || el.blurMode === 'PROGRESSIVE') return initialBlurAmount;
@@ -103,30 +319,24 @@ const MediaLayoutItem: React.FC<{
       setCurrentBlurPx(0);
       return;
     }
-
     if (el.blurMode === 'STATIC') {
       setCurrentBlurPx(initialBlurAmount);
       return;
     }
-
     if (el.blurMode === 'PROGRESSIVE') {
       if (isRevealPhase || ['STATS', 'SUMMARY', 'REVEAL'].includes(currentSub)) {
         setCurrentBlurPx(0);
         return;
       }
-
       if (currentSub !== 'ACTIVE') {
         setCurrentBlurPx(initialBlurAmount);
         return;
       }
-
       const totalMs = Math.max(1000, sceneDuration * 1000);
       const clearAtMsRemaining = 2000;
-
       const updateProgressiveBlur = () => {
         const now = Date.now();
         const leftMs = Math.max(0, (endTime || now + totalMs) - now);
-
         if (leftMs <= clearAtMsRemaining) {
           setCurrentBlurPx(0);
         } else {
@@ -136,7 +346,6 @@ const MediaLayoutItem: React.FC<{
           setCurrentBlurPx(Math.round(ratio * initialBlurAmount));
         }
       };
-
       updateProgressiveBlur();
       const interval = setInterval(updateProgressiveBlur, 100);
       return () => clearInterval(interval);
@@ -173,9 +382,9 @@ const MediaLayoutItem: React.FC<{
         style={{
           ...style,
           background: bgRgba,
-          padding: el.type === 'QUESTION' ? '15px 25px' : '10px',
-          borderRadius: el.type === 'QUESTION' ? '20px' : '8px',
-          backdropFilter: 'blur(14px)',
+          padding: el.type === 'QUESTION' ? '16px 28px' : '10px',
+          borderRadius: el.type === 'QUESTION' ? '22px' : '8px',
+          backdropFilter: 'blur(16px)',
           border: 'none',
           textShadow: '0 2px 10px #000',
           boxShadow: '0 8px 32px rgba(0,0,0,0.8)'
@@ -193,7 +402,7 @@ const MediaLayoutItem: React.FC<{
         style={{
           ...style,
           objectFit: 'contain',
-          borderRadius: '15px',
+          borderRadius: '16px',
           display: isVisible ? 'block' : 'none',
           border: 'none',
           filter: filterStyle,
@@ -213,7 +422,7 @@ const MediaLayoutItem: React.FC<{
         style={{
           ...style,
           objectFit: 'contain',
-          borderRadius: '15px',
+          borderRadius: '16px',
           display: isVisible ? 'block' : 'none',
           border: 'none',
           filter: filterStyle,
@@ -269,6 +478,7 @@ const MediaLayoutItem: React.FC<{
   return null;
 };
 
+// 🌟 PIELĀGOTA AUGŠĒJĀ JOSLA (TOPBAR) AR PRECIZIEM PUNKTIŅIEM UN PĒDĒJIEM 5 SPĒLĒTĀJIEM
 interface TopBarProps {
   pin: string | undefined;
   qrCodeUrl?: string;
@@ -286,6 +496,9 @@ interface TopBarProps {
   isTeamMode: boolean;
   showLargeQr: boolean;
   setShowLargeQr: (show: boolean) => void;
+  theme: PresentationTheme;
+  remainingSeconds: number;
+  totalDurationSeconds: number;
 }
 
 const TopBar: React.FC<TopBarProps> = ({
@@ -300,9 +513,14 @@ const TopBar: React.FC<TopBarProps> = ({
   isRevealed,
   isTeamMode,
   showLargeQr,
-  setShowLargeQr
+  setShowLargeQr,
+  theme,
+  remainingSeconds,
+  totalDurationSeconds
 }) => {
   const votedCount = voteData.votedCount || 0;
+
+  // 🌟 PRECIZS NEATBILDĒJUŠO SPĒLĒTĀJU SKAITS
   const unvotedPlayers = players.filter(
     (p) => !p.isDisabled && !(voteData.votedPlayerIds || []).includes(p.id)
   );
@@ -318,6 +536,8 @@ const TopBar: React.FC<TopBarProps> = ({
   const minPoints = scene?.config?.pointsMin ?? 1;
   const [currentPoints, setCurrentPoints] = useState(maxPoints);
 
+  const isDangerTime = remainingSeconds <= 5 && currentSub === 'ACTIVE' && !isPaused;
+
   useEffect(() => {
     if (!scene?.endTime || (scene?.subState !== 'ACTIVE' && !isPaused) || !hasTimer) {
       setCurrentPoints(maxPoints);
@@ -329,7 +549,6 @@ const TopBar: React.FC<TopBarProps> = ({
       const now = Date.now();
       const totalTime = duration * 1000;
       const timeLeft = Math.max(0, scene.endTime - now);
-
       if (timeLeft <= 0) {
         setCurrentPoints(minPoints);
       } else {
@@ -341,6 +560,7 @@ const TopBar: React.FC<TopBarProps> = ({
     return () => clearInterval(interval);
   }, [scene?.endTime, scene?.subState, duration, maxPoints, minPoints, hasTimer, isPaused]);
 
+  // 🌟 DINAMISKS PUNKTIŅU IZMĒRS ATKARĪBĀ NO SKAITA
   const getDotStyle = (count: number): React.CSSProperties => {
     let size = 6;
     if (count <= 10) size = 20;
@@ -348,22 +568,163 @@ const TopBar: React.FC<TopBarProps> = ({
     else if (count <= 60) size = 10;
     else if (count <= 150) size = 8;
 
+    const dotColor = theme === 'TV_SHOW' ? '#ffd700' : theme === 'ARENA' ? '#ff0055' : theme === 'MINIMAL' ? '#00e5ff' : '#00ff00';
+
     return {
       width: `${size}px`,
       height: `${size}px`,
-      backgroundColor: '#00ff00',
+      backgroundColor: dotColor,
       borderRadius: '50%',
-      boxShadow: `0 0 ${size}px #00ff00`,
+      boxShadow: `0 0 ${size}px ${dotColor}`,
       transition: 'all 0.3s ease'
     };
   };
 
+  // Tēmu specifiskais stils augšējai joslai
+  const getThemeTopBarStyle = (): React.CSSProperties => {
+    switch (theme) {
+      case 'TV_SHOW':
+        return {
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '82px',
+          background: 'linear-gradient(180deg, rgba(7, 15, 30, 0.95) 0%, rgba(3, 7, 18, 0.85) 100%)',
+          borderBottom: '2px solid #ffd700',
+          boxShadow: '0 8px 35px rgba(255, 215, 0, 0.25)',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 30px',
+          gap: '20px',
+          zIndex: 30,
+          boxSizing: 'border-box'
+        };
+      case 'ARENA':
+        return {
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '85px',
+          background: 'rgba(10, 10, 10, 0.96)',
+          borderBottom: '3px solid #ff0055',
+          boxShadow: '0 8px 30px rgba(255, 0, 85, 0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 25px',
+          gap: '15px',
+          zIndex: 30,
+          boxSizing: 'border-box'
+        };
+      case 'MINIMAL':
+        return {
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '75px',
+          background: 'rgba(20, 20, 20, 0.65)',
+          backdropFilter: 'blur(20px)',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.12)',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 35px',
+          gap: '25px',
+          zIndex: 30,
+          boxSizing: 'border-box'
+        };
+      case 'NEON':
+      default:
+        return {
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '70px',
+          background: 'rgba(20, 20, 20, 0.88)',
+          backdropFilter: 'blur(12px)',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 30px',
+          gap: '20px',
+          borderBottom: '2px solid rgba(255,255,255,0.12)',
+          zIndex: 30,
+          boxSizing: 'border-box'
+        };
+    }
+  };
+
+  // 🌟 TĒMU SPECIFISKAIS PUNKTU LOGA STILS
+  const getThemePointsBadgeStyle = (): React.CSSProperties => {
+    switch (theme) {
+      case 'TV_SHOW':
+        return {
+          background: 'linear-gradient(135deg, #ffd700, #b8860b)',
+          color: '#000',
+          padding: '7px 20px',
+          borderRadius: '25px',
+          fontWeight: '900',
+          fontSize: '1rem',
+          border: '2px solid #ffffff',
+          boxShadow: '0 0 20px rgba(255, 215, 0, 0.65)'
+        };
+      case 'ARENA':
+        return {
+          background: '#120207',
+          color: '#ff0055',
+          padding: '7px 18px',
+          borderRadius: '8px',
+          fontWeight: '900',
+          fontSize: '1.05rem',
+          border: '2px solid #ff0055',
+          boxShadow: '0 0 16px rgba(255, 0, 85, 0.6)',
+          letterSpacing: '1px'
+        };
+      case 'MINIMAL':
+        return {
+          background: 'rgba(255, 255, 255, 0.08)',
+          backdropFilter: 'blur(12px)',
+          color: '#ffffff',
+          padding: '6px 18px',
+          borderRadius: '20px',
+          fontWeight: '600',
+          fontSize: '0.95rem',
+          border: '1px solid rgba(255, 255, 255, 0.25)',
+          boxShadow: '0 4px 15px rgba(0,0,0,0.5)'
+        };
+      case 'NEON':
+      default:
+        return {
+          background: 'rgba(0,0,0,0.85)',
+          color: '#00ff66',
+          padding: '6px 18px',
+          borderRadius: '25px',
+          fontWeight: 'bold',
+          fontSize: '1rem',
+          border: '2px solid #00ff66',
+          boxShadow: '0 0 15px rgba(0, 255, 102, 0.45)'
+        };
+    }
+  };
+
   return (
     <>
-      <div style={topBarStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={pinBadge}>
-            PIN: <span style={{ color: '#0f0' }}>{pin}</span>
+      <div style={getThemeTopBarStyle()}>
+        {/* PIN un QR kods */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div
+            style={{
+              background: theme === 'TV_SHOW' ? 'linear-gradient(135deg, #18253d, #0b1528)' : 'rgba(0,0,0,0.85)',
+              padding: '6px 18px',
+              borderRadius: theme === 'MINIMAL' ? '8px' : '12px',
+              fontSize: '1.3rem',
+              fontWeight: '900',
+              border: theme === 'TV_SHOW' ? '2px solid #ffd700' : theme === 'ARENA' ? '2px solid #ff0055' : '2px solid #0f0',
+              color: theme === 'TV_SHOW' ? '#ffd700' : '#fff'
+            }}
+          >
+            PIN: <span style={{ color: theme === 'TV_SHOW' ? '#fff' : '#00ff66' }}>{pin}</span>
           </div>
 
           {qrCodeUrl && (
@@ -386,6 +747,7 @@ const TopBar: React.FC<TopBarProps> = ({
           )}
         </div>
 
+        {/* 🌟 CENTRĀLAIS STATUSA / ATBILŽU LAUKS (PUNKTINI VAI PĒDĒJIE 5 SPĒLĒTĀJI) */}
         <div style={votersBox}>
           {isSummaryPhase && (summaryStats || scene?.summaryStats) ? (
             (() => {
@@ -397,10 +759,10 @@ const TopBar: React.FC<TopBarProps> = ({
                       🟩 Pilnīgi ({stats.requiredCount}/{stats.requiredCount}): <strong>{stats.fullCorrectCount ?? 0}</strong> ({stats.fullCorrectPct ?? 0}%)
                     </span>
                     <span style={summaryPillYellow}>
-                      🟨 Daļēji (1/{stats.requiredCount}): <strong>{stats.partialCorrectCount ?? 0}</strong> ({stats.partialCorrectPct ?? 0}%)
+                      🟨 Daļēji: <strong>{stats.partialCorrectCount ?? 0}</strong> ({stats.partialCorrectPct ?? 0}%)
                     </span>
                     <span style={summaryPillRed}>
-                      🟥 Kļūdaini (0/{stats.requiredCount}): <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
+                      🟥 Kļūdaini: <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
                     </span>
                     <span style={summaryPillGray}>
                       ⏱️ Nokavēja: <strong>{stats.unsubmittedCount ?? 0}</strong>
@@ -423,11 +785,12 @@ const TopBar: React.FC<TopBarProps> = ({
               );
             })()
           ) : isPaused ? (
-            <span style={{ color: '#ff9800', fontSize: '1.3vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(255,152,0,0.8)' }}>
+            <span style={{ color: '#ff9800', fontSize: '1.4vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(255,152,0,0.8)' }}>
               ⏸️ SPĒLE IEPAUZĒTA
             </span>
           ) : missingCount > 5 ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '500px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            /* 🌟 VAIRĀK PAR 5 — RĀDĀM DINAMISKA IZMĒRA PULSĒJOŠUS PUNKTIŅUS */
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '520px', flexWrap: 'wrap', justifyContent: 'center' }}>
               <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', maxHeight: '55px', overflow: 'hidden' }}>
                 {[...Array(Math.min(missingCount, 120))].map((_, i) => (
                   <div key={i} style={getDotStyle(missingCount)} />
@@ -435,6 +798,7 @@ const TopBar: React.FC<TopBarProps> = ({
               </div>
             </div>
           ) : missingCount > 0 ? (
+            /* 🌟 PĒDĒJIE 5 VAI MAZĀK — RĀDĀM KONKRĒTO SPĒLĒTĀJU VĀRDUS AR PULTS # UN KOMANDU */
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
               <span style={{ color: '#ffc107', fontWeight: 'bold', fontSize: '0.95vw', textTransform: 'uppercase', textShadow: '0 0 10px #ffc107' }}>
                 GAIDĀM ATBILDES ({missingCount}):
@@ -451,7 +815,7 @@ const TopBar: React.FC<TopBarProps> = ({
                     fontWeight: 'bold',
                     fontSize: '0.95vw',
                     backdropFilter: 'blur(10px)',
-                    boxShadow: '0 0 12px rgba(255, 193, 7, 0.6)'
+                    boxShadow: '0 0 14px rgba(255, 193, 7, 0.7)'
                   }}
                 >
                   #{p.deviceNumber || '?'} {p.name} {isTeamMode && p.teamName ? `[${p.teamName}]` : ''}
@@ -459,79 +823,75 @@ const TopBar: React.FC<TopBarProps> = ({
               ))}
             </div>
           ) : (
-            <span style={{ color: '#28a745', fontSize: '1.2vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(40,167,69,0.8)' }}>
+            <span style={{ color: '#28a745', fontSize: '1.3vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(40,167,69,0.8)' }}>
               ✅ Visas atbildes saņemtas!
             </span>
           )}
         </div>
 
+        {/* ⏱️ PULKSTENIS / TAIMERIS ATKARĪBĀ NO TĒMAS */}
         {hasTimer && (
-          <div style={{ ...timerBadge, borderColor: isPaused ? '#ff9800' : 'orange' }}>
-            <Timer
-              endTime={scene?.endTime}
-              isPaused={isPaused}
-              pausedRemainingMs={scene?.pausedRemainingMs}
-            />
-          </div>
+          theme === 'MINIMAL' ? (
+            <CircularTimer remainingSec={remainingSeconds} totalSec={totalDurationSeconds} isPaused={isPaused} />
+          ) : theme === 'ARENA' ? (
+            <div
+              style={{
+                background: isDangerTime ? '#ff0055' : '#111',
+                border: isDangerTime ? '3px solid #ffffff' : '3px solid #ff0055',
+                padding: '4px 22px',
+                borderRadius: '8px',
+                fontWeight: '900',
+                fontSize: '2.4rem',
+                color: '#ffffff',
+                letterSpacing: '2px',
+                boxShadow: isDangerTime ? '0 0 35px #ff0055' : '0 0 15px rgba(255, 0, 85, 0.4)',
+                animation: isDangerTime ? 'dangerPulse 0.6s infinite alternate' : 'none'
+              }}
+            >
+              {remainingSeconds}s
+            </div>
+          ) : theme === 'TV_SHOW' ? (
+            <div
+              style={{
+                background: 'radial-gradient(circle at 35% 35%, #ffd700, #b8860b)',
+                color: '#000',
+                padding: '6px 24px',
+                borderRadius: '30px',
+                fontWeight: '900',
+                fontSize: '1.9rem',
+                border: '3px solid #ffffff',
+                boxShadow: '0 0 25px rgba(255, 215, 0, 0.7)',
+                animation: isDangerTime ? 'dangerPulse 0.7s infinite alternate' : 'none'
+              }}
+            >
+              ⏳ {remainingSeconds}
+            </div>
+          ) : (
+            <div style={{ ...timerBadge, borderColor: isPaused ? '#ff9800' : 'orange' }}>
+              <Timer endTime={scene?.endTime} isPaused={isPaused} pausedRemainingMs={scene?.pausedRemainingMs} />
+            </div>
+          )
         )}
 
         <div style={statsBadge}>
           👥 {votedCount} / {participantCount}
         </div>
 
-        <div style={pointsBadge}>
+        {/* 🌟 TĒMAI PIELĀGOTS PUNKTU LOGS */}
+        <div style={getThemePointsBadgeStyle()}>
           ⭐ {isRevealed ? 'REZULTĀTS' : `${currentPoints} / ${maxPoints} PTS`}
         </div>
       </div>
 
       {showLargeQr && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100vw',
-            height: '100vh',
-            background: 'rgba(0,0,0,0.88)',
-            backdropFilter: 'blur(18px)',
-            zIndex: 99999,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-          onClick={() => setShowLargeQr(false)}
-        >
-          <div
-            style={{
-              background: 'rgba(20, 20, 20, 0.95)',
-              padding: '35px',
-              borderRadius: '24px',
-              border: '3px solid #00ff00',
-              textAlign: 'center',
-              boxShadow: '0 20px 70px rgba(0,0,0,0.95)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div style={modalOverlay} onClick={() => setShowLargeQr(false)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ color: '#00ff00', margin: '0 0 15px 0', fontSize: '2vw', fontWeight: 'bold' }}>📲 PIEVIENOJIES SPĒLEI!</h2>
             <img src={qrCodeUrl} alt="Lielais QR" style={{ width: '280px', height: '280px', borderRadius: '16px', background: '#fff', padding: '10px' }} />
             <div style={{ fontSize: '2.5vw', fontWeight: 'bold', color: '#fff', marginTop: '15px' }}>
               PIN: <span style={{ color: '#00ff00' }}>{pin}</span>
             </div>
-            <button
-              onClick={() => setShowLargeQr(false)}
-              style={{
-                marginTop: '15px',
-                padding: '10px 25px',
-                background: '#444',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '8px',
-                fontSize: '1.1vw',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-            >
+            <button onClick={() => setShowLargeQr(false)} style={btnCloseModal}>
               Aizvērt [Q / ✕]
             </button>
           </div>
@@ -569,15 +929,17 @@ export default function Presentation() {
   const [isMediaReady, setIsMediaReady] = useState(false);
   const [isSessionClosed, setIsSessionClosed] = useState(false);
 
-  // ⏱️ Reāllaika pulksteņa un atpakaļskaitīšanas stāvoklis
-  const [realClockTime, setRealClockTime] = useState('');
-  const [timerRemainingSeconds, setTimerRemainingSeconds] = useState(0);
+  const [isShaking, setIsShaking] = useState(false);
+
+  const [remainingTimerSeconds, setRemainingTimerSeconds] = useState(0);
+  const [totalTimerSeconds, setTotalTimerSeconds] = useState(30);
 
   const [buzzerWinnerData, setBuzzerWinnerData] = useState<BuzzerWinner | null>(null);
 
   const [branding, setBranding] = useState<any>({
     lobbyMode: 'CIRCLE',
     optionsRevealTiming: 'ON_ACTIVE',
+    presentationTheme: 'TV_SHOW',
     appTitle: '',
     appLogo: '',
     welcomeImage: '',
@@ -596,43 +958,30 @@ export default function Presentation() {
     finals: HTMLAudioElement;
   } | null>(null);
 
-  // ⏱️ Pulksteņa atjaunošana katru sekundi
-  useEffect(() => {
-    const updateClock = () => {
-      const d = new Date();
-      setRealClockTime(d.toTimeString().split(' ')[0]);
-    };
-    updateClock();
-    const interval = setInterval(updateClock, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const activeTheme: PresentationTheme = (branding?.presentationTheme || 'TV_SHOW').toUpperCase() as any;
 
-  // ⏱️ Atpakaļskaitīšanas taimera atskaite pie TIMER slaida
   useEffect(() => {
-    if (scene?.type === 'TIMER' && scene.config?.timerType !== 'CLOCK') {
-      const initial = scene.config?.timerDuration || 300;
-      setTimerRemainingSeconds(initial);
+    if (scene?.endTime && subState === 'ACTIVE') {
+      const dur = scene.config?.duration || scene.config?.timeLimit || 30;
+      setTotalTimerSeconds(dur);
 
       const interval = setInterval(() => {
-        setTimerRemainingSeconds((prev) => {
-          if (prev <= 1) {
-            clearInterval(interval);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-
+        const left = Math.max(0, Math.ceil((scene.endTime - Date.now()) / 1000));
+        setRemainingTimerSeconds(left);
+        if (left <= 0) clearInterval(interval);
+      }, 100);
       return () => clearInterval(interval);
+    } else {
+      const dur = scene?.config?.duration || scene?.config?.timeLimit || 30;
+      setRemainingTimerSeconds(dur);
+      setTotalTimerSeconds(dur);
     }
-  }, [scene?.id, scene?.type, scene?.config?.timerDuration, scene?.config?.timerType]);
+  }, [scene?.endTime, scene?.id, subState]);
 
-  // 🌟 Sintētisko skaņu dzinējs izmantojot vienoto AudioContext singletonu
   const playSynthesizedSfx = (type: string) => {
     try {
       const ctx = getSharedAudioContext();
       if (!ctx) return;
-
       if (type === 'buzzer_hit' || type === 'wrong') {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -670,18 +1019,18 @@ export default function Presentation() {
         reveal: new Audio('/sounds/02atklajatbildi.mp3'),
         finals: new Audio('/sounds/04Finals.mp3')
       };
-      audioBank.current.timer.preload = 'auto';
-      audioBank.current.timeUp.preload = 'auto';
-      audioBank.current.reveal.preload = 'auto';
-      audioBank.current.finals.preload = 'auto';
+      Object.values(audioBank.current).forEach((a) => {
+        a.preload = 'auto';
+      });
       audioBank.current.finals.loop = true;
     }
-
     return () => {
       if (audioBank.current) {
         Object.values(audioBank.current).forEach((a) => {
-          a.pause();
-          a.currentTime = 0;
+          try {
+            a.pause();
+            a.currentTime = 0;
+          } catch {}
         });
       }
     };
@@ -692,10 +1041,7 @@ export default function Presentation() {
     try {
       audio.pause();
       audio.currentTime = 0;
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {});
-      }
+      audio.play().catch(() => {});
     } catch {}
   };
 
@@ -791,12 +1137,8 @@ export default function Presentation() {
       });
       const nextSub = (newScene?.subState || 'READY').toUpperCase();
       setSubState(nextSub);
-      if (newScene?.summaryStats) {
-        setSummaryStats(newScene.summaryStats);
-      }
-      if (nextSub === 'REVEAL') {
-        setIsRevealed(true);
-      }
+      if (newScene?.summaryStats) setSummaryStats(newScene.summaryStats);
+      if (nextSub === 'REVEAL') setIsRevealed(true);
       setPodiumStage(0);
     };
 
@@ -807,12 +1149,13 @@ export default function Presentation() {
       window.close();
     };
 
+    // 🌟 DROŠA BALSOJUMU ATJAUNOŠANA (Nekad nepazaudē votedPlayerIds sarakstu)
     const handleVotesUpdated = (data: any) => {
-      setVoteData({
+      setVoteData((prev) => ({
         summary: data?.summary || {},
-        votedCount: data?.votedCount || 0,
-        votedPlayerIds: data?.votedPlayerIds || []
-      });
+        votedCount: data?.votedCount ?? prev.votedCount,
+        votedPlayerIds: data?.votedPlayerIds !== undefined ? data.votedPlayerIds : prev.votedPlayerIds
+      }));
     };
 
     const handlePresenceUpdate = (data: any) => {
@@ -826,9 +1169,7 @@ export default function Presentation() {
       if (data?.correctnessMap) setRevealedCorrectnessMap(data.correctnessMap);
     };
 
-    const handlePlaySfx = (data: { sfx: string }) => {
-      playSynthesizedSfx(data.sfx);
-    };
+    const handlePlaySfx = (data: { sfx: string }) => playSynthesizedSfx(data.sfx);
 
     const handleBuzzerRacePress = (data: { winner: any }) => {
       if (data?.winner?.position === 1) {
@@ -841,11 +1182,8 @@ export default function Presentation() {
     const handleToggleLargeQr = () => setShowLargeQr((prev) => !prev);
 
     const handleToggleTeamView = (data?: { view?: 'TEAMS' | 'INDIVIDUAL'; page?: number }) => {
-      if (data?.view) {
-        setShowTeamLeaderboard(data.view === 'TEAMS');
-      } else {
-        setShowTeamLeaderboard((prev) => !prev);
-      }
+      if (data?.view) setShowTeamLeaderboard(data.view === 'TEAMS');
+      else setShowTeamLeaderboard((prev) => !prev);
       setLeaderboardPage(data?.page !== undefined ? data.page : 0);
     };
 
@@ -869,11 +1207,21 @@ export default function Presentation() {
     };
 
     const handleTeamLeaderboardUpdate = (payload: any) => {
-      const list = Array.isArray(payload) ? payload : (payload?.data || []);
+      const list = Array.isArray(payload) ? payload : payload?.data || [];
       setTeamLeaderboard(list);
-      if (payload?.lbType) {
-        setLeaderboardType(payload.lbType.toUpperCase());
+      if (payload?.lbType) setLeaderboardType(payload.lbType.toUpperCase());
+    };
+
+    const handlePodiumStageChange = (stage: number) => {
+      setPodiumStage(stage);
+      if (stage === 3) {
+        setIsShaking(true);
+        setTimeout(() => setIsShaking(false), 650);
       }
+    };
+
+    const handleThemeChange = (newTheme: PresentationTheme) => {
+      setBranding((prev: any) => ({ ...prev, presentationTheme: newTheme }));
     };
 
     socket.on('join-success', handleJoinSuccess);
@@ -895,8 +1243,9 @@ export default function Presentation() {
     socket.on('player-buzzer-test', handleBuzzerTest);
     socket.on('leaderboard-update', handleLeaderboardUpdate);
     socket.on('team-leaderboard-update', handleTeamLeaderboardUpdate);
-    socket.on('podium-stage-change', (stage: number) => setPodiumStage(stage));
+    socket.on('podium-stage-change', handlePodiumStageChange);
     socket.on('leaderboard-page-change', (page: number) => setLeaderboardPage(page));
+    socket.on('theme-changed', handleThemeChange);
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'c' || e.key === 'C') {
@@ -933,8 +1282,9 @@ export default function Presentation() {
       socket.off('player-buzzer-test', handleBuzzerTest);
       socket.off('leaderboard-update', handleLeaderboardUpdate);
       socket.off('team-leaderboard-update', handleTeamLeaderboardUpdate);
-      socket.off('podium-stage-change');
+      socket.off('podium-stage-change', handlePodiumStageChange);
       socket.off('leaderboard-page-change');
+      socket.off('theme-changed');
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [routePin]);
@@ -954,17 +1304,12 @@ export default function Presentation() {
 
   useEffect(() => {
     if (!isMediaReady || !audioBank.current) return;
-
     if (currentSub === 'ACTIVE' && isQuestionType) {
       stopSound(audioBank.current.timeUp);
       stopSound(audioBank.current.reveal);
       stopSound(audioBank.current.finals);
-
-      if (hasCustomMediaDuringQuestion) {
-        stopSound(audioBank.current.timer);
-      } else {
-        playSound(audioBank.current.timer);
-      }
+      if (hasCustomMediaDuringQuestion) stopSound(audioBank.current.timer);
+      else playSound(audioBank.current.timer);
     } else if (currentSub === 'STATS' && isQuestionType) {
       stopSound(audioBank.current.timer);
       stopSound(audioBank.current.reveal);
@@ -997,7 +1342,6 @@ export default function Presentation() {
     setIsMediaReady(true);
     getSharedAudioContext()?.resume().catch(() => {});
     if (!audioBank.current) return;
-
     for (const sound of Object.values(audioBank.current)) {
       try {
         sound.muted = true;
@@ -1006,7 +1350,7 @@ export default function Presentation() {
         sound.currentTime = 0;
         sound.muted = false;
         sound.volume = 1.0;
-      } catch (e) {
+      } catch {
         sound.muted = false;
         sound.volume = 1.0;
       }
@@ -1016,12 +1360,10 @@ export default function Presentation() {
   if (isSessionClosed) {
     return (
       <div style={fullScreenCenter}>
-        <div style={{ textAlign: 'center', background: 'rgba(20, 20, 20, 0.95)', backdropFilter: 'blur(16px)', padding: '40px', borderRadius: '24px', border: 'none', boxShadow: '0 20px 60px rgba(0,0,0,0.9)' }}>
-          <h1 style={{ color: '#ffc107', fontSize: '3vw', margin: '0 0 15px 0', textShadow: '0 2px 10px #000' }}>👋 SPĒLES SESIJA IR BEIGUSIES</h1>
+        <div style={{ textAlign: 'center', background: 'rgba(20, 20, 20, 0.95)', padding: '40px', borderRadius: '24px' }}>
+          <h1 style={{ color: '#ffc107', fontSize: '3vw', margin: '0 0 15px 0' }}>👋 SPĒLES SESIJA IR BEIGUSIES</h1>
           <p style={{ color: '#ccc', fontSize: '1.4vw', margin: '0 0 25px 0' }}>Vadītājs ir noslēdzis šo sesiju. Šo logu var droši aizvērt.</p>
-          <button onClick={() => window.close()} style={bigBtn}>
-            Aizvērt logu
-          </button>
+          <button onClick={() => window.close()} style={bigBtn}>Aizvērt logu</button>
         </div>
       </div>
     );
@@ -1030,9 +1372,7 @@ export default function Presentation() {
   if (!isMediaReady) {
     return (
       <div style={fullScreenCenter}>
-        <button onClick={handleStartPresentation} style={bigBtn}>
-          🚀 SĀKT PREZENTĀCIJU
-        </button>
+        <button onClick={handleStartPresentation} style={bigBtn}>🚀 SĀKT PREZENTĀCIJU</button>
       </div>
     );
   }
@@ -1041,22 +1381,19 @@ export default function Presentation() {
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
 
-  // 1. SĀKUMA REĢISTRĀCIJAS EKRĀNS (LOBBY)
+  // 1. SĀKUMA LOBBY EKRĀNS
   if (!scene) {
     const lobbyMode = branding?.lobbyMode || 'CIRCLE';
-
     if (lobbyMode === 'INTERACTIVE_DOTS') {
       const orbCfg = getDynamicOrbConfig(players.length);
-
       return (
         <div style={{ ...fullScreen, backgroundColor: branding.appBgColor || '#0a0a0a', padding: '20px 30px', boxSizing: 'border-box' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-            <div style={{ border: '4px solid #00ff00', padding: '8px 26px', borderRadius: '18px', boxShadow: '0 0 35px rgba(0,255,0,0.35)', background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)' }}>
+            <div style={{ border: '4px solid #00ff00', padding: '8px 26px', borderRadius: '18px', background: 'rgba(0,0,0,0.85)' }}>
               <span style={{ fontSize: '1.4vw', color: '#aaa' }}>PIN: </span>
               <span style={{ fontSize: '3.2vw', color: '#00ff00', fontWeight: 'bold' }}>{pin}</span>
             </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 18px', borderRadius: '16px', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: '#fff', padding: '10px 18px', borderRadius: '16px' }}>
               <img src={qrCodeUrl} alt="QR" style={{ width: '85px', height: '85px' }} />
               <div style={{ textAlign: 'left', color: '#000' }}>
                 <div style={{ fontWeight: 'bold', fontSize: '1.1vw' }}>Skenē kamerā!</div>
@@ -1066,107 +1403,31 @@ export default function Presentation() {
           </div>
 
           <div style={{ margin: '8px 0', textAlign: 'center' }}>
-            <h2 style={{ fontSize: '2vw', color: '#ffc107', margin: 0, textShadow: '0 0 15px rgba(255,193,7,0.5)' }}>
-              🎮 PIESLĒGUŠIES DALĪBNIEKI ({participantCount}):
-            </h2>
-            <span style={{ fontSize: '0.95vw', color: '#aaa', marginTop: '2px', display: 'inline-block' }}>
-              Spiediet telefonā "Pārbaudīt pulti", lai mainītu krāsas un bumbiņa pulsētu! 💥
-            </span>
+            <h2 style={{ fontSize: '2vw', color: '#ffc107', margin: 0 }}>🎮 PIESLĒGUŠIES DALĪBNIEKI ({participantCount}):</h2>
+            <span style={{ fontSize: '0.95vw', color: '#aaa' }}>Spiediet telefonā "Pārbaudīt pulti", lai bumbiņa pulsētu! 💥</span>
           </div>
 
-          <div
-            style={{
-              flex: 1,
-              width: '100%',
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: `${orbCfg.gap}px`,
-              justifyContent: 'center',
-              alignItems: 'center',
-              alignContent: 'center',
-              overflow: 'hidden',
-              padding: '10px',
-              boxSizing: 'border-box'
-            }}
-          >
+          <div style={{ flex: 1, width: '100%', display: 'flex', flexWrap: 'wrap', gap: `${orbCfg.gap}px`, justifyContent: 'center', alignItems: 'center', alignContent: 'center', overflow: 'hidden' }}>
             {players.length === 0 ? (
-              <div style={{ color: '#666', fontSize: '1.5vw', fontStyle: 'italic', background: 'rgba(0,0,0,0.6)', padding: '10px 20px', borderRadius: '10px' }}>
-                Gaidām dalībnieku pieslēgšanos...
-              </div>
+              <div style={{ color: '#666', fontSize: '1.5vw', fontStyle: 'italic' }}>Gaidām dalībnieku pieslēgšanos...</div>
             ) : (
               players.map((p, idx) => {
                 const pressCount = testedBuzzerCounts[p.id] || 0;
                 const cycle = Math.floor(pressCount / 3);
                 const step = pressCount % 3;
                 const isBursting = step === 0 && pressCount > 0;
-
                 const baseIndex = p.deviceNumber ? p.deviceNumber - 1 : idx;
                 const colorIdx = (baseIndex + cycle) % NEON_PALETTE.length;
                 const pal = NEON_PALETTE[colorIdx];
-
                 const currentScale = isBursting ? 1.25 : 1 + step * 0.15;
 
-                const orbBg = isBursting
-                  ? 'radial-gradient(circle at 35% 35%, #ffffff 0%, #ffd700 45%, #b29500 100%)'
-                  : `radial-gradient(circle at 35% 35%, #ffffff 0%, ${pal.base} 45%, ${pal.dark} 100%)`;
-
-                const orbShadow = isBursting
-                  ? '0 0 45px #ffd700, 0 0 90px rgba(255, 215, 0, 0.85)'
-                  : `0 0 ${22 + step * 10}px ${pal.glow}, 0 0 ${45 + step * 15}px ${hexToRgba(pal.glow, 50)}`;
-
                 return (
-                  <div
-                    key={p.id || idx}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      width: `${orbCfg.maxW}px`,
-                      transform: `scale(${currentScale})`,
-                      transition: 'all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                    }}
-                    title={`${p.name} (#${p.deviceNumber || idx + 1})`}
-                  >
-                    <div
-                      style={{
-                        width: `${orbCfg.size}px`,
-                        height: `${orbCfg.size}px`,
-                        borderRadius: '50%',
-                        background: orbBg,
-                        boxShadow: orbShadow,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: isBursting ? '#000' : pal.text,
-                        fontWeight: '900',
-                        fontSize: orbCfg.numFont,
-                        border: 'none',
-                        userSelect: 'none'
-                      }}
-                    >
+                  <div key={p.id || idx} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: `${orbCfg.maxW}px`, transform: `scale(${currentScale})`, transition: 'all 0.25s ease' }}>
+                    <div style={{ width: `${orbCfg.size}px`, height: `${orbCfg.size}px`, borderRadius: '50%', background: `radial-gradient(circle at 35% 35%, #fff, ${pal.base} 45%, ${pal.dark} 100%)`, boxShadow: `0 0 25px ${pal.glow}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: pal.text, fontWeight: '900', fontSize: orbCfg.numFont }}>
                       #{p.deviceNumber || idx + 1}
                     </div>
-
                     {orbCfg.showName && (
-                      <span
-                        style={{
-                          fontSize: orbCfg.nameFont,
-                          fontWeight: 'bold',
-                          color: '#fff',
-                          marginTop: '4px',
-                          width: '100%',
-                          maxWidth: `${orbCfg.maxW}px`,
-                          textAlign: 'center',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          background: 'rgba(0,0,0,0.7)',
-                          backdropFilter: 'blur(4px)',
-                          borderRadius: '4px',
-                          padding: '1px 3px',
-                          display: 'block'
-                        }}
-                      >
+                      <span style={{ fontSize: orbCfg.nameFont, fontWeight: 'bold', color: '#fff', marginTop: '4px', maxWidth: `${orbCfg.maxW}px`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {p.name}
                       </span>
                     )}
@@ -1180,39 +1441,19 @@ export default function Presentation() {
     }
 
     const circleSize = `${Math.min(14 + participantCount * 0.2, 32)}vw`;
-
     return (
       <div style={{ ...fullScreenCenter, backgroundColor: '#000', gap: '1.5vw' }}>
         <h1 style={{ fontSize: '2.5vw', color: '#888', margin: 0 }}>PIEVIENOJIES SPĒLEI:</h1>
-
         <div style={{ display: 'flex', alignItems: 'center', gap: '35px' }}>
-          <div style={{ border: '6px solid #0f0', padding: '1.5vw 3.5vw', borderRadius: '30px', boxShadow: '0 0 60px rgba(0,255,0,0.3)', background: 'rgba(0,0,0,0.85)' }}>
+          <div style={{ border: '6px solid #0f0', padding: '1.5vw 3.5vw', borderRadius: '30px', background: 'rgba(0,0,0,0.85)' }}>
             <h1 style={{ fontSize: '8vw', margin: 0, letterSpacing: '0.8vw', lineHeight: 1, color: '#fff' }}>{pin}</h1>
           </div>
-
-          <div style={{ background: '#fff', padding: '12px 16px', borderRadius: '15px', display: 'flex', flexDirection: 'column', alignItems: 'center', boxShadow: '0 0 30px rgba(255,255,255,0.2)' }}>
+          <div style={{ background: '#fff', padding: '12px 16px', borderRadius: '15px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <img src={qrCodeUrl} alt="QR" style={{ width: '135px', height: '135px' }} />
             <span style={{ color: '#000', fontSize: '0.9vw', fontWeight: 'bold', marginTop: '6px' }}>Skenē kamerā!</span>
           </div>
         </div>
-
-        <div
-          style={{
-            width: circleSize,
-            height: circleSize,
-            border: '0.8vw solid #00ff00',
-            borderRadius: '50%',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'all 0.5s ease',
-            boxShadow: '0 0 50px #00ff00',
-            marginTop: '0.5vw',
-            background: 'rgba(0,0,0,0.7)',
-            backdropFilter: 'blur(8px)'
-          }}
-        >
+        <div style={{ width: circleSize, height: circleSize, border: '0.8vw solid #00ff00', borderRadius: '50%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 50px #00ff00', background: 'rgba(0,0,0,0.7)' }}>
           <span style={{ fontSize: '5vw', fontWeight: 'bold', color: '#fff', lineHeight: 1 }}>{participantCount}</span>
           <span style={{ fontSize: '1.1vw', color: '#aaa', marginTop: '0.4vw', textTransform: 'uppercase' }}>
             {participantCount === 1 ? 'Dalībnieks' : 'Dalībnieki'}
@@ -1222,18 +1463,31 @@ export default function Presentation() {
     );
   }
 
+  const getThemeBackground = () => {
+    if (scene?.config?.backgroundUrl) return `url(${MEDIA_BASE_URL}/${scene.config.backgroundUrl})`;
+    switch (activeTheme) {
+      case 'TV_SHOW':
+        return 'radial-gradient(ellipse at 50% 30%, #0d1b33 0%, #030712 100%)';
+      case 'ARENA':
+        return 'linear-gradient(135deg, #120207 0%, #050505 60%, #150009 100%)';
+      case 'MINIMAL':
+        return 'linear-gradient(180deg, #18181b 0%, #09090b 100%)';
+      case 'NEON':
+      default:
+        return '#000000';
+    }
+  };
+
   const containerStyle: React.CSSProperties = {
     ...fullScreen,
-    backgroundImage: scene?.config?.backgroundUrl ? `url(${MEDIA_BASE_URL}/${scene.config.backgroundUrl})` : 'none',
+    background: getThemeBackground(),
     backgroundSize: 'cover',
     backgroundPosition: 'center',
-    transition: 'background 1s ease-in-out',
     position: 'relative'
   };
 
   const rawOptions: string[] = scene?.config?.options || (scene?.config?.optionsCount ? ['A', 'B', 'C', 'D', 'E', 'F'].slice(0, scene.config.optionsCount) : []);
   const optionsList: string[] = rawOptions.length > 0 ? rawOptions : ['A', 'B', 'C', 'D'];
-
   const optLayout = scene?.config?.optionsLayout || 'INDIVIDUAL';
   const optPositions = scene?.config?.optionsPositions || {};
 
@@ -1250,7 +1504,6 @@ export default function Presentation() {
 
   const finalIsTeamPodium = isTeamMode && showTeamLeaderboard && teamLeaderboard.length > 0;
   const activePodiumList = finalIsTeamPodium ? teamLeaderboard : sortedLeaderboard;
-
   const totalCount = activePodiumList.length;
   const firstPlace = activePodiumList[0];
   const secondPlace = activePodiumList[1];
@@ -1273,30 +1526,193 @@ export default function Presentation() {
   const optCustomOpacity = scene?.config?.optionsBgOpacity ?? 85;
   const optCustomColor = scene?.config?.optionsColor || '#ffffff';
   const optCorrectColor = scene?.config?.optionsCorrectColor || '#00ff00';
+  const totalVotesReceived = voteData.votedCount || 1;
 
-  const timerMin = Math.floor(timerRemainingSeconds / 60);
-  const timerSec = String(timerRemainingSeconds % 60).padStart(2, '0');
+  // 🌟 TĒMAI PIELĀGOTS ATBILŽU RENDERS AR 1:1 STUDIJAS KOORDINĀTĀM
+  const renderOptionItem = (opt: string, i: number, customStyle: React.CSSProperties = {}) => {
+    const letter = String.fromCharCode(65 + i);
+    const optKey = (opt && opt.trim() !== '') ? opt : letter;
+    const isCorrect = isRevealed && (
+      effectiveCorrectAnswers.includes(optKey) ||
+      effectiveCorrectAnswers.includes(letter) ||
+      (opt && opt.trim() !== '' && effectiveCorrectAnswers.includes(opt))
+    );
+
+    const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
+    const pct = effectiveCorrectnessMap[optKey] ?? effectiveCorrectnessMap[letter];
+    const pctOfVotes = Math.round((count / totalVotesReceived) * 100);
+    const isOnlyLetter = !opt || opt.trim() === '';
+    const isZeroOpacity = optCustomOpacity === 0;
+
+    let cardBg = isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optCustomBg, optCustomOpacity);
+    if (!isZeroOpacity && !isOnlyLetter) {
+      if (activeTheme === 'TV_SHOW') {
+        cardBg = isCorrect
+          ? 'linear-gradient(135deg, rgba(20, 60, 30, 0.95), rgba(10, 35, 18, 0.95))'
+          : 'linear-gradient(135deg, rgba(16, 26, 46, 0.95), rgba(7, 13, 26, 0.95))';
+      } else if (activeTheme === 'ARENA') {
+        cardBg = isCorrect ? 'rgba(0, 40, 15, 0.95)' : 'rgba(15, 15, 15, 0.95)';
+      } else if (activeTheme === 'MINIMAL') {
+        cardBg = isCorrect ? 'rgba(35, 75, 45, 0.85)' : 'rgba(25, 25, 25, 0.75)';
+      }
+    }
+
+    let cardBorder = isZeroOpacity || isOnlyLetter
+      ? 'none'
+      : isCorrect
+      ? (activeTheme === 'TV_SHOW' ? '3px solid #ffd700' : '3px solid #00ff00')
+      : activeTheme === 'TV_SHOW'
+      ? '2px solid rgba(255, 215, 0, 0.4)'
+      : activeTheme === 'ARENA'
+      ? '2px solid #333'
+      : activeTheme === 'MINIMAL'
+      ? '1px solid rgba(255,255,255,0.18)'
+      : 'none';
+
+    return (
+      <div
+        key={`opt-${i}`}
+        style={{
+          ...optionCard,
+          ...customStyle,
+          background: cardBg,
+          backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(14px)',
+          boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 10px 30px rgba(0,0,0,0.85)',
+          border: cardBorder,
+          position: customStyle.position || 'relative',
+          overflow: 'hidden',
+          animation: isCorrect ? 'correctGlowPulse 1.4s infinite ease-in-out' : 'none',
+          padding: isOnlyLetter ? '0' : isZeroOpacity ? '4px 8px' : '10px 18px',
+          justifyContent: isOnlyLetter ? 'center' : 'space-between',
+          zIndex: 10,
+          boxSizing: 'border-box'
+        }}
+      >
+        {isRevealed && !isOnlyLetter && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              height: '100%',
+              width: `${pctOfVotes}%`,
+              background: isCorrect ? 'rgba(0, 255, 0, 0.22)' : 'rgba(255, 255, 255, 0.08)',
+              zIndex: 1,
+              transition: 'width 0.8s cubic-bezier(0.1, 0.9, 0.2, 1)'
+            }}
+          />
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', zIndex: 2, flex: isOnlyLetter ? 'none' : 1, width: isOnlyLetter ? 'auto' : '100%' }}>
+          <div
+            style={{
+              width: '46px',
+              height: '46px',
+              borderRadius: activeTheme === 'TV_SHOW' ? '12px' : '50%',
+              background: isCorrect ? optCorrectColor : activeTheme === 'TV_SHOW' ? '#ffd700' : '#111',
+              color: isCorrect ? '#000' : activeTheme === 'TV_SHOW' ? '#000' : '#ffc107',
+              border: isCorrect ? '3px solid #fff' : activeTheme === 'TV_SHOW' ? '2px solid #fff' : '2px solid #ffc107',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: '900',
+              fontSize: '1.7vw',
+              flexShrink: 0
+            }}
+          >
+            {letter}
+          </div>
+
+          {!isOnlyLetter && (
+            <span
+              style={{
+                fontSize: getOptionFontSize(opt),
+                color: isCorrect ? '#fff' : optCustomColor,
+                fontWeight: 'bold',
+                marginLeft: '14px',
+                wordBreak: 'break-word',
+                lineHeight: 1.2
+              }}
+            >
+              {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
+            </span>
+          )}
+        </div>
+
+        {(isStatsVisible || isRevealed) && !isOnlyLetter && (
+          <span style={{ ...voteBadge, zIndex: 2 }}>{count} ({pctOfVotes}%)</span>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <div style={containerStyle}>
+    <div style={containerStyle} className={isShaking ? 'screen-shake' : ''}>
       <style>{`
         @keyframes correctGlowPulse {
-          0% {
-            transform: scale(1);
-            box-shadow: 0 0 20px ${optCorrectColor}, inset 0 0 10px #ffffff;
-          }
-          50% {
-            transform: scale(1.08);
-            box-shadow: 0 0 45px ${optCorrectColor}, 0 0 80px ${optCorrectColor}, inset 0 0 18px #ffffff;
-          }
-          100% {
-            transform: scale(1);
-            box-shadow: 0 0 20px ${optCorrectColor}, inset 0 0 10px #ffffff;
-          }
+          0% { transform: scale(1); box-shadow: 0 0 20px ${optCorrectColor}; }
+          50% { transform: scale(1.06); box-shadow: 0 0 50px ${optCorrectColor}, 0 0 80px ${optCorrectColor}; }
+          100% { transform: scale(1); box-shadow: 0 0 20px ${optCorrectColor}; }
+        }
+        @keyframes dangerPulse {
+          0% { transform: scale(1); filter: drop-shadow(0 0 10px #ff0055); }
+          100% { transform: scale(1.12); filter: drop-shadow(0 0 35px #ff0055); }
+        }
+        @keyframes impactShake {
+          0% { transform: translate(0, 0); }
+          20% { transform: translate(-8px, 6px); }
+          40% { transform: translate(8px, -6px); }
+          60% { transform: translate(-5px, -3px); }
+          80% { transform: translate(4px, 4px); }
+          100% { transform: translate(0, 0); }
+        }
+        .screen-shake {
+          animation: impactShake 0.6s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+        }
+        @keyframes swingBeamLeft {
+          0% { transform: rotate(-28deg); opacity: 0.35; }
+          50% { transform: rotate(14deg); opacity: 0.65; }
+          100% { transform: rotate(-28deg); opacity: 0.35; }
+        }
+        @keyframes swingBeamRight {
+          0% { transform: rotate(28deg); opacity: 0.35; }
+          50% { transform: rotate(-14deg); opacity: 0.65; }
+          100% { transform: rotate(28deg); opacity: 0.35; }
+        }
+        .spotlight-beam-left {
+          position: absolute;
+          top: -100px;
+          left: 15%;
+          width: 280px;
+          height: 1400px;
+          background: linear-gradient(180deg, rgba(255, 215, 0, 0.28) 0%, rgba(255, 215, 0, 0) 80%);
+          transform-origin: top center;
+          animation: swingBeamLeft 7s infinite ease-in-out;
+          filter: blur(25px);
+        }
+        .spotlight-beam-right {
+          position: absolute;
+          top: -100px;
+          right: 15%;
+          width: 280px;
+          height: 1400px;
+          background: linear-gradient(180deg, rgba(0, 229, 255, 0.28) 0%, rgba(0, 229, 255, 0) 80%);
+          transform-origin: top center;
+          animation: swingBeamRight 7s infinite ease-in-out;
+          filter: blur(25px);
         }
       `}</style>
 
-      {/* ⏱️ TAIMERA SLAIDA VIDEO FONS */}
+      {(activeTheme === 'TV_SHOW' || activeTheme === 'ARENA' || isFinalLb) && <SpotlightBeams />}
+      <ConfettiCanvas active={isFinalLb && podiumStage >= 3} />
+
+      <TopTimeProgressBar
+        remainingSec={remainingTimerSeconds}
+        totalSec={totalTimerSeconds}
+        isPaused={scene?.subState === 'PAUSED'}
+        isActive={currentSub === 'ACTIVE'}
+      />
+
       {scene?.type === 'TIMER' && scene.config?.timerBgVideo && (
         <video
           src={`${MEDIA_BASE_URL}/${scene.config.timerBgVideo}`}
@@ -1304,15 +1720,7 @@ export default function Presentation() {
           loop={scene.config.timerBgVideoLoop !== false}
           muted
           playsInline
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            zIndex: 1
-          }}
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover', zIndex: 1 }}
         />
       )}
 
@@ -1330,10 +1738,13 @@ export default function Presentation() {
           isTeamMode={isTeamMode}
           showLargeQr={showLargeQr}
           setShowLargeQr={setShowLargeQr}
+          theme={activeTheme}
+          remainingSeconds={remainingTimerSeconds}
+          totalDurationSeconds={totalTimerSeconds}
         />
       )}
 
-      {/* 🎯 1:1 REZOLŪCIJAS & KOORDINĀTU KANVA */}
+      {/* 🎯 KANVAS LAUKUMS */}
       <div
         style={{
           position: 'absolute',
@@ -1372,63 +1783,33 @@ export default function Presentation() {
               top: scene.config?.timerPlacement === 'TOP_RIGHT' ? '40px' : '50%',
               transform: scene.config?.timerPlacement === 'TOP_RIGHT' ? 'none' : 'translate(-50%, -50%)',
               background: 'rgba(10, 10, 10, 0.88)',
-              border: '4px solid #ffc107',
+              border: activeTheme === 'TV_SHOW' ? '4px solid #ffd700' : '4px solid #ffc107',
               borderRadius: '28px',
               padding: scene.config?.timerPlacement === 'TOP_RIGHT' ? '20px 35px' : '40px 90px',
               textAlign: 'center',
-              boxShadow: '0 20px 80px rgba(0,0,0,0.9), 0 0 50px rgba(255, 193, 7, 0.4)',
+              boxShadow: '0 20px 80px rgba(0,0,0,0.9)',
               backdropFilter: 'blur(16px)',
               zIndex: 30
             }}
           >
             {scene.config?.timerLabel && (
-              <div
-                style={{
-                  fontSize: scene.config?.timerPlacement === 'TOP_RIGHT' ? '1.4vw' : '2.2vw',
-                  color: '#00e5ff',
-                  fontWeight: 'bold',
-                  marginBottom: '10px',
-                  letterSpacing: '1px',
-                  textShadow: '0 2px 10px #000'
-                }}
-              >
+              <div style={{ fontSize: '1.8vw', color: '#00e5ff', fontWeight: 'bold', marginBottom: '10px' }}>
                 {scene.config.timerLabel}
               </div>
             )}
-            <div
-              style={{
-                fontSize: scene.config?.timerPlacement === 'TOP_RIGHT' ? '3.8vw' : '7.5vw',
-                fontWeight: '900',
-                color: '#ffc107',
-                letterSpacing: '4px',
-                lineHeight: 1,
-                textShadow: '0 0 35px gold, 0 4px 15px #000'
-              }}
-            >
-              {scene.config?.timerType === 'CLOCK' ? realClockTime : `${timerMin}:${timerSec}`}
+            <div style={{ fontSize: '7.5vw', fontWeight: '900', color: '#ffc107', letterSpacing: '4px', lineHeight: 1 }}>
+              {scene.config?.timerType === 'CLOCK' ? <ClockDisplay /> : <CountdownDisplay durationSeconds={scene.config?.timerDuration || 300} />}
             </div>
           </div>
         )}
 
-        {/* ⚡ ĀTRĀS PULTS (BUZZER RACE) TV SKATS */}
+        {/* ⚡ ĀTRĀ PULTS */}
         {scene?.type === 'BUZZER_RACE' && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
             {buzzerWinnerData ? (
-              <div
-                style={{
-                  background: 'rgba(20, 15, 0, 0.94)',
-                  border: '4px solid #ffc107',
-                  borderRadius: '24px',
-                  padding: '30px 50px',
-                  textAlign: 'center',
-                  boxShadow: '0 0 60px rgba(255, 193, 7, 0.8), 0 0 120px rgba(255, 193, 7, 0.4)',
-                  animation: 'correctGlowPulse 1.2s infinite ease-in-out'
-                }}
-              >
-                <div style={{ fontSize: '3vw', color: '#ffc107', fontWeight: '900', letterSpacing: '2px', marginBottom: '8px' }}>
-                  🚨 ĀTRĀKĀ PULTS NOPIKSTĒJA! 🚨
-                </div>
-                <div style={{ fontSize: '4.5vw', color: '#ffffff', fontWeight: '900', margin: '10px 0', textShadow: '0 0 25px gold' }}>
+              <div style={{ background: 'rgba(20, 15, 0, 0.94)', border: '4px solid #ffd700', borderRadius: '24px', padding: '30px 50px', textAlign: 'center', animation: 'correctGlowPulse 1.2s infinite ease-in-out' }}>
+                <div style={{ fontSize: '3vw', color: '#ffd700', fontWeight: '900' }}>🚨 ĀTRĀKĀ PULTS NOPIKSTĒJA! 🚨</div>
+                <div style={{ fontSize: '4.5vw', color: '#fff', fontWeight: '900', margin: '10px 0' }}>
                   #{buzzerWinnerData.deviceNumber} {buzzerWinnerData.name}
                 </div>
                 {buzzerWinnerData.teamName && (
@@ -1442,486 +1823,206 @@ export default function Presentation() {
               </div>
             ) : (
               <div style={{ background: 'rgba(0,0,0,0.8)', border: '2px solid #00e5ff', padding: '25px 40px', borderRadius: '20px', textAlign: 'center' }}>
-                <h1 style={{ fontSize: '3.5vw', color: '#ffc107', margin: 0, letterSpacing: '2px' }}>⚡ ĀTRĀ PULTS ⚡</h1>
+                <h1 style={{ fontSize: '3.5vw', color: '#ffc107', margin: 0 }}>⚡ ĀTRĀ PULTS ⚡</h1>
                 <p style={{ fontSize: '1.8vw', color: '#fff', marginTop: '10px' }}>Gatavojieties spiest pogu telefonā!</p>
               </div>
             )}
           </div>
         )}
 
-        {/* 🔢 SECĪBAS KĀRTOŠANAS ATKLĀŠANA (ORDERING) */}
+        {/* 🔢 SECĪBAS KĀRTOŠANA */}
         {scene?.type === 'ORDERING' && (
           <div style={{ position: 'absolute', bottom: '35px', width: '85%', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 10 }}>
-            {optionsList.map((item: string, idx: number) => {
-              const isCorrectOrderRevealed = isRevealed;
-              return (
-                <div
-                  key={item}
-                  style={{
-                    ...optionCard,
-                    background: isCorrectOrderRevealed ? 'rgba(40, 167, 69, 0.85)' : hexToRgba(optCustomBg, optCustomOpacity),
-                    border: isCorrectOrderRevealed ? '2px solid #00ff00' : 'none',
-                    padding: '12px 24px',
-                    boxShadow: isCorrectOrderRevealed ? '0 0 25px rgba(40, 167, 69, 0.8)' : '0 8px 25px rgba(0,0,0,0.8)'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <span style={{ fontSize: '2vw', color: isCorrectOrderRevealed ? '#fff' : '#00e5ff', fontWeight: '900' }}>#{idx + 1}</span>
-                    <span style={{ fontSize: getOptionFontSize(item), color: '#ffffff', fontWeight: 'bold' }}>{item}</span>
-                  </div>
+            {optionsList.map((item: string, idx: number) => (
+              <div
+                key={item}
+                style={{
+                  ...optionCard,
+                  background: isRevealed ? 'rgba(40, 167, 69, 0.85)' : 'rgba(0,0,0,0.85)',
+                  border: isRevealed ? '2px solid #00ff00' : 'none',
+                  padding: '12px 24px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                  <span style={{ fontSize: '2vw', color: '#00e5ff', fontWeight: '900' }}>#{idx + 1}</span>
+                  <span style={{ fontSize: getOptionFontSize(item), color: '#fff', fontWeight: 'bold' }}>{item}</span>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         )}
 
-        {/* ATBILŽU VARIANTU IZKĀRTOJUMS */}
+        {/* 🌟 1:1 STUDIJAS ATBILŽU POZICIONĒŠANA */}
         {shouldShowOptions && scene?.type !== 'ORDERING' && scene?.type !== 'BUZZER_RACE' && scene?.type !== 'TIMER' && (
-          optLayout === 'INDIVIDUAL' ? (
-            optionsList.map((opt: string, i: number) => {
-              const pos = optPositions[i] || optPositions[opt] || {
-                x: 10 + (i % 2) * 42,
-                y: 58 + Math.floor(i / 2) * 13,
-                w: 38,
-                h: 10
+          optionsList.map((opt: string, i: number) => {
+            const totalOpt = optionsList.length;
+
+            let defaultPos = {
+              x: 10 + (i % 2) * 42,
+              y: totalOpt > 4 ? 52 + Math.floor(i / 2) * 12 : 58 + Math.floor(i / 2) * 13,
+              w: 38,
+              h: totalOpt > 4 ? 9 : 10
+            };
+
+            if (optLayout === 'RIGHT_COLUMN') {
+              const itemHeight = Math.min(12, Math.floor(65 / totalOpt) - 2);
+              defaultPos = {
+                x: 56,
+                y: 20 + i * (itemHeight + 3),
+                w: 40,
+                h: itemHeight
               };
-              const letter = String.fromCharCode(65 + i);
-              const optKey = (opt && opt.trim() !== '') ? opt : letter;
+            }
 
-              const isCorrect = isRevealed && (
-                effectiveCorrectAnswers.includes(optKey) ||
-                effectiveCorrectAnswers.includes(letter) ||
-                (opt && opt.trim() !== '' && effectiveCorrectAnswers.includes(opt))
-              );
+            const savedPos = optPositions[i] || optPositions[String(i)] || optPositions[opt];
+            const pos = (optLayout === 'INDIVIDUAL' && savedPos) ? savedPos : defaultPos;
+            const isOnlyLetter = !opt || opt.trim() === '';
 
-              const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
-              const pct = effectiveCorrectnessMap[optKey] ?? effectiveCorrectnessMap[letter];
-              const isOnlyLetter = !opt || opt.trim() === '';
-              const isZeroOpacity = optCustomOpacity === 0;
-
-              return (
-                <div
-                  key={`ind-opt-${i}`}
-                  style={{
-                    position: 'absolute',
-                    left: `${pos.x}%`,
-                    top: `${pos.y}%`,
-                    width: isOnlyLetter ? `${pos.w || 8}%` : `${pos.w}%`,
-                    minHeight: isOnlyLetter ? `${pos.h || 8}%` : `${pos.h}%`,
-                    height: 'auto',
-                    ...optionCard,
-                    background: isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optCustomBg, optCustomOpacity),
-                    backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(14px)',
-                    boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 8px 25px rgba(0,0,0,0.8)',
-                    border: 'none',
-                    padding: isOnlyLetter ? '0' : isZeroOpacity ? '4px 8px' : '12px 20px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: isOnlyLetter ? 'center' : 'space-between',
-                    zIndex: 10
-                  }}
-                >
-                  <div
-                    style={{
-                      width: '55px',
-                      height: '55px',
-                      borderRadius: '50%',
-                      background: isCorrect ? optCorrectColor : '#111',
-                      border: isCorrect ? `3px solid #ffffff` : '3px solid #ffc107',
-                      color: isCorrect ? '#000000' : '#ffc107',
-                      animation: isCorrect ? 'correctGlowPulse 1.4s infinite ease-in-out' : 'none',
-                      boxShadow: isCorrect ? `0 0 30px ${optCorrectColor}` : '0 0 20px rgba(0,0,0,0.9), 0 0 10px rgba(255,193,7,0.4)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: '900',
-                      fontSize: '2vw',
-                      flexShrink: 0,
-                      transition: 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                    }}
-                  >
-                    {letter}
-                  </div>
-
-                  {!isOnlyLetter && (
-                    <span
-                      style={{
-                        fontSize: getOptionFontSize(opt),
-                        color: isCorrect ? '#ffffff' : optCustomColor,
-                        fontWeight: 'bold',
-                        flex: 1,
-                        marginLeft: '15px',
-                        textShadow: '0 2px 10px #000, 0 0 15px #000',
-                        wordBreak: 'break-word',
-                        lineHeight: 1.2
-                      }}
-                    >
-                      {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
-                    </span>
-                  )}
-
-                  {isStatsVisible && (currentSub === 'STATS' || currentSub === 'SUMMARY' || isRevealed) && (
-                    <span style={voteBadge}>{count}</span>
-                  )}
-                </div>
-              );
-            })
-          ) : optLayout === 'RIGHT_COLUMN' ? (
-            <div
-              style={{
-                position: 'absolute',
-                right: '4%',
-                top: '14%',
-                bottom: '5%',
-                width: '40%',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                gap: '12px',
-                zIndex: 10
-              }}
-            >
-              {optionsList.map((opt: string, i: number) => {
-                const letter = String.fromCharCode(65 + i);
-                const optKey = (opt && opt.trim() !== '') ? opt : letter;
-
-                const isCorrect = isRevealed && (
-                  effectiveCorrectAnswers.includes(optKey) ||
-                  effectiveCorrectAnswers.includes(letter) ||
-                  (opt && opt.trim() !== '' && effectiveCorrectAnswers.includes(opt))
-                );
-
-                const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
-                const pct = effectiveCorrectnessMap[optKey] ?? effectiveCorrectnessMap[letter];
-                const isOnlyLetter = !opt || opt.trim() === '';
-                const isZeroOpacity = optCustomOpacity === 0;
-
-                return (
-                  <div
-                    key={`col-opt-${i}`}
-                    style={{
-                      ...optionCard,
-                      background: isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optCustomBg, optCustomOpacity),
-                      backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(14px)',
-                      boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 8px 25px rgba(0,0,0,0.8)',
-                      border: 'none',
-                      justifyContent: isOnlyLetter ? 'center' : 'space-between',
-                      padding: isOnlyLetter ? '0' : isZeroOpacity ? '4px 8px' : '10px 18px'
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: '50px',
-                        height: '50px',
-                        borderRadius: '50%',
-                        background: isCorrect ? optCorrectColor : '#111',
-                        border: isCorrect ? `3px solid #ffffff` : '2px solid #ffc107',
-                        color: isCorrect ? '#000000' : '#ffc107',
-                        animation: isCorrect ? 'correctGlowPulse 1.4s infinite ease-in-out' : 'none',
-                        boxShadow: isCorrect ? `0 0 30px ${optCorrectColor}` : '0 0 15px rgba(0,0,0,0.8)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 'bold',
-                        fontSize: '1.6vw',
-                        marginRight: isOnlyLetter ? '0' : '12px',
-                        flexShrink: 0,
-                        transition: 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                      }}
-                    >
-                      {letter}
-                    </div>
-
-                    {!isOnlyLetter && (
-                      <span
-                        style={{
-                          fontSize: getOptionFontSize(opt),
-                          color: isCorrect ? '#ffffff' : optCustomColor,
-                          fontWeight: 'bold',
-                          flex: 1,
-                          textShadow: '0 2px 10px #000, 0 0 15px #000',
-                          wordBreak: 'break-word',
-                          lineHeight: 1.2
-                        }}
-                      >
-                        {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
-                      </span>
-                    )}
-
-                    {isStatsVisible && (currentSub === 'STATS' || currentSub === 'SUMMARY' || isRevealed) && (
-                      <span style={voteBadge}>{count}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div
-              style={{
-                position: 'absolute',
-                bottom: '30px',
-                width: '85%',
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-                gap: '15px',
-                zIndex: 10
-              }}
-            >
-              {optionsList.map((opt: string, i: number) => {
-                const letter = String.fromCharCode(65 + i);
-                const optKey = (opt && opt.trim() !== '') ? opt : letter;
-
-                const isCorrect = isRevealed && (
-                  effectiveCorrectAnswers.includes(optKey) ||
-                  effectiveCorrectAnswers.includes(letter) ||
-                  (opt && opt.trim() !== '' && effectiveCorrectAnswers.includes(opt))
-                );
-
-                const count = voteData.summary[opt] ?? voteData.summary[letter] ?? 0;
-                const pct = effectiveCorrectnessMap[optKey] ?? effectiveCorrectnessMap[letter];
-                const isOnlyLetter = !opt || opt.trim() === '';
-                const isZeroOpacity = optCustomOpacity === 0;
-
-                return (
-                  <div
-                    key={`grp-opt-${i}`}
-                    style={{
-                      ...optionCard,
-                      background: isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optCustomBg, optCustomOpacity),
-                      backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(14px)',
-                      boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 8px 25px rgba(0,0,0,0.8)',
-                      border: 'none',
-                      justifyContent: isOnlyLetter ? 'center' : 'space-between',
-                      padding: isOnlyLetter ? '0' : isZeroOpacity ? '4px 8px' : '12px 20px'
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: '50px',
-                        height: '50px',
-                        borderRadius: '50%',
-                        background: isCorrect ? optCorrectColor : '#111',
-                        border: isCorrect ? `3px solid #ffffff` : '2px solid #ffc107',
-                        color: isCorrect ? '#000000' : '#ffc107',
-                        animation: isCorrect ? 'correctGlowPulse 1.4s infinite ease-in-out' : 'none',
-                        boxShadow: isCorrect ? `0 0 30px ${optCorrectColor}` : '0 0 15px rgba(0,0,0,0.8)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontWeight: 'bold',
-                        fontSize: '1.6vw',
-                        marginRight: isOnlyLetter ? '0' : '12px',
-                        flexShrink: 0,
-                        transition: 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                      }}
-                    >
-                      {letter}
-                    </div>
-
-                    {!isOnlyLetter && (
-                      <span
-                        style={{
-                          fontSize: getOptionFontSize(opt),
-                          color: isCorrect ? '#ffffff' : optCustomColor,
-                          fontWeight: 'bold',
-                          flex: 1,
-                          textShadow: '0 2px 10px #000, 0 0 15px #000',
-                          wordBreak: 'break-word',
-                          lineHeight: 1.2
-                        }}
-                      >
-                        {opt} {isCorrect && pct !== undefined && pct < 100 && `(+${pct}%)`}
-                      </span>
-                    )}
-
-                    {isStatsVisible && (currentSub === 'STATS' || currentSub === 'SUMMARY' || isRevealed) && (
-                      <span style={voteBadge}>{count}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )
+            return renderOptionItem(opt, i, {
+              position: 'absolute',
+              left: `${pos.x}%`,
+              top: `${pos.y}%`,
+              width: isOnlyLetter ? `${pos.w || 8}%` : `${pos.w}%`,
+              height: `${pos.h}%`,
+              minHeight: `${pos.h}%`
+            });
+          })
         )}
 
         {/* 2. REGULĀRĀ LĪDERU TABULA */}
         {scene?.type === 'LEADERBOARD' && !isFinalLb && (
           <div style={leaderboardOverlay}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-              <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: 0, textShadow: '0 2px 10px #000' }}>
-                {isTeamMode && showTeamLeaderboard
-                  ? isRoundLb
-                    ? '🏆 KOMANDU KĀRTAS REZULTĀTI'
-                    : '👥 KOMANDU KOPVĒRTĒJUMS'
-                  : isRoundLb
-                  ? '🏆 KĀRTAS REZULTĀTI'
-                  : '⭐ INDIVIDUĀLAIS KOPVĒRTĒJUMS'}
-              </h1>
-            </div>
-
-            {isTeamMode && showTeamLeaderboard ? (
-              <div>
-                {teamLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((t, i) => (
-                  <div key={t.name} style={leaderRow}>
-                    <span>{leaderboardPage * 10 + i + 1}. 👥 {t.name} ({t.memberCount} spēlētāji)</span>
-                    <span style={{ fontWeight: 'bold', color: 'gold' }}>{t.score} pt</span>
+            <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: '0 0 15px 0' }}>
+              {isTeamMode && showTeamLeaderboard ? '👥 KOMANDU REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
+            </h1>
+            <div>
+              {sortedLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => (
+                <div key={p.id || i} style={leaderRow}>
+                  <span>{leaderboardPage * 10 + i + 1}. {p.name} {isTeamMode && p.teamName && `[${p.teamName}]`}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                    <span style={timeTagStyle}>⏱️ {formatThinkingTime(p.totalTimeMs)}</span>
+                    <span style={{ fontWeight: 'bold', color: 'gold' }}>{p.score} pt</span>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div>
-                {sortedLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => {
-                  const globalIndex = leaderboardPage * 10 + i + 1;
-                  const scoreToDisplay = isRoundLb ? (p.roundScore ?? 0) : p.score;
-                  const timeToDisplay = isRoundLb ? (p.roundTimeMs || 0) : (p.totalTimeMs || 0);
-
-                  return (
-                    <div key={p.id || globalIndex} style={leaderRow}>
-                      <span>
-                        {globalIndex}. {p.name} {isTeamMode && p.teamName && `[${p.teamName}]`}
-                      </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                        <span style={timeTagStyle}>⏱️ {formatThinkingTime(timeToDisplay)}</span>
-                        <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
-                          {scoreToDisplay} pt
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
-        {/* 3. FINĀLA APBALVOŠANA (PODIJS) */}
+        {/* 3. 🏆 FINĀLA APBALVOŠANA (VIENSKAITLIS: VICEČEMPIONS / ABSOLŪTAIS ČEMPIONS) */}
         {scene?.type === 'LEADERBOARD' && isFinalLb && (
           <div style={podiumWrapper}>
             {podiumStage < 4 && (
               <div style={podiumFlexContainer}>
                 <div style={podiumTitleBox}>
-                  <h1 style={{ fontSize: 'clamp(1.4rem, 2.5vw, 3rem)', color: '#ffd700', margin: 0, textShadow: '0 0 25px rgba(255,215,0,0.7)', fontWeight: '900', letterSpacing: '1px' }}>
-                    🥇 {finalIsTeamPodium ? 'KOMANDU FINĀLA APBALVOŠANA' : 'INDIVIDUĀLĀ FINĀLA APBALVOŠANA'}
+                  <h1 style={{ fontSize: '2.4vw', color: '#ffd700', margin: 0, fontWeight: '900', letterSpacing: '2px' }}>
+                    {finalIsTeamPodium ? '🏆 KOMANDU FINĀLA APBALVOŠANA 🏆' : '🏆 INDIVIDUĀLĀ FINĀLA APBALVOŠANA 🏆'}
                   </h1>
                 </div>
 
                 <div style={podiumStagesContainer}>
+                  {/* 🥈 2. VIETA — VICEČEMPIONS */}
                   {secondPlace && (
                     <div
                       style={{
                         ...pedestalColumn,
                         opacity: podiumStage >= 2 ? 1 : 0,
-                        transform: podiumStage >= 2 ? 'translateY(0)' : 'translateY(40px)',
-                        transition: 'all 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                        transform: podiumStage >= 2 ? 'translateY(0)' : 'translateY(50px)',
+                        transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
+                      <div style={rankTitleBadge}>🥈 VICEČEMPIONS</div>
                       <div style={podiumTextBadge}>
                         <span style={podiumNameText} title={secondPlace.name}>
-                          {finalIsTeamPodium ? `👥 ${secondPlace.name}` : `${secondPlace.name} ${isTeamMode && secondPlace.teamName ? `[${secondPlace.teamName}]` : ''}`}
+                          {finalIsTeamPodium ? `👥 ${secondPlace.name}` : secondPlace.name}
                         </span>
-                        <span style={{ fontSize: 'clamp(1rem, 1.3vw, 1.5rem)', color: '#ffc107', fontWeight: 'bold' }}>{secondPlace.score} pt</span>
-                        {secondPlace.totalTimeMs !== undefined && (
-                          <span style={{ fontSize: 'clamp(0.7rem, 0.85vw, 0.95rem)', color: '#00e5ff' }}>
-                            ⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}
-                          </span>
-                        )}
+                        <span style={{ fontSize: '1.4rem', color: '#ffd700', fontWeight: '900' }}>{secondPlace.score} pt</span>
+                        <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}</span>
                       </div>
                       <div style={silverPedestal}>
-                        <span style={pedestalNumberText}>🥈 2</span>
+                        <span style={pedestalNumberText}>2</span>
                       </div>
                     </div>
                   )}
 
+                  {/* 🥇 1. VIETA — ABSOLŪTAIS ČEMPIONS */}
                   {firstPlace && (
                     <div
                       style={{
                         ...pedestalColumn,
                         opacity: podiumStage >= 3 ? 1 : 0,
-                        transform: podiumStage >= 3 ? 'translateY(0)' : 'translateY(50px)',
-                        transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                        transform: podiumStage >= 3 ? 'translateY(0)' : 'translateY(60px)',
+                        transition: 'all 0.9s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
-                      <div style={{ fontSize: 'clamp(1.8rem, 2.6vw, 3.2rem)', marginBottom: '-4px', animation: 'pulse 1.2s infinite alternate', filter: 'drop-shadow(0 0 12px gold)' }}>
+                      <div style={{ fontSize: '3rem', marginBottom: '-6px', filter: 'drop-shadow(0 0 15px gold)' }}>
                         👑
                       </div>
-                      <div style={{ ...podiumTextBadge, border: '2px solid #ffd700', boxShadow: '0 0 25px rgba(255,215,0,0.6)', background: 'rgba(20, 15, 0, 0.92)' }}>
-                        <span style={{ ...podiumNameText, color: '#ffd700', fontWeight: '900', textShadow: '0 0 12px #ffd700' }} title={firstPlace.name}>
-                          {finalIsTeamPodium ? `👥 ${firstPlace.name}` : `${firstPlace.name} ${isTeamMode && firstPlace.teamName ? `[${firstPlace.teamName}]` : ''}`}
+                      <div style={{ ...rankTitleBadge, background: 'linear-gradient(90deg, #ffd700, #ff9800)', color: '#000' }}>
+                        🏆 ABSOLŪTAIS ČEMPIONS 🏆
+                      </div>
+                      <div style={{ ...podiumTextBadge, border: '3px solid #ffd700', boxShadow: '0 0 35px rgba(255,215,0,0.7)' }}>
+                        <span style={{ ...podiumNameText, color: '#ffd700', fontWeight: '900' }} title={firstPlace.name}>
+                          {finalIsTeamPodium ? `👥 ${firstPlace.name}` : firstPlace.name}
                         </span>
-                        <span style={{ fontSize: 'clamp(1.1rem, 1.5vw, 1.8rem)', color: '#fff', fontWeight: 'bold' }}>{firstPlace.score} pt</span>
-                        {firstPlace.totalTimeMs !== undefined && (
-                          <span style={{ fontSize: 'clamp(0.75rem, 0.9vw, 1rem)', color: '#00e5ff' }}>
-                            ⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}
-                          </span>
-                        )}
+                        <span style={{ fontSize: '1.7rem', color: '#fff', fontWeight: '900' }}>{firstPlace.score} pt</span>
+                        <span style={{ fontSize: '0.9rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}</span>
                       </div>
                       <div style={goldPedestal}>
-                        <span style={pedestalNumberText}>🥇 1</span>
+                        <span style={pedestalNumberText}>1</span>
                       </div>
                     </div>
                   )}
 
+                  {/* 🥉 3. VIETA — BRONZAS GODA VIETA */}
                   {thirdPlace && (
                     <div
                       style={{
                         ...pedestalColumn,
                         opacity: podiumStage >= 1 ? 1 : 0,
-                        transform: podiumStage >= 1 ? 'translateY(0)' : 'translateY(40px)',
-                        transition: 'all 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                        transform: podiumStage >= 1 ? 'translateY(0)' : 'translateY(50px)',
+                        transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
                       }}
                     >
+                      <div style={rankTitleBadge}>🥉 BRONZAS GODA VIETA</div>
                       <div style={podiumTextBadge}>
                         <span style={podiumNameText} title={thirdPlace.name}>
-                          {finalIsTeamPodium ? `👥 ${thirdPlace.name}` : `${thirdPlace.name} ${isTeamMode && thirdPlace.teamName ? `[${thirdPlace.teamName}]` : ''}`}
+                          {finalIsTeamPodium ? `👥 ${thirdPlace.name}` : thirdPlace.name}
                         </span>
-                        <span style={{ fontSize: 'clamp(1rem, 1.3vw, 1.5rem)', color: '#ffc107', fontWeight: 'bold' }}>{thirdPlace.score} pt</span>
-                        {thirdPlace.totalTimeMs !== undefined && (
-                          <span style={{ fontSize: 'clamp(0.7rem, 0.85vw, 0.95rem)', color: '#00e5ff' }}>
-                            ⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}
-                          </span>
-                        )}
+                        <span style={{ fontSize: '1.4rem', color: '#ffd700', fontWeight: '900' }}>{thirdPlace.score} pt</span>
+                        <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}</span>
                       </div>
                       <div style={bronzePedestal}>
-                        <span style={pedestalNumberText}>🥉 3</span>
+                        <span style={pedestalNumberText}>3</span>
                       </div>
                     </div>
                   )}
                 </div>
+
+                <div
+                  style={{
+                    width: '75%',
+                    height: '25px',
+                    background: 'radial-gradient(ellipse at center, rgba(255, 215, 0, 0.35) 0%, rgba(0,0,0,0) 80%)',
+                    filter: 'blur(8px)',
+                    marginTop: '-5px'
+                  }}
+                />
               </div>
             )}
 
             {podiumStage >= 4 && (
               <div style={leaderboardOverlay}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                  <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: 0, textShadow: '0 2px 10px #000' }}>
-                    {finalIsTeamPodium ? 'KOMANDU KOPVĒRTĒJUMS (NO 4. VIETAS)' : 'INDIVIDUĀLAIS KOPVĒRTĒJUMS (NO 4. VIETAS)'} {totalRemainingPages > 1 ? `(${leaderboardPage + 1}/${totalRemainingPages})` : ''}
-                  </h1>
-                </div>
+                <h1 style={{ fontSize: '2.4vw', color: '#ffc107', margin: '0 0 15px 0' }}>
+                  {finalIsTeamPodium ? 'KOMANDU KOPVĒRTĒJUMS (NO 4. VIETAS)' : 'KOPVĒRTĒJUMS (NO 4. VIETAS)'}
+                </h1>
                 <div>
-                  {currentRemainingPageList.length === 0 ? (
-                    <div style={{ textAlign: 'center', color: '#aaa', padding: '20px', fontStyle: 'italic', fontSize: '1.4vw' }}>
-                      Citu dalībnieku sarakstā nav. Nospiediet [Space], lai atgrieztos uz Top 3 podiju!
+                  {currentRemainingPageList.map((item, i) => (
+                    <div key={item.id || i} style={leaderRow}>
+                      <span>{4 + leaderboardPage * 10 + i}. {item.name}</span>
+                      <span style={{ fontWeight: 'bold', color: 'gold' }}>{item.score} pt</span>
                     </div>
-                  ) : (
-                    currentRemainingPageList.map((item, i) => {
-                      const globalRank = 4 + leaderboardPage * 10 + i;
-                      return (
-                        <div key={item.id || item.name || globalRank} style={leaderRow}>
-                          <span>
-                            {globalRank}. {finalIsTeamPodium ? `👥 ${item.name} (${item.memberCount} spēlētāji)` : `${item.name} ${isTeamMode && item.teamName ? `[${item.teamName}]` : ''}`}
-                          </span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                            {item.totalTimeMs !== undefined && (
-                              <span style={timeTagStyle}>⏱️ {formatThinkingTime(item.totalTimeMs)}</span>
-                            )}
-                            <span style={{ fontWeight: 'bold', color: 'gold', minWidth: '70px', textAlign: 'right' }}>
-                              {item.score} pt
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
+                  ))}
                 </div>
               </div>
             )}
@@ -1940,7 +2041,6 @@ const fullScreen: React.CSSProperties = {
   flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'flex-start',
-  backgroundColor: '#000',
   color: '#fff',
   fontFamily: 'Segoe UI, Arial, sans-serif',
   overflow: 'hidden',
@@ -1949,33 +2049,15 @@ const fullScreen: React.CSSProperties = {
 
 const fullScreenCenter: React.CSSProperties = {
   ...fullScreen,
-  justifyContent: 'center'
+  justifyContent: 'center',
+  backgroundColor: '#000'
 };
 
-const topBarStyle: React.CSSProperties = {
-  position: 'fixed',
-  top: 0,
-  left: 0,
-  width: '100%',
-  height: '70px',
-  background: 'rgba(20, 20, 20, 0.88)',
-  backdropFilter: 'blur(12px)',
+const votersBox: React.CSSProperties = {
+  flex: 1,
   display: 'flex',
   alignItems: 'center',
-  padding: '0 30px',
-  gap: '20px',
-  borderBottom: '2px solid rgba(255,255,255,0.12)',
-  zIndex: 30,
-  boxSizing: 'border-box'
-};
-
-const pinBadge: React.CSSProperties = {
-  background: 'rgba(0,0,0,0.85)',
-  padding: '6px 16px',
-  borderRadius: '10px',
-  fontSize: '1.3rem',
-  fontWeight: 'bold',
-  border: '2px solid #0f0'
+  justifyContent: 'center'
 };
 
 const timerBadge: React.CSSProperties = {
@@ -1989,35 +2071,15 @@ const timerBadge: React.CSSProperties = {
   justifyContent: 'center',
   fontWeight: 'bold',
   fontSize: '1.1rem',
-  background: 'rgba(0,0,0,0.7)',
-  backdropFilter: 'blur(8px)'
+  background: 'rgba(0,0,0,0.7)'
 };
 
-const votersBox: React.CSSProperties = {
-  flex: 1,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center'
-};
-
-const statsBadge: React.CSSProperties = { 
-  fontSize: '1.2rem', 
+const statsBadge: React.CSSProperties = {
+  fontSize: '1.2rem',
   fontWeight: 'bold',
   background: 'rgba(0,0,0,0.7)',
-  backdropFilter: 'blur(8px)',
-  padding: '5px 12px',
-  borderRadius: '10px',
-  border: '1px solid rgba(255,255,255,0.15)'
-};
-
-const pointsBadge: React.CSSProperties = {
-  background: '#fff',
-  color: '#000',
-  padding: '6px 16px',
-  borderRadius: '25px',
-  fontWeight: 'bold',
-  fontSize: '1rem',
-  boxShadow: '0 4px 15px rgba(0,0,0,0.5)'
+  padding: '6px 14px',
+  borderRadius: '10px'
 };
 
 const bigBtn: React.CSSProperties = {
@@ -2028,19 +2090,16 @@ const bigBtn: React.CSSProperties = {
   color: '#fff',
   border: 'none',
   borderRadius: '20px',
-  fontWeight: 'bold',
-  boxShadow: '0 10px 30px rgba(0,0,0,0.7)'
+  fontWeight: 'bold'
 };
 
 const optionCard: React.CSSProperties = {
   padding: '12px 20px',
-  borderRadius: '14px',
-  border: 'none',
-  backdropFilter: 'blur(14px)',
+  borderRadius: '16px',
   display: 'flex',
   justifyContent: 'space-between',
   alignItems: 'center',
-  boxShadow: '0 8px 30px rgba(0,0,0,0.85)',
+  boxShadow: '0 10px 30px rgba(0,0,0,0.85)',
   boxSizing: 'border-box'
 };
 
@@ -2059,10 +2118,7 @@ const summaryPillGreen: React.CSSProperties = {
   color: '#00ff00',
   padding: '5px 14px',
   borderRadius: '10px',
-  fontWeight: 'bold',
-  fontSize: '1.05vw',
-  backdropFilter: 'blur(8px)',
-  boxShadow: '0 0 15px rgba(40,167,69,0.45)'
+  fontWeight: 'bold'
 };
 
 const summaryPillYellow: React.CSSProperties = {
@@ -2071,10 +2127,7 @@ const summaryPillYellow: React.CSSProperties = {
   color: '#ffc107',
   padding: '5px 12px',
   borderRadius: '10px',
-  fontWeight: 'bold',
-  fontSize: '0.95vw',
-  backdropFilter: 'blur(8px)',
-  boxShadow: '0 0 15px rgba(255,193,7,0.45)'
+  fontWeight: 'bold'
 };
 
 const summaryPillRed: React.CSSProperties = {
@@ -2083,10 +2136,7 @@ const summaryPillRed: React.CSSProperties = {
   color: '#ff4d4d',
   padding: '5px 14px',
   borderRadius: '10px',
-  fontWeight: 'bold',
-  fontSize: '1.05vw',
-  backdropFilter: 'blur(8px)',
-  boxShadow: '0 0 15px rgba(220,53,69,0.45)'
+  fontWeight: 'bold'
 };
 
 const summaryPillGray: React.CSSProperties = {
@@ -2095,22 +2145,16 @@ const summaryPillGray: React.CSSProperties = {
   color: '#ddd',
   padding: '5px 14px',
   borderRadius: '10px',
-  fontWeight: 'bold',
-  fontSize: '1.05vw',
-  backdropFilter: 'blur(8px)',
-  boxShadow: '0 0 10px rgba(108,117,125,0.4)'
+  fontWeight: 'bold'
 };
 
 const leaderboardOverlay: React.CSSProperties = {
-  background: 'rgba(10, 10, 10, 0.88)',
-  backdropFilter: 'blur(16px)',
+  background: 'rgba(10, 10, 10, 0.92)',
   padding: '35px',
   borderRadius: '24px',
   width: '68vw',
   maxHeight: '75vh',
   zIndex: 40,
-  border: 'none',
-  boxShadow: '0 20px 60px rgba(0,0,0,0.95)',
   display: 'flex',
   flexDirection: 'column'
 };
@@ -2120,28 +2164,24 @@ const leaderRow: React.CSSProperties = {
   justifyContent: 'space-between',
   fontSize: '1.8vw',
   borderBottom: '1px solid rgba(255,255,255,0.12)',
-  padding: '10px 0',
-  textShadow: '0 2px 8px #000'
+  padding: '10px 0'
 };
 
 const timeTagStyle: React.CSSProperties = {
   fontSize: '1.2vw',
   color: '#00e5ff',
   background: 'rgba(0, 229, 255, 0.15)',
-  backdropFilter: 'blur(6px)',
   padding: '2px 8px',
-  borderRadius: '6px',
-  border: '1px solid rgba(0, 229, 255, 0.4)'
+  borderRadius: '6px'
 };
 
 const podiumWrapper: React.CSSProperties = {
-  width: '92vw',
+  width: '94vw',
   height: '86vh',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
-  justifyContent: 'center',
-  boxSizing: 'border-box'
+  justifyContent: 'center'
 };
 
 const podiumFlexContainer: React.CSSProperties = {
@@ -2155,21 +2195,19 @@ const podiumFlexContainer: React.CSSProperties = {
 
 const podiumTitleBox: React.CSSProperties = {
   background: 'rgba(10, 10, 10, 0.85)',
-  backdropFilter: 'blur(14px)',
-  padding: '8px 32px',
+  padding: '8px 36px',
   borderRadius: '16px',
-  border: 'none',
-  marginBottom: 'clamp(10px, 2.5vh, 25px)',
-  boxShadow: '0 10px 30px rgba(0,0,0,0.85)'
+  marginBottom: '20px',
+  border: '2px solid #ffd700',
+  boxShadow: '0 0 25px rgba(255, 215, 0, 0.4)'
 };
 
 const podiumStagesContainer: React.CSSProperties = {
   display: 'flex',
   alignItems: 'flex-end',
   justifyContent: 'center',
-  gap: 'clamp(15px, 3vw, 40px)',
-  width: '100%',
-  maxHeight: '62vh'
+  gap: '30px',
+  width: '100%'
 };
 
 const pedestalColumn: React.CSSProperties = {
@@ -2179,72 +2217,111 @@ const pedestalColumn: React.CSSProperties = {
   justifyContent: 'flex-end'
 };
 
+const rankTitleBadge: React.CSSProperties = {
+  background: '#1a1a1a',
+  border: '1px solid #ffd700',
+  color: '#ffd700',
+  fontSize: '0.85vw',
+  fontWeight: '900',
+  padding: '3px 12px',
+  borderRadius: '6px',
+  marginBottom: '6px',
+  letterSpacing: '1px'
+};
+
 const podiumTextBadge: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
-  background: 'rgba(12, 12, 12, 0.88)',
-  backdropFilter: 'blur(14px)',
-  padding: '6px 14px',
-  borderRadius: '12px',
-  border: 'none',
-  marginBottom: '6px',
+  background: 'rgba(12, 12, 12, 0.92)',
+  padding: '8px 16px',
+  borderRadius: '14px',
+  marginBottom: '8px',
   boxShadow: '0 8px 25px rgba(0,0,0,0.9)',
-  width: 'clamp(160px, 20vw, 280px)',
-  boxSizing: 'border-box'
+  width: '260px'
 };
 
 const podiumNameText: React.CSSProperties = {
-  fontSize: 'clamp(0.95rem, 1.4vw, 1.7rem)',
+  fontSize: '1.4vw',
   fontWeight: 'bold',
   color: '#fff',
   width: '100%',
   textAlign: 'center',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  textShadow: '0 2px 6px #000'
+  whiteSpace: 'nowrap'
 };
 
 const pedestalNumberText: React.CSSProperties = {
-  fontSize: 'clamp(2.5rem, 4.5vw, 5.5rem)',
+  fontSize: '4.5rem',
   fontWeight: '900',
-  color: '#000',
-  textShadow: '0 2px 8px rgba(255,255,255,0.7)'
+  color: '#000'
 };
 
 const goldPedestal: React.CSSProperties = {
-  width: 'clamp(150px, 19vw, 240px)',
-  height: 'clamp(140px, 26vh, 230px)',
+  width: '220px',
+  height: '220px',
   background: 'linear-gradient(to top, #b7791f, #f6e05e, #ecc94b)',
-  borderRadius: '18px 18px 0 0',
+  borderRadius: '20px 20px 0 0',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   border: '3px solid #fff',
-  boxShadow: '0 0 45px rgba(246, 224, 94, 0.8), inset 0 0 20px rgba(255,255,255,0.6)'
+  boxShadow: '0 0 50px rgba(246, 224, 94, 0.8)'
 };
 
 const silverPedestal: React.CSSProperties = {
-  width: 'clamp(130px, 16vw, 200px)',
-  height: 'clamp(100px, 19vh, 170px)',
+  width: '190px',
+  height: '165px',
   background: 'linear-gradient(to top, #4a5568, #cbd5e0, #e2e8f0)',
-  borderRadius: '14px 14px 0 0',
+  borderRadius: '16px 16px 0 0',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   border: '3px solid #fff',
-  boxShadow: '0 0 30px rgba(226, 232, 240, 0.6), inset 0 0 15px rgba(255,255,255,0.5)'
+  boxShadow: '0 0 35px rgba(226, 232, 240, 0.6)'
 };
 
 const bronzePedestal: React.CSSProperties = {
-  width: 'clamp(130px, 16vw, 200px)',
-  height: 'clamp(70px, 14vh, 130px)',
+  width: '190px',
+  height: '125px',
   background: 'linear-gradient(to top, #744210, #d69e2e, #b7791f)',
-  borderRadius: '14px 14px 0 0',
+  borderRadius: '16px 16px 0 0',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   border: '3px solid #fff',
-  boxShadow: '0 0 30px rgba(214, 158, 46, 0.6), inset 0 0 15px rgba(255,255,255,0.5)'
+  boxShadow: '0 0 30px rgba(214, 158, 46, 0.6)'
+};
+
+const modalOverlay: React.CSSProperties = {
+  position: 'fixed',
+  top: 0,
+  left: 0,
+  width: '100vw',
+  height: '100vh',
+  background: 'rgba(0,0,0,0.88)',
+  zIndex: 99999,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center'
+};
+
+const modalCard: React.CSSProperties = {
+  background: 'rgba(20, 20, 20, 0.95)',
+  padding: '35px',
+  borderRadius: '24px',
+  border: '3px solid #00ff00',
+  textAlign: 'center'
+};
+
+const btnCloseModal: React.CSSProperties = {
+  marginTop: '15px',
+  padding: '10px 25px',
+  background: '#444',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '8px',
+  fontWeight: 'bold',
+  cursor: 'pointer'
 };

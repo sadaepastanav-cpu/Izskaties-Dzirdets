@@ -59,7 +59,7 @@ export default function Player() {
   const [podiumStage, setPodiumStage] = useState<number>(0);
   const [buzzerTestPresses, setBuzzerTestPresses] = useState(0);
 
-  // 🌟 Zibenīgās personīgās statistikas stāvoklis (ar punktu saglabāšanu)
+  // 🌟 Zibenīgās personīgās statistikas stāvoklis (Vienmēr zina savu vietu)
   const [personalStats, setPersonalStats] = useState<{
     myRank: number | null;
     totalPlayers: number;
@@ -113,7 +113,6 @@ export default function Player() {
 
   const [serverBaseUrl, setServerBaseUrl] = useState<string>('');
 
-  // Ekrāna negulēšana (WakeLock)
   useEffect(() => {
     let wakeLock: any = null;
     const requestWakeLock = async () => {
@@ -217,26 +216,20 @@ export default function Player() {
       const currentSub = (data?.subState || data?.currentScene?.subState || 'IDLE').toUpperCase();
       setSubState(currentSub);
 
-      // 🌟 Atjaunojam punktus un statistiku pie F5 pārlādes
       if (data?.score !== undefined) {
         localStorage.setItem('player_saved_score', String(data.score));
-        setPersonalStats((prev) => ({
-          myRank: prev?.myRank ?? null,
-          totalPlayers: prev?.totalPlayers ?? 1,
+        setPersonalStats({
+          myRank: data?.myRank ?? null,
+          totalPlayers: data?.totalPlayers ?? 1,
           score: data.score,
           roundScore: data.roundScore ?? 0,
-          totalTimeMs: prev?.totalTimeMs ?? 0,
-          roundTimeMs: prev?.roundTimeMs ?? 0,
-          teamRank: prev?.teamRank ?? null,
-          totalTeams: prev?.totalTeams,
-          teamScore: prev?.teamScore
-        }));
+          totalTimeMs: 0,
+          roundTimeMs: 0,
+          teamRank: data?.teamRank ?? null,
+          totalTeams: data?.totalTeams ?? 1,
+          teamScore: data?.teamScore ?? null
+        });
       }
-
-      localStorage.setItem('player_pin', pin.trim());
-      localStorage.setItem('player_name', name.trim());
-      localStorage.setItem('player_is_captain', String(isCaptain));
-      if (teamName) localStorage.setItem('player_team', teamName.trim());
     });
 
     s.on('session-branding', (br: any) => {
@@ -281,7 +274,6 @@ export default function Player() {
       }
     });
 
-    // 🌟 Zibenīgās personīgās statistikas saņemšana no servera
     s.on('my-personal-stats', (data: any) => {
       setPersonalStats(data);
       if (data?.score !== undefined) {
@@ -353,7 +345,7 @@ export default function Player() {
     return () => {
       s.disconnect();
     };
-  }, [playerId, urlPin, urlTeam, pin, name, isCaptain, teamName]);
+  }, [playerId, urlPin, urlTeam]);
 
   useEffect(() => {
     if (socket && pin && pin.trim().length >= 4) {
@@ -399,17 +391,16 @@ export default function Player() {
   const maxRequiredChoices = requiredCount > 0 ? requiredCount : 1;
   const submitMode = scene?.config?.submitMode || 'INSTANT';
 
-  // Slaida līmeņa pults režīms
   const playerUIMode: 'AUTO' | 'CLASSIC_GRID' | 'TEXT_CARDS' | 'MUSIC_DUAL' =
     scene?.config?.playerUIMode || 'AUTO';
 
-  // Nosaka vai rādīt tekstu uz pogām
+  // Pārbauda vai variantiem ir reāls teksts (nevis tikai viens burts A, B, C)
   const hasOptionText = rawOptions.some((opt) => opt && opt.trim() !== '' && !/^[A-F]$/i.test(opt.trim()));
-  const shouldShowTextOnButtons =
-    playerUIMode === 'TEXT_CARDS' || playerUIMode === 'MUSIC_DUAL' || (playerUIMode === 'AUTO' && hasOptionText);
+  const shouldShowVerticalCards =
+    playerUIMode === 'TEXT_CARDS' || playerUIMode === 'MUSIC_DUAL' || hasOptionText;
 
   // ==========================================
-  // 🎵 MUZIKĀLĀS SPĒLES (MUSIC_DUAL) APSTRĀDE
+  // 🎵 1. MUZIKĀLĀ SPĒLE (MUSIC_DUAL) - STABIŅĀ
   // ==========================================
   const handleMusicOptionClick = (option: string, letter: string, isTopCategory: boolean) => {
     if (!socket || subState !== 'ACTIVE' || isDisabledAfk) return;
@@ -420,7 +411,6 @@ export default function Player() {
       if (isTopCategory) setStagedMusicTop(choiceValue);
       else setStagedMusicBottom(choiceValue);
     } else {
-      // ⚡ INSTANT režīms: Katrs klikšķis nosūtās uzreiz ar savu laiku
       try { if ('vibrate' in navigator) navigator.vibrate(60); } catch {}
 
       let newTop = musicTopChoice;
@@ -614,29 +604,14 @@ export default function Player() {
   };
 
   const isRoundLb = leaderboardType === 'ROUND';
-  const sortedLeaderboard = [...leaderboard]
-    .filter((p) => !p.isDisabled)
-    .sort((a, b) => {
-      const scoreA = isRoundLb ? a.roundScore ?? 0 : a.score ?? 0;
-      const scoreB = isRoundLb ? b.roundScore ?? 0 : b.score ?? 0;
-      if (scoreB !== scoreA) return scoreB - scoreA;
-      const timeA = isRoundLb ? a.roundTimeMs || 0 : a.totalTimeMs || 0;
-      const timeB = isRoundLb ? b.roundTimeMs || 0 : b.totalTimeMs || 0;
-      return timeA - timeB;
-    });
+  const totalPlayersCount = personalStats?.totalPlayers ?? 1;
+  const myRank = personalStats?.myRank ?? '-';
+  const currentScoreToDisplay = personalStats ? (isRoundLb ? personalStats.roundScore : personalStats.score) : 0;
+  const currentTimeToDisplay = personalStats ? (isRoundLb ? personalStats.roundTimeMs : personalStats.totalTimeMs) : 0;
 
-  const totalPlayersCount = personalStats?.totalPlayers ?? (sortedLeaderboard.length || 1);
-  const myRankIndex = sortedLeaderboard.findIndex((p) => p.id === playerId || p.name === name);
-  const myRank = personalStats?.myRank ?? (myRankIndex !== -1 ? myRankIndex + 1 : '-');
-  const myScoreData = myRankIndex !== -1 ? sortedLeaderboard[myRankIndex] : null;
-  const currentScoreToDisplay = personalStats ? (isRoundLb ? personalStats.roundScore : personalStats.score) : (isRoundLb ? (myScoreData?.roundScore ?? 0) : (myScoreData?.score ?? 0));
-  const currentTimeToDisplay = personalStats ? (isRoundLb ? personalStats.roundTimeMs : personalStats.totalTimeMs) : (isRoundLb ? (myScoreData?.roundTimeMs || 0) : (myScoreData?.totalTimeMs || 0));
-
-  const myTeamData = isTeamMode && teamName ? teamLeaderboard.find((t) => t.name?.toLowerCase() === teamName.toLowerCase()) : null;
-  const myTeamRankIndex = isTeamMode && teamName ? teamLeaderboard.findIndex((t) => t.name?.toLowerCase() === teamName.toLowerCase()) : -1;
-  const myTeamRank = personalStats?.teamRank ?? (myTeamRankIndex !== -1 ? myTeamRankIndex + 1 : '-');
-  const totalTeamsCount = personalStats?.totalTeams ?? (teamLeaderboard.length || 1);
-  const currentTeamScoreToDisplay = personalStats?.teamScore ?? (myTeamData?.score ?? 0);
+  const myTeamRank = personalStats?.teamRank ?? '-';
+  const totalTeamsCount = personalStats?.totalTeams ?? 1;
+  const currentTeamScoreToDisplay = personalStats?.teamScore ?? 0;
 
   const appBgStyle: React.CSSProperties = {
     ...fullScreenMobile,
@@ -660,7 +635,6 @@ export default function Player() {
   const isOrdering = scene?.type === 'ORDERING';
   const isMusicMode = playerUIMode === 'MUSIC_DUAL';
 
-  // 🌟 Logo attēlošanas palīgs spēles laikā
   const renderGameLogo = () => {
     if (!branding.appLogo || branding.gameLogoPosition === 'NONE') return null;
     return (
@@ -866,7 +840,7 @@ export default function Player() {
           )}
 
           <div style={rankBadge}>
-            <div style={{ fontSize: '0.85rem', color: '#aaa' }}>👤 Tavs individuālais ieguldījums:</div>
+            <div style={{ fontSize: '0.85rem', color: '#aaa' }}>👤 Tavs individuālais rezultāts:</div>
             <div style={{ fontSize: '2.2rem', fontWeight: 'bold', color: '#ffc107', margin: '3px 0' }}>
               #{myRank} <span style={{ fontSize: '1.2rem', color: '#888' }}>/ {totalPlayersCount}</span>
             </div>
@@ -988,10 +962,8 @@ export default function Player() {
       )}
 
       <div style={mobileBody}>
-        {/* 🌟 LOGO AUGŠĀ (Ja izvēlēts TOP) */}
         {branding.gameLogoPosition === 'TOP' && renderGameLogo()}
 
-        {/* PAUZE */}
         {subState === 'PAUSED' && (
           <div style={{ ...infoCard, borderColor: '#ff9800', marginBottom: '15px' }}>
             <div style={{ fontSize: '3rem', marginBottom: '8px' }}>⏸️</div>
@@ -1002,7 +974,6 @@ export default function Player() {
           </div>
         )}
 
-        {/* ⏱️ TAIMERA / PULKSTEŅA SLAIDS */}
         {scene?.type === 'TIMER' && subState !== 'PAUSED' && (
           <div style={infoCard}>
             <div style={{ fontSize: '3.5rem', marginBottom: '8px' }}>⏱️</div>
@@ -1015,7 +986,6 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🌟 BILLBOARD SLAIDS */}
         {scene?.type === 'BILLBOARD' && subState !== 'PAUSED' && (
           <div style={infoCard}>
             <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>👀</div>
@@ -1026,7 +996,6 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🌟 LĪDERU TABULAS & REZULTĀTI */}
         {scene?.type === 'LEADERBOARD' && subState !== 'PAUSED' && (
           <div style={infoCard}>
             {isFinalLeaderboard && podiumStage < 3 ? (
@@ -1050,7 +1019,6 @@ export default function Player() {
                     : 'KOPVĒRTĒJUMS'}
                 </h2>
 
-                {/* Komandas rādītājs */}
                 {isTeamMode && teamName && (
                   <div style={{ ...rankBadge, borderColor: '#00e5ff', background: '#0a1d2e', padding: '8px', margin: '6px 0' }}>
                     <div style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>
@@ -1066,7 +1034,6 @@ export default function Player() {
                   </div>
                 )}
 
-                {/* Individuālais rādītājs */}
                 <div style={{ ...rankBadge, padding: '8px', margin: '6px 0' }}>
                   <div style={{ fontSize: '0.8rem', color: '#aaa' }}>
                     👤 Tavs individuālais sniegums:
@@ -1093,18 +1060,19 @@ export default function Player() {
             {isMyBuzzerTurn && scene?.config?.buzzerRaceType === 'WITH_OPTIONS' ? (
               <div style={{ width: '100%', textAlign: 'center' }}>
                 <div style={textHeaderBadge}>🎉 TAVA KĀRTA! IZVĒLIES ATBILDI:</div>
-                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${rawOptions.length}, 1fr)`, gap: '6px', width: '100%', margin: '20px 0' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', margin: '15px 0' }}>
                   {rawOptions.map((opt, i) => (
                     <button
                       key={i}
                       disabled={!!myChoice}
                       onClick={() => handleSingleVoteClick(opt, String.fromCharCode(65 + i))}
                       style={{
-                        ...buzzerBtnHorizontal,
+                        ...btnVerticalCard,
                         background: myChoice === opt ? '#28a745' : BUTTON_COLORS[i % BUTTON_COLORS.length]
                       }}
                     >
-                      <span style={{ fontSize: '1.8rem', fontWeight: '900' }}>{String.fromCharCode(65 + i)}</span>
+                      <div style={letterBadgeSquare}>{String.fromCharCode(65 + i)}</div>
+                      <div style={textOptionFull}>{opt}</div>
                     </button>
                   ))}
                 </div>
@@ -1122,8 +1090,8 @@ export default function Player() {
                 <button
                   onClick={handleBuzzerPress}
                   style={{
-                    width: '250px',
-                    height: '250px',
+                    width: '240px',
+                    height: '240px',
                     borderRadius: '50%',
                     background: buzzerPressedOrder
                       ? '#28a745'
@@ -1141,12 +1109,8 @@ export default function Player() {
                     alignItems: 'center',
                     justifyContent: 'center',
                     transition: 'transform 0.1s ease',
-                    transform: 'scale(1)'
+                    touchAction: 'manipulation'
                   }}
-                  onMouseDown={(e) => ((e.currentTarget as HTMLElement).style.transform = 'scale(0.92)')}
-                  onMouseUp={(e) => ((e.currentTarget as HTMLElement).style.transform = 'scale(1)')}
-                  onTouchStart={(e) => ((e.currentTarget as HTMLElement).style.transform = 'scale(0.92)')}
-                  onTouchEnd={(e) => ((e.currentTarget as HTMLElement).style.transform = 'scale(1)')}
                 >
                   {buzzerPressedOrder ? '✅ GATAVS!' : subState === 'READY' ? '🔥 TESTĒ' : '⚡ SPIED!'}
                 </button>
@@ -1219,11 +1183,11 @@ export default function Player() {
           </div>
         )}
 
-        {/* ========================================== */}
-        {/* 🎵 1. MUZIKĀLĀS SPĒLES PULTS (MUSIC_DUAL) */}
-        {/* ========================================== */}
+        {/* ======================================================== */}
+        {/* 🎵 2. MUZIKĀLĀ SPĒLE (MUSIC_DUAL) — STABIŅĀ NO AUGŠAS UZ LEJU */}
+        {/* ======================================================== */}
         {isMusicMode && !isBuzzerRace && !isOrdering && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
-          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '10px 0' }}>
+          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '4px 0', overflowY: 'auto' }}>
             {subState === 'READY' && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>🎵</div>
@@ -1236,18 +1200,22 @@ export default function Player() {
             )}
 
             {subState === 'ACTIVE' && (
-              <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '8px' }}>
-                {/* 1. AUGŠĒJĀ KATEGORIJA (A, B, C - Izpildītājs) */}
-                <div style={{ background: 'rgba(0, 229, 255, 0.08)', border: '1px solid #00e5ff', borderRadius: '12px', padding: '8px' }}>
-                  <div style={{ fontSize: '0.85rem', color: '#00e5ff', fontWeight: 'bold', marginBottom: '6px', textAlign: 'center' }}>
-                    {scene?.config?.musicCategoryTop || '🎤 Izpildītājs'} {musicTopChoice && <span style={{ color: '#00ff00' }}>✓ ({musicTopChoice})</span>}
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                
+                {/* 1. KATEGORIJA: IZPILDĪTĀJS (A, B, C STABIŅĀ) */}
+                <div style={{ background: 'rgba(0, 229, 255, 0.08)', border: '1px solid #00e5ff', borderRadius: '12px', padding: '10px' }}>
+                  <div style={{ fontSize: '0.9rem', color: '#00e5ff', fontWeight: 'bold', marginBottom: '8px', textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{scene?.config?.musicCategoryTop || '🎤 Izpildītājs'}:</span>
+                    {musicTopChoice && <span style={{ color: '#00ff00' }}>✓ Izvēlēts</span>}
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {rawOptions.slice(0, 3).map((opt, i) => {
                       const letter = String.fromCharCode(65 + i);
                       const itemKey = opt || letter;
-                      const isChosen = submitMode === 'CONFIRM' ? stagedMusicTop === itemKey : musicTopChoice === itemKey || musicTopChoice === opt || musicTopChoice === letter;
+                      const isChosen = submitMode === 'CONFIRM' 
+                        ? stagedMusicTop === itemKey 
+                        : (musicTopChoice === itemKey || musicTopChoice === opt || musicTopChoice === letter);
 
                       return (
                         <button
@@ -1255,32 +1223,39 @@ export default function Player() {
                           disabled={submitMode === 'INSTANT' && !!musicTopChoice}
                           onClick={() => handleMusicOptionClick(opt, letter, true)}
                           style={{
-                            ...btnOptionMusic,
-                            background: isChosen ? '#00e5ff' : 'rgba(0, 229, 255, 0.2)',
+                            ...btnVerticalCard,
+                            background: isChosen ? '#00e5ff' : 'rgba(0, 229, 255, 0.18)',
                             color: isChosen ? '#000' : '#fff',
-                            border: isChosen ? '2px solid #fff' : '1px solid #00e5ff',
+                            border: isChosen ? '2px solid #fff' : '1px solid rgba(0, 229, 255, 0.4)',
                             opacity: submitMode === 'INSTANT' && musicTopChoice && !isChosen ? 0.35 : 1
                           }}
                         >
-                          <span style={{ fontSize: '1.2rem', fontWeight: '900' }}>{letter}</span>
-                          {shouldShowTextOnButtons && opt && <span style={btnOptionMusicText}>{opt}</span>}
+                          <div style={{ ...letterBadgeSquare, background: isChosen ? '#000' : '#00e5ff', color: isChosen ? '#00e5ff' : '#000' }}>
+                            {letter}
+                          </div>
+                          <div style={{ ...textOptionFull, color: isChosen ? '#000' : '#fff' }}>
+                            {opt || `Variants ${letter}`}
+                          </div>
                         </button>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* 2. APAKŠĒJĀ KATEGORIJA (D, E, F - Dziesmas nosaukums) */}
-                <div style={{ background: 'rgba(255, 0, 127, 0.08)', border: '1px solid #ff007f', borderRadius: '12px', padding: '8px' }}>
-                  <div style={{ fontSize: '0.85rem', color: '#ff007f', fontWeight: 'bold', marginBottom: '6px', textAlign: 'center' }}>
-                    {scene?.config?.musicCategoryBottom || '🎵 Dziesmas nosaukums'} {musicBottomChoice && <span style={{ color: '#00ff00' }}>✓ ({musicBottomChoice})</span>}
+                {/* 2. KATEGORIJA: DZIESMAS NOSAUKUMS (D, E, F STABIŅĀ) */}
+                <div style={{ background: 'rgba(255, 0, 127, 0.08)', border: '1px solid #ff007f', borderRadius: '12px', padding: '10px' }}>
+                  <div style={{ fontSize: '0.9rem', color: '#ff007f', fontWeight: 'bold', marginBottom: '8px', textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{scene?.config?.musicCategoryBottom || '🎵 Dziesmas nosaukums'}:</span>
+                    {musicBottomChoice && <span style={{ color: '#00ff00' }}>✓ Izvēlēts</span>}
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {rawOptions.slice(3, 6).map((opt, i) => {
                       const letter = String.fromCharCode(68 + i);
                       const itemKey = opt || letter;
-                      const isChosen = submitMode === 'CONFIRM' ? stagedMusicBottom === itemKey : musicBottomChoice === itemKey || musicBottomChoice === opt || musicBottomChoice === letter;
+                      const isChosen = submitMode === 'CONFIRM' 
+                        ? stagedMusicBottom === itemKey 
+                        : (musicBottomChoice === itemKey || musicBottomChoice === opt || musicBottomChoice === letter);
 
                       return (
                         <button
@@ -1288,22 +1263,25 @@ export default function Player() {
                           disabled={submitMode === 'INSTANT' && !!musicBottomChoice}
                           onClick={() => handleMusicOptionClick(opt, letter, false)}
                           style={{
-                            ...btnOptionMusic,
-                            background: isChosen ? '#ff007f' : 'rgba(255, 0, 127, 0.2)',
+                            ...btnVerticalCard,
+                            background: isChosen ? '#ff007f' : 'rgba(255, 0, 127, 0.18)',
                             color: isChosen ? '#000' : '#fff',
-                            border: isChosen ? '2px solid #fff' : '1px solid #ff007f',
+                            border: isChosen ? '2px solid #fff' : '1px solid rgba(255, 0, 127, 0.4)',
                             opacity: submitMode === 'INSTANT' && musicBottomChoice && !isChosen ? 0.35 : 1
                           }}
                         >
-                          <span style={{ fontSize: '1.2rem', fontWeight: '900' }}>{letter}</span>
-                          {shouldShowTextOnButtons && opt && <span style={btnOptionMusicText}>{opt}</span>}
+                          <div style={{ ...letterBadgeSquare, background: isChosen ? '#000' : '#ff007f', color: isChosen ? '#ff007f' : '#fff' }}>
+                            {letter}
+                          </div>
+                          <div style={{ ...textOptionFull, color: isChosen ? '#000' : '#fff' }}>
+                            {opt || `Variants ${letter}`}
+                          </div>
                         </button>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* CONFIRM POGA MUZIKĀLAJAM REŽĪMAM */}
                 {submitMode === 'CONFIRM' && !myChoice && (
                   <button
                     onClick={handleMusicConfirmSubmit}
@@ -1316,7 +1294,7 @@ export default function Player() {
                   >
                     {stagedMusicTop && stagedMusicBottom
                       ? `🚀 IESNIEGT: ${stagedMusicTop} + ${stagedMusicBottom}`
-                      : 'Izvēlies 1 no augšas + 1 no apakšas'}
+                      : 'Izvēlies 1 izpildītāju + 1 dziesmu'}
                   </button>
                 )}
 
@@ -1340,11 +1318,11 @@ export default function Player() {
           </div>
         )}
 
-        {/* ========================================== */}
-        {/* 🅰️ 2. STANDARTA JAUTĀJUMI (KLASISKĀ / TEKSTA PULTS) */}
-        {/* ========================================== */}
+        {/* ======================================================== */}
+        {/* 🅰️ 3. STANDARTA JAUTĀJUMI — TEKSTS VIENMĒR STABIŅĀ */}
+        {/* ======================================================== */}
         {!isMusicMode && !isBuzzerRace && !isOrdering && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
-          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0' }}>
+          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' }}>
             {subState === 'READY' && (
               <div style={infoCard}>
                 <div style={{ fontSize: '3.5rem', marginBottom: '10px' }}>⏳</div>
@@ -1367,91 +1345,18 @@ export default function Player() {
                     : 'SPIED ATBILDI:'}
                 </div>
 
-                {/* 🔲 A) FIKSĒTĀ 2 RINDU PULTS (CLASSIC_GRID: A-C / D-F) */}
-                {playerUIMode === 'CLASSIC_GRID' ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', flex: 1, justifyContent: 'center' }}>
-                    {/* 1. Rinda: A, B, C */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', height: '100px' }}>
-                      {[0, 1, 2].map((i) => {
-                        const letter = String.fromCharCode(65 + i);
-                        const opt = rawOptions[i];
-                        const isActive = i < rawOptions.length;
-                        const itemKey = opt || letter;
-                        const isChosen = isMultiSelectMode
-                          ? selectedMultipleOptions.includes(itemKey)
-                          : myChoice
-                          ? myChoice === opt || myChoice === letter
-                          : stagedChoice === opt || stagedChoice === letter;
-
-                        return (
-                          <button
-                            key={i}
-                            disabled={!isActive || !!myChoice}
-                            onClick={() => {
-                              if (isMultiSelectMode) toggleMultiSelectOption(itemKey);
-                              else handleSingleVoteClick(opt, letter);
-                            }}
-                            style={{
-                              ...btnOptionGrid,
-                              background: !isActive ? '#222' : isChosen ? '#28a745' : BUTTON_COLORS[i % BUTTON_COLORS.length],
-                              border: isChosen ? '3px solid #fff' : 'none',
-                              opacity: !isActive ? 0.15 : myChoice && !isChosen ? 0.35 : 1,
-                              cursor: isActive && !myChoice ? 'pointer' : 'default'
-                            }}
-                          >
-                            <span style={{ fontSize: '2rem', fontWeight: '900' }}>{letter}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* 2. Rinda: D, E, F */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', height: '100px' }}>
-                      {[3, 4, 5].map((i) => {
-                        const letter = String.fromCharCode(65 + i);
-                        const opt = rawOptions[i];
-                        const isActive = i < rawOptions.length;
-                        const itemKey = opt || letter;
-                        const isChosen = isMultiSelectMode
-                          ? selectedMultipleOptions.includes(itemKey)
-                          : myChoice
-                          ? myChoice === opt || myChoice === letter
-                          : stagedChoice === opt || stagedChoice === letter;
-
-                        return (
-                          <button
-                            key={i}
-                            disabled={!isActive || !!myChoice}
-                            onClick={() => {
-                              if (isMultiSelectMode) toggleMultiSelectOption(itemKey);
-                              else handleSingleVoteClick(opt, letter);
-                            }}
-                            style={{
-                              ...btnOptionGrid,
-                              background: !isActive ? '#222' : isChosen ? '#28a745' : BUTTON_COLORS[i % BUTTON_COLORS.length],
-                              border: isChosen ? '3px solid #fff' : 'none',
-                              opacity: !isActive ? 0.15 : myChoice && !isChosen ? 0.35 : 1,
-                              cursor: isActive && !myChoice ? 'pointer' : 'default'
-                            }}
-                          >
-                            <span style={{ fontSize: '2rem', fontWeight: '900' }}>{letter}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  /* 📝 B) TEKSTA KARTĪTES VAI DINAMISKAIS HORIZONTĀLAIS REŽĢIS */
+                {/* Ja ir teksts — VIENMĒR rādām stabiņā no augšas uz leju! Ja tikai burti — lielās pogas. */}
+                {shouldShowVerticalCards ? (
                   <div
                     style={{
-                      display: 'grid',
-                      gridTemplateColumns: shouldShowTextOnButtons ? '1fr' : `repeat(${rawOptions.length}, 1fr)`,
+                      display: 'flex',
+                      flexDirection: 'column',
                       gap: '8px',
                       width: '100%',
                       flex: 1,
-                      alignContent: 'center',
-                      maxHeight: '52vh',
-                      overflowY: shouldShowTextOnButtons ? 'auto' : 'hidden'
+                      justifyContent: 'center',
+                      maxHeight: '62vh',
+                      overflowY: 'auto'
                     }}
                   >
                     {rawOptions.map((opt, i) => {
@@ -1471,35 +1376,62 @@ export default function Player() {
                             else handleSingleVoteClick(opt, letter);
                           }}
                           style={{
-                            ...(shouldShowTextOnButtons ? btnOptionCardText : buzzerBtnHorizontal),
+                            ...btnVerticalCard,
                             background: isChosen ? '#28a745' : BUTTON_COLORS[i % BUTTON_COLORS.length],
                             border: isChosen ? '3px solid #fff' : 'none',
                             opacity: myChoice && !isChosen ? 0.35 : 1,
                             boxShadow: isChosen ? '0 0 25px #28a745' : '0 4px 12px rgba(0,0,0,0.6)'
                           }}
                         >
-                          <div style={{ width: shouldShowTextOnButtons ? '40px' : 'auto', textAlign: 'center', fontSize: shouldShowTextOnButtons ? '1.4rem' : rawOptions.length > 4 ? '1.8rem' : '2.4rem', fontWeight: '900' }}>
-                            {letter}
-                          </div>
-                          {shouldShowTextOnButtons && (
-                            <div style={{ flex: 1, textAlign: 'left', marginLeft: '12px', fontSize: '1.05rem', fontWeight: 'bold', lineHeight: 1.2, wordBreak: 'break-word' }}>
-                              {opt}
-                            </div>
-                          )}
+                          <div style={letterBadgeSquare}>{letter}</div>
+                          <div style={textOptionFull}>{opt}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  /* Ja jautājumam nav teksta (tikai burti A, B, C, D) — rādām klasiskās lielās pogas */
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: `repeat(${rawOptions.length}, 1fr)`,
+                      gap: '8px',
+                      width: '100%',
+                      flex: 1,
+                      alignContent: 'center',
+                      maxHeight: '52vh'
+                    }}
+                  >
+                    {rawOptions.map((opt, i) => {
+                      const letter = String.fromCharCode(65 + i);
+                      const itemKey = opt || letter;
+                      const isChosen = myChoice === opt || myChoice === letter;
+
+                      return (
+                        <button
+                          key={i}
+                          disabled={!!myChoice}
+                          onClick={() => handleSingleVoteClick(opt, letter)}
+                          style={{
+                            ...buzzerBtnHorizontal,
+                            background: isChosen ? '#28a745' : BUTTON_COLORS[i % BUTTON_COLORS.length],
+                            border: isChosen ? '3px solid #fff' : 'none',
+                            opacity: myChoice && !isChosen ? 0.35 : 1
+                          }}
+                        >
+                          <span style={{ fontSize: '2.5rem', fontWeight: '900' }}>{letter}</span>
                         </button>
                       );
                     })}
                   </div>
                 )}
 
-                {/* CONFIRM POGA */}
                 {!isMultiSelectMode && !myChoice && submitMode === 'CONFIRM' && (
                   <button onClick={handleConfirmSingleVote} disabled={!stagedChoice} style={{ ...btnSubmitMulti, opacity: stagedChoice ? 1 : 0.4, background: stagedChoice ? 'linear-gradient(135deg, #28a745, #20c997)' : '#333' }}>
                     {stagedChoice ? `🚀 APSTIPRINĀT ATBILDI (${stagedChoice})` : 'Izvēlies atbildi...'}
                   </button>
                 )}
 
-                {/* MULTI SUBMIT POGA */}
                 {isMultiSelectMode && !myChoice && (
                   <button onClick={handleMultiVoteSubmit} disabled={!isExactChoicesSelected} style={{ ...btnSubmitMulti, opacity: isExactChoicesSelected ? 1 : 0.4, background: isExactChoicesSelected ? 'linear-gradient(135deg, #28a745, #20c997)' : '#333' }}>
                     {isExactChoicesSelected ? `🚀 IESNIEGT (${selectedMultipleOptions.length}/${maxRequiredChoices})` : `Izvēlies ${maxRequiredChoices - selectedMultipleOptions.length} vēl`}
@@ -1536,7 +1468,6 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🌟 LOGO APAKŠĀ (Ja izvēlēts BOTTOM) */}
         {branding.gameLogoPosition === 'BOTTOM' && renderGameLogo()}
       </div>
     </div>
@@ -1558,7 +1489,8 @@ const fullScreenMobile: React.CSSProperties = {
   flexDirection: 'column',
   zIndex: 999999,
   overflow: 'hidden',
-  boxSizing: 'border-box'
+  boxSizing: 'border-box',
+  overscrollBehavior: 'none'
 };
 
 const mobileHeader: React.CSSProperties = {
@@ -1590,7 +1522,8 @@ const btnCaptainBadge: React.CSSProperties = {
   borderRadius: '6px',
   fontSize: '0.75rem',
   fontWeight: 'bold',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const btnExitSmall: React.CSSProperties = {
@@ -1600,7 +1533,8 @@ const btnExitSmall: React.CSSProperties = {
   padding: '3px 8px',
   borderRadius: '4px',
   fontSize: '0.75rem',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const mobileBody: React.CSSProperties = {
@@ -1647,7 +1581,8 @@ const btnJoin: React.CSSProperties = {
   border: 'none',
   fontSize: '1rem',
   fontWeight: 'bold',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const infoCard: React.CSSProperties = {
@@ -1678,31 +1613,32 @@ const textHeaderBadge: React.CSSProperties = {
   color: '#ffc107',
   fontWeight: 'bold',
   fontSize: '0.95rem',
-  margin: '0 auto 4px auto'
+  margin: '0 auto 8px auto'
 };
 
 const voteConfirmedBadge: React.CSSProperties = {
   background: 'rgba(0, 0, 0, 0.85)',
-  padding: '6px 14px',
+  padding: '8px 16px',
   borderRadius: '8px',
   border: '1px solid #28a745',
   textAlign: 'center',
   color: '#00ff00',
   fontWeight: 'bold',
-  fontSize: '0.95rem',
-  marginTop: '5px'
+  fontSize: '1rem',
+  marginTop: '8px'
 };
 
 const btnSubmitMulti: React.CSSProperties = {
   width: '100%',
-  padding: '12px',
+  padding: '14px',
   borderRadius: '10px',
   color: '#fff',
   border: '2px solid #fff',
   fontSize: '1.05rem',
   fontWeight: 'bold',
-  marginTop: '8px',
-  cursor: 'pointer'
+  marginTop: '10px',
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const darkStatusStrip: React.CSSProperties = {
@@ -1721,7 +1657,8 @@ const testBuzzerBtn: React.CSSProperties = {
   border: '2px solid #fff',
   fontSize: '1rem',
   fontWeight: 'bold',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const btnMoveOrder: React.CSSProperties = {
@@ -1731,7 +1668,49 @@ const btnMoveOrder: React.CSSProperties = {
   padding: '6px 12px',
   borderRadius: '6px',
   cursor: 'pointer',
-  fontSize: '1rem'
+  fontSize: '1rem',
+  touchAction: 'manipulation'
+};
+
+// 🌟 VERTIKĀLĀS KARTĪTES STILS (STABIŅĀ NO AUGŠAS UZ LEJU)
+const btnVerticalCard: React.CSSProperties = {
+  width: '100%',
+  minHeight: '48px',
+  padding: '8px 12px',
+  borderRadius: '10px',
+  color: '#fff',
+  display: 'flex',
+  alignItems: 'center',
+  cursor: 'pointer',
+  boxSizing: 'border-box',
+  userSelect: 'none',
+  touchAction: 'manipulation',
+  border: 'none',
+  transition: 'transform 0.1s ease'
+};
+
+const letterBadgeSquare: React.CSSProperties = {
+  width: '32px',
+  height: '32px',
+  borderRadius: '6px',
+  background: 'rgba(0, 0, 0, 0.35)',
+  border: '1.5px solid rgba(255, 255, 255, 0.7)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: '1.1rem',
+  fontWeight: '900',
+  flexShrink: 0
+};
+
+const textOptionFull: React.CSSProperties = {
+  flex: 1,
+  textAlign: 'left',
+  marginLeft: '12px',
+  fontSize: '1rem',
+  fontWeight: 'bold',
+  lineHeight: 1.25,
+  wordBreak: 'break-word'
 };
 
 const buzzerBtnHorizontal: React.CSSProperties = {
@@ -1744,54 +1723,6 @@ const buzzerBtnHorizontal: React.CSSProperties = {
   justifyContent: 'center',
   cursor: 'pointer',
   boxSizing: 'border-box',
-  userSelect: 'none'
-};
-
-const btnOptionGrid: React.CSSProperties = {
-  width: '100%',
-  height: '100%',
-  borderRadius: '12px',
-  color: '#fff',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  boxSizing: 'border-box',
-  userSelect: 'none'
-};
-
-const btnOptionCardText: React.CSSProperties = {
-  width: '100%',
-  minHeight: '60px',
-  padding: '10px 14px',
-  borderRadius: '12px',
-  color: '#fff',
-  display: 'flex',
-  alignItems: 'center',
-  cursor: 'pointer',
-  boxSizing: 'border-box',
-  userSelect: 'none'
-};
-
-const btnOptionMusic: React.CSSProperties = {
-  height: '75px',
-  padding: '6px',
-  borderRadius: '10px',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-  boxSizing: 'border-box',
-  userSelect: 'none'
-};
-
-const btnOptionMusicText: React.CSSProperties = {
-  fontSize: '0.75rem',
-  fontWeight: 'bold',
-  marginTop: '2px',
-  textAlign: 'center',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  width: '100%'
+  userSelect: 'none',
+  touchAction: 'manipulation'
 };

@@ -11,6 +11,9 @@ interface ImportedQuestionPreview {
   correctAnswers: string[];
   duration: number;
   points: number;
+  pointsMax: number;
+  pointsMin: number;
+  scoringMode: 'FIXED' | 'DECREASING';
   notes?: string;
   playerUIMode?: 'AUTO' | 'CLASSIC_GRID' | 'TEXT_CARDS' | 'MUSIC_DUAL';
 }
@@ -49,7 +52,7 @@ export default function Studio() {
     setSections((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const [mobileBranding, setMobileBranding] = useState<MobileBranding>({
+  const [mobileBranding, setMobileBranding] = useState<MobileBranding & { presentationTheme?: 'NEON' | 'TV_SHOW' | 'ARENA' | 'MINIMAL' }>({
     appTitle: 'EVENT BUZZER',
     appLogo: '',
     appBgImage: '',
@@ -57,6 +60,7 @@ export default function Studio() {
     appBgColor: '#121212',
     lobbyMode: 'CIRCLE',
     optionsRevealTiming: 'ON_ACTIVE',
+    presentationTheme: 'TV_SHOW', // Noklusējuma tēma
     timerMode: 'ALL_VOTED',
     teamModeEnabled: false,
     teamScoringMode: 'AVG',
@@ -161,6 +165,11 @@ export default function Studio() {
   const [historyIdx, setHistoryIdx] = useState<number>(-1);
   const isHistoryAction = useRef(false);
 
+  const slidesRef = useRef<Slide[]>(slides);
+  useEffect(() => {
+    slidesRef.current = slides;
+  }, [slides]);
+
   const [dragState, setDragState] = useState<{
     mode: 'MOVE' | 'RESIZE_RIGHT' | 'RESIZE_LEFT';
     primaryId: string;
@@ -212,7 +221,6 @@ export default function Studio() {
     }
   };
 
-  // 🌟 VEIKTSPĒJAS LABOJUMS: recordHistory parametrs novērš vēstures piesārņošanu peles vilkšanas laikā
   const updateActiveSlide = (updater: (draft: Slide) => void, recordHistory: boolean = true) => {
     setSlides((prev) => {
       const copy = JSON.parse(JSON.stringify(prev));
@@ -335,7 +343,51 @@ export default function Studio() {
     }
   };
 
-  // 📊 EXCEL / CSV PARSERIS
+  // 🌟 VIEDAIS PUNKTU PARSERIS ("100-50" -> DECREASING, "10" -> FIXED)
+  const parsePointsString = (val?: string) => {
+    if (!val) {
+      return { scoringMode: 'FIXED' as const, points: 10, pointsMax: 10, pointsMin: 1 };
+    }
+    const raw = String(val).trim().toLowerCase();
+
+    // 1. Pārbaudām vai ir diapazons, piemēram: "100-50", "100 - 50", "50-100", "100..50"
+    const rangeMatch = raw.match(/(\d+)\s*[-–—/.]+\s*(\d+)/);
+    if (rangeMatch) {
+      const num1 = Number(rangeMatch[1]);
+      const num2 = Number(rangeMatch[2]);
+      const max = Math.max(num1, num2);
+      const min = Math.min(num1, num2);
+      return {
+        scoringMode: 'DECREASING' as const,
+        points: max,
+        pointsMax: max,
+        pointsMin: min
+      };
+    }
+
+    // 2. Atslēgvārds "dilstoši"
+    if (raw.includes('dilst') || raw.includes('decr') || raw.includes('down')) {
+      const numMatch = raw.match(/\d+/);
+      const max = numMatch ? Number(numMatch[0]) : 10;
+      return {
+        scoringMode: 'DECREASING' as const,
+        points: max,
+        pointsMax: max,
+        pointsMin: 1
+      };
+    }
+
+    // 3. Fiksētie punkti
+    const numMatch = raw.match(/\d+/);
+    const pts = numMatch ? Number(numMatch[0]) : 10;
+    return {
+      scoringMode: 'FIXED' as const,
+      points: pts,
+      pointsMax: pts,
+      pointsMin: 1
+    };
+  };
+
   const parseDelimitedText = (text: string): string[][] => {
     const lines = text.trim().split(/\r\n|\n|\r/);
     return lines.map((line) => {
@@ -387,20 +439,36 @@ export default function Studio() {
       let rawOptions: string[] = [];
       let correctIndicator = '';
       let duration = 30;
-      let points = 10;
+      let pointsInfo = { scoringMode: 'FIXED' as const, points: 10, pointsMax: 10, pointsMin: 1 };
       let notes = '';
 
-      if (cols.length >= 6) {
-        rawOptions = [cols[1], cols[2], cols[3], cols[4], cols[5], cols[6]].filter(Boolean);
+      if (cols.length >= 8) {
+        rawOptions = [cols[1], cols[2], cols[3], cols[4]].filter(Boolean);
         correctIndicator = cols[5] ? cols[5].trim() : 'A';
         if (cols[6] && !isNaN(Number(cols[6]))) duration = Number(cols[6]);
-        if (cols[7] && !isNaN(Number(cols[7]))) points = Number(cols[7]);
+        if (cols[7]) pointsInfo = parsePointsString(cols[7]);
         if (cols[8]) notes = cols[8].trim();
+      } else if (cols.length === 7) {
+        rawOptions = [cols[1], cols[2], cols[3], cols[4]].filter(Boolean);
+        correctIndicator = cols[5] ? cols[5].trim() : 'A';
+        const col6 = cols[6].trim();
+        if (col6.includes('-') || col6.includes('–') || col6.includes('dil') || col6.includes('/')) {
+          pointsInfo = parsePointsString(col6);
+        } else {
+          const num = Number(col6);
+          if (!isNaN(num)) {
+            if (num > 60) pointsInfo = parsePointsString(col6);
+            else duration = num;
+          }
+        }
+      } else if (cols.length === 6) {
+        rawOptions = [cols[1], cols[2], cols[3], cols[4]].filter(Boolean);
+        correctIndicator = cols[5] ? cols[5].trim() : 'A';
       } else if (cols.length >= 3) {
         rawOptions = cols.slice(1, cols.length - 1).filter(Boolean);
         correctIndicator = cols[cols.length - 1] ? cols[cols.length - 1].trim() : 'A';
       } else {
-        rawOptions = [cols[1], 'B', 'C', 'D'];
+        rawOptions = [cols[1], 'B', 'C', 'D'].filter(Boolean);
         correctIndicator = 'A';
       }
 
@@ -422,7 +490,10 @@ export default function Studio() {
         options: rawOptions.length > 0 ? rawOptions : ['A', 'B', 'C', 'D'],
         correctAnswers,
         duration,
-        points,
+        points: pointsInfo.points,
+        pointsMax: pointsInfo.pointsMax,
+        pointsMin: pointsInfo.pointsMin,
+        scoringMode: pointsInfo.scoringMode,
         notes
       });
     });
@@ -459,10 +530,10 @@ export default function Studio() {
         type: 'QUESTION',
         config: {
           duration: q.duration || 30,
-          points: q.points || 10,
-          pointsMin: 1,
-          pointsMax: q.points || 10,
-          scoringMode: 'FIXED',
+          points: q.points || q.pointsMax || 10,
+          pointsMin: q.pointsMin ?? (q.scoringMode === 'DECREASING' ? 1 : (q.points || 10)),
+          pointsMax: q.pointsMax || q.points || 10,
+          scoringMode: q.scoringMode || 'FIXED',
           speedBonusEnabled: false,
           selectionMode: 'ALL',
           requiredCount: q.correctAnswers.length || 1,
@@ -530,7 +601,7 @@ export default function Studio() {
     setShowImportModal(false);
     setImportRawText('');
     setImportedQuestions([]);
-    alert(`🎉 Veiksmīgi importēti ${generatedSlides.length} jautājumi!`);
+    alert(`🎉 Veiksmīgi importēti ${generatedSlides.length} jautājumi ar precīziem punktu režīmiem!`);
   };
 
   useEffect(() => {
@@ -558,7 +629,7 @@ export default function Studio() {
           e.preventDefault();
           const toCopy = selectedSlideIndices
             .sort((a, b) => a - b)
-            .map((idx) => JSON.parse(JSON.stringify(slides[idx])));
+            .map((idx) => JSON.parse(JSON.stringify(slidesRef.current[idx])));
           setCopiedSlides(toCopy);
         }
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
@@ -578,7 +649,7 @@ export default function Studio() {
             return cloned;
           });
 
-          const updated = [...slides];
+          const updated = [...slidesRef.current];
           updated.splice(insertIdx, 0, ...newPasted);
           setSlides(updated);
           pushToHistory(updated);
@@ -616,7 +687,7 @@ export default function Studio() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('paste', onPaste);
     };
-  }, [historyIdx, history, activeSlideIdx, selectedSlideIndices, copiedSlides, slides, selectedElementIds, projectFile, availableProjects, mobileBranding]);
+  }, [historyIdx, history, activeSlideIdx, selectedSlideIndices, copiedSlides, selectedElementIds, projectFile, availableProjects, mobileBranding]);
 
   const syncWorkingFolder = async (folderToSet?: string) => {
     try {
@@ -794,7 +865,6 @@ export default function Studio() {
     });
   };
 
-  // 🌟 VEIKTSPĒJAS LABOJUMS: handleMouseMove neizsauc vēstures kopēšanu pie katra pikseļa
   const handleMouseMove = (e: React.MouseEvent) => {
     if (marqueeBox && canvasRef.current) {
       setMarqueeBox((prev) => (prev ? { ...prev, currentX: e.clientX, currentY: e.clientY } : null));
@@ -871,10 +941,9 @@ export default function Studio() {
     }, false);
   };
 
-  // 🌟 VEIKTSPĒJAS LABOJUMS: handleMouseUp vienu reizi piefiksē izmaiņas vēsturē
   const handleMouseUp = () => {
     if (dragState) {
-      pushToHistory(slides);
+      pushToHistory(slidesRef.current);
     }
 
     if (marqueeBox && canvasRef.current) {
@@ -1024,6 +1093,24 @@ export default function Studio() {
   );
 
   const diplomaCfg: DiplomaConfig = mobileBranding.diplomaConfig || {};
+
+  // Kanvas fona saskaņošana ar izvēlēto skatuves tēmu
+  const getCanvasPreviewBg = () => {
+    if (activeSlide?.config?.backgroundUrl) {
+      return `url(${MEDIA_BASE_URL}/${activeSlide.config.backgroundUrl})`;
+    }
+    const theme = (mobileBranding as any).presentationTheme || 'TV_SHOW';
+    if (theme === 'TV_SHOW') {
+      return 'radial-gradient(ellipse at 50% 30%, #0d1b33 0%, #030712 100%)';
+    }
+    if (theme === 'ARENA') {
+      return 'linear-gradient(135deg, #120207 0%, #050505 60%, #150009 100%)';
+    }
+    if (theme === 'MINIMAL') {
+      return 'linear-gradient(180deg, #18181b 0%, #09090b 100%)';
+    }
+    return '#181818';
+  };
 
   return (
     <div style={studioLayout} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
@@ -1273,9 +1360,7 @@ export default function Studio() {
             ref={canvasRef}
             style={{
               ...canvasBoard,
-              backgroundImage: activeSlide?.config?.backgroundUrl
-                ? `url(${MEDIA_BASE_URL}/${activeSlide.config.backgroundUrl})`
-                : 'none',
+              background: getCanvasPreviewBg(),
               backgroundSize: 'cover'
             }}
             onDragOver={(e) => e.preventDefault()}
@@ -1450,7 +1535,7 @@ export default function Studio() {
               );
             })}
 
-            {/* ⏱️ TAIMERA (TIMER) SLAIDA KANVAS SKATS */}
+            {/* ⏱️ TAIMERA SLAIDA KANVAS SKATS */}
             {activeSlide?.type === 'TIMER' && (
               <div
                 style={{
@@ -1885,15 +1970,35 @@ export default function Studio() {
             </div>
           )}
 
-          {/* 📱 SPĒLES & MOBILIE IESTATĪJUMI */}
+          {/* 📱 SPĒLES & SKATUVES IESTATĪJUMI */}
           <div style={accordionCard}>
             <div style={accordionHeader} onClick={() => toggleSection('branding')}>
-              <span>📱 SPĒLES & MOBILIE IESTATĪJUMI</span>
+              <span>📱 SPĒLES & SKATUVES IESTATĪJUMI</span>
               <span>{sections.branding ? '▲' : '▼'}</span>
             </div>
 
             {sections.branding && (
               <div style={{ marginTop: '10px' }}>
+                {/* 🌟 4 JAUNO TV EKRĀNA TĒMU IZVĒLNE */}
+                <div style={{ background: '#1c2833', border: '1px solid #ffd700', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
+                  <label style={{ ...labelStyle, color: '#ffd700', fontWeight: 'bold', marginTop: 0 }}>
+                    👑 Prezentācijas TV ekrāna stils / tēma:
+                  </label>
+                  <select
+                    style={{ ...selectStyle, borderColor: '#ffd700', color: '#ffd700', marginTop: '4px', marginBottom: '4px', fontWeight: 'bold', background: '#1c1b10' }}
+                    value={(mobileBranding as any).presentationTheme || 'TV_SHOW'}
+                    onChange={(e) => setMobileBranding({ ...mobileBranding, presentationTheme: e.target.value as any })}
+                  >
+                    <option value="TV_SHOW">🏆 TV Prime-Time Show (Zelts, karaliski zils & TV šova pjedestāls)</option>
+                    <option value="ARENA">⚡ Arena & Esports (Milzīgs tablo pulkstenis & Sporta laika josla)</option>
+                    <option value="MINIMAL">🍏 Modern Studio Minimal (Apple stikls & Cirkulārs gredzens)</option>
+                    <option value="NEON">🟢 Cyber Neon Arcade (Kiber-neons & Pulsējošās bumbiņas)</option>
+                  </select>
+                  <div style={{ fontSize: '0.75rem', color: '#ccc', marginTop: '2px' }}>
+                    Automātiski pielāgo pulksteni, atbilžu lodziņus, animācijas un fināla pjedestālu!
+                  </div>
+                </div>
+
                 <label style={labelStyle}>Lietotnes nosaukums telefonā:</label>
                 <input
                   style={inputStyle}
@@ -1913,7 +2018,6 @@ export default function Studio() {
                   ))}
                 </select>
 
-                {/* 🌟 SPĒLES LAIKA LOGO POZĪCIJA */}
                 <label style={labelStyle}>Logo pozīcija spēles laikā:</label>
                 <select
                   style={{ ...selectStyle, borderColor: '#00e5ff' }}
@@ -2010,7 +2114,7 @@ export default function Studio() {
             )}
           </div>
 
-          {/* 🏆 DIPLOMU DIZAINERS & IESTATĪJUMI */}
+          {/* 🏆 DIPLOMU DIZAINS & NOFORMĒJUMS */}
           <div style={accordionCard}>
             <div style={accordionHeader} onClick={() => toggleSection('diploma')}>
               <span>🏆 DIPLOMU DIZAINS & NOFORMĒJUMS</span>
@@ -2301,13 +2405,14 @@ export default function Studio() {
                     </div>
                   )}
 
+                  {/* ⚡ ĀTRĀ PULTS IESTATĪJUMI */}
                   {activeSlide.type === 'BUZZER_RACE' && (
                     <div style={{ background: '#261c02', border: '1px solid #ffc107', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
                       <label style={{ ...labelStyle, color: '#ffc107', fontWeight: 'bold' }}>Ātrās pults atbildēšanas veids:</label>
                       <select
                         style={{ ...selectStyle, borderColor: '#ffc107', marginTop: '4px' }}
                         value={activeSlide.config.buzzerRaceType || 'WITH_OPTIONS'}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerRaceType = e.target.value as any), true)}
+                        onChange={(e) => updateActiveSlide((s) => { s.config.buzzerRaceType = e.target.value as any; }, true)}
                       >
                         <option value="WITH_OPTIONS">🅰️ Ar variantiem (Pirmais atbild telefonā)</option>
                         <option value="ORAL">🗣️ Mutisks (Pirmais runā ar balsi)</option>
@@ -2317,7 +2422,7 @@ export default function Studio() {
                       <select
                         style={selectStyle}
                         value={activeSlide.config.buzzerEvaluationMode || 'AUTO'}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerEvaluationMode = e.target.value as any), true)}
+                        onChange={(e) => updateActiveSlide((s) => { s.config.buzzerEvaluationMode = e.target.value as any; }, true)}
                       >
                         <option value="AUTO">🤖 Automātisks (Pārbauda sistēma ar Space)</option>
                         <option value="MANUAL">👨‍💼 Manuāls (Vadītājs vērtē Pareizi/Nepareizi)</option>
@@ -2327,7 +2432,7 @@ export default function Studio() {
                       <select
                         style={selectStyle}
                         value={activeSlide.config.buzzerMaxQueue || 5}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.buzzerMaxQueue = Number(e.target.value)), true)}
+                        onChange={(e) => updateActiveSlide((s) => { s.config.buzzerMaxQueue = Number(e.target.value); }, true)}
                       >
                         <option value="1">Tikai #1</option>
                         <option value="3">Top 3 rindā</option>
@@ -2337,6 +2442,7 @@ export default function Studio() {
                     </div>
                   )}
 
+                  {/* 🔢 SECĪBAS KĀRTOŠANAS IESTATĪJUMI */}
                   {activeSlide.type === 'ORDERING' && (
                     <div style={{ background: '#15222e', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
                       <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#00e5ff', marginBottom: '6px' }}>
@@ -2379,7 +2485,7 @@ export default function Studio() {
                     </div>
                   )}
 
-                  {(activeSlide.type === 'QUESTION' || activeSlide.type === 'MAJORITY' || (activeSlide.type === 'BUZZER_RACE' && activeSlide.config.buzzerRaceType === 'WITH_OPTIONS')) && (
+                  {(activeSlide.type === 'QUESTION' || activeSlide.type === 'MAJORITY' || (activeSlide.type === 'BUZZER_RACE' && activeSlide.config?.buzzerRaceType === 'WITH_OPTIONS')) && (
                     <>
                       <label style={labelStyle}>Iesniegšanas veids telefonā:</label>
                       <select
@@ -2554,7 +2660,7 @@ export default function Studio() {
                   value={activeSlide.config.backgroundUrl || ''}
                   onChange={(e) => updateActiveSlide((s) => (s.config.backgroundUrl = e.target.value), true)}
                 >
-                  <option value="">(Melns fons)</option>
+                  <option value="">(Tēmas fons)</option>
                   {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
                     <option key={f} value={f}>{f}</option>
                   ))}
@@ -2630,7 +2736,6 @@ export default function Studio() {
               </button>
             </div>
 
-            {/* Priekšskatījuma rāmis */}
             <div style={{
               margin: '15px auto',
               width: '100%',
@@ -2653,7 +2758,7 @@ export default function Studio() {
                 {diplomaCfg.customTitle || '🏆 DIPLOMS 🏆'}
               </h1>
               <h3 style={{ fontSize: '1.1rem', color: diplomaCfg.borderColor || '#ffc107', margin: '6px 0' }}>
-                {diplomaCfg.customSubtitle || 'Par iegūto 1. vietu spēlē'}
+                {diplomaCfg.customSubtitle || 'Par iegūto vietu spēlē'}
               </h3>
               <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: diplomaCfg.winnerColor || (diplomaCfg.theme === 'GOLD_WHITE_PRINT' ? '#007bff' : '#ffd700'), margin: '12px 0' }}>
                 ČEMPIONU KOMANDA
@@ -2693,9 +2798,28 @@ export default function Studio() {
               </button>
             </div>
 
-            <div style={{ fontSize: '0.85rem', color: '#ccc', lineHeight: 1.4, background: '#121212', padding: '10px', borderRadius: '8px', border: '1px solid #333' }}>
+            <div style={{ fontSize: '0.85rem', color: '#ccc', lineHeight: 1.5, background: '#121212', padding: '12px', borderRadius: '8px', border: '1px solid #333' }}>
               <strong>💡 Kā sagatavot datus:</strong>
-              <div>Excel tabulā kolonnas jākārto šādi: <code>Jautājums | Variants A | Variants B | Variants C | Variants D | Pareizā (A/B/C/D vai teksts) | [Laiks sek] | [Punkti]</code></div>
+              <div>Excel tabulā kolonnas jākārto šādi: <code>Jautājums | Variants A | Variants B | Variants C | Variants D | Pareizā | [Laiks sek] | [Punkti] | [Piezīmes]</code></div>
+              <div style={{ marginTop: '6px', color: '#ffc107' }}>
+                🎯 <strong>Punktu norādīšana:</strong><br/>
+                • Ja norāda diapazonu, piem., <code>100-50</code>, punkti kļūst <strong>dilstoši</strong> no 100 līdz 50!<br/>
+                • Ja norāda vienu skaitli, piem., <code>10</code> vai <code>100</code>, punkti būs <strong>fiksēti</strong>.
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <input type="file" accept=".csv,.txt" onChange={handleFileUpload} style={{ color: '#aaa', fontSize: '0.85rem' }} />
+              <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.85rem', color: '#ccc' }}>
+                  <input type="radio" name="impMode" checked={importMode === 'APPEND'} onChange={() => setImportMode('APPEND')} />
+                  Pievienot beigās
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.85rem', color: '#ccc' }}>
+                  <input type="radio" name="impMode" checked={importMode === 'REPLACE'} onChange={() => setImportMode('REPLACE')} />
+                  Aizstāt visus
+                </label>
+              </div>
             </div>
 
             <textarea
@@ -2712,10 +2836,41 @@ export default function Studio() {
                 boxSizing: 'border-box',
                 resize: 'vertical'
               }}
-              placeholder="Iekopē datus šeit no Excel..."
+              placeholder="Iekopē datus šeit no Excel (ar Tab atdalītājiem)..."
               value={importRawText}
               onChange={(e) => processImportText(e.target.value)}
             />
+
+            {/* 🌟 PRIEKŠSKATĪJUMS AR DILSTOŠIEM / FIKSĒTIEM PUNKTIEM */}
+            {importedQuestions.length > 0 && (
+              <div style={{ maxHeight: '180px', overflowY: 'auto', background: '#0d0d0d', border: '1px solid #222', borderRadius: '8px', padding: '8px' }}>
+                <div style={{ fontSize: '0.8rem', color: '#aaa', marginBottom: '6px', fontWeight: 'bold' }}>
+                  Atrasti {importedQuestions.length} jautājumi importam:
+                </div>
+                {importedQuestions.map((q, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', borderBottom: '1px solid #1a1a1a', fontSize: '0.8rem' }}>
+                    <span style={{ color: '#fff', maxWidth: '55%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {i + 1}. {q.title}
+                    </span>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                      <span style={{ color: '#00ff00', fontWeight: 'bold' }}>✓ {q.correctAnswers.join(', ')}</span>
+                      <span style={{ color: '#00e5ff' }}>⏱️ {q.duration}s</span>
+                      <span style={{
+                        color: q.scoringMode === 'DECREASING' ? '#ffd700' : '#28a745',
+                        background: q.scoringMode === 'DECREASING' ? 'rgba(255,215,0,0.15)' : 'rgba(40,167,69,0.15)',
+                        border: `1px solid ${q.scoringMode === 'DECREASING' ? '#ffd700' : '#28a745'}`,
+                        padding: '1px 6px',
+                        borderRadius: '4px',
+                        fontWeight: 'bold',
+                        fontSize: '0.75rem'
+                      }}>
+                        {q.scoringMode === 'DECREASING' ? `⭐ ${q.pointsMax} ➔ ${q.pointsMin} (Dilstoši)` : `⭐ ${q.points} pt (Fiksēti)`}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #333', paddingTop: '10px' }}>
               <button
@@ -2831,7 +2986,6 @@ const canvasContainer: React.CSSProperties = {
 const canvasBoard: React.CSSProperties = {
   width: '960px',
   height: '540px',
-  background: '#181818',
   borderRadius: '10px',
   position: 'relative',
   overflow: 'hidden',
