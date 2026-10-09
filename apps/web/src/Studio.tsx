@@ -60,7 +60,7 @@ export default function Studio() {
     appBgColor: '#121212',
     lobbyMode: 'CIRCLE',
     optionsRevealTiming: 'ON_ACTIVE',
-    presentationTheme: 'TV_SHOW', // Noklusējuma tēma
+    presentationTheme: 'TV_SHOW',
     timerMode: 'ALL_VOTED',
     teamModeEnabled: false,
     teamScoringMode: 'AVG',
@@ -350,7 +350,6 @@ export default function Studio() {
     }
     const raw = String(val).trim().toLowerCase();
 
-    // 1. Pārbaudām vai ir diapazons, piemēram: "100-50", "100 - 50", "50-100", "100..50"
     const rangeMatch = raw.match(/(\d+)\s*[-–—/.]+\s*(\d+)/);
     if (rangeMatch) {
       const num1 = Number(rangeMatch[1]);
@@ -365,7 +364,6 @@ export default function Studio() {
       };
     }
 
-    // 2. Atslēgvārds "dilstoši"
     if (raw.includes('dilst') || raw.includes('decr') || raw.includes('down')) {
       const numMatch = raw.match(/\d+/);
       const max = numMatch ? Number(numMatch[0]) : 10;
@@ -377,7 +375,6 @@ export default function Studio() {
       };
     }
 
-    // 3. Fiksētie punkti
     const numMatch = raw.match(/\d+/);
     const pts = numMatch ? Number(numMatch[0]) : 10;
     return {
@@ -865,6 +862,7 @@ export default function Studio() {
     });
   };
 
+  // 🛠️ PĀRSTRĀDĀTS UN DROŠS PELĒS KUSTĪBAS APSTRĀDĀTĀJS
   const handleMouseMove = (e: React.MouseEvent) => {
     if (marqueeBox && canvasRef.current) {
       setMarqueeBox((prev) => (prev ? { ...prev, currentX: e.clientX, currentY: e.clientY } : null));
@@ -883,6 +881,7 @@ export default function Studio() {
       dragState.elementsSnapshot.forEach((item) => {
         const optionIdx = item.target === 'OPTION' ? Number(item.id.replace('opt-index-', '')) : null;
 
+        // 1. PĀRVIETOŠANA (MOVE)
         if (dragState.mode === 'MOVE') {
           let newX = Math.round(item.origX + deltaXPercent);
           let newY = Math.round(item.origY + deltaYPercent);
@@ -890,34 +889,44 @@ export default function Studio() {
             newX = Math.round(newX / 2) * 2;
             newY = Math.round(newY / 2) * 2;
           }
-          newX = Math.max(0, Math.min(newX, 90));
-          newY = Math.max(0, Math.min(newY, 90));
+          newX = Math.max(0, Math.min(newX, 95));
+          newY = Math.max(0, Math.min(newY, 95));
 
           if (item.target === 'LAYOUT') {
             const el = s.config.layout.find((x) => x.id === item.id);
-            if (el) { el.x = newX; el.y = newY; }
+            if (el) {
+              el.x = newX;
+              el.y = newY;
+            }
           } else if (optionIdx !== null) {
             const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 58, w: 38, h: 10 };
             s.config.optionsPositions[optionIdx] = { ...curPos, x: newX, y: newY };
           }
-        } else if (dragState.mode === 'RESIZE_RIGHT' && item.id === dragState.primaryId) {
+        }
+        // 2. IZMĒRA MAIŅA NO LABĀS PUSES (RESIZE_RIGHT)
+        else if (dragState.mode === 'RESIZE_RIGHT' && item.id === dragState.primaryId) {
           let newW = Math.round(item.origW + deltaXPercent);
           let newH = Math.round(item.origH + deltaYPercent);
           if (isSnapToGrid) {
             newW = Math.round(newW / 2) * 2;
             newH = Math.round(newH / 2) * 2;
           }
-          newW = Math.max(8, Math.min(newW, 100));
-          newH = Math.max(4, Math.min(newH, 100));
+          newW = Math.max(4, Math.min(newW, 100));
+          newH = Math.max(3, Math.min(newH, 100));
 
           if (item.target === 'LAYOUT') {
             const el = s.config.layout.find((x) => x.id === item.id);
-            if (el) { el.w = newW; el.h = newH; }
+            if (el) {
+              el.w = newW;
+              el.h = newH;
+            }
           } else if (optionIdx !== null) {
             const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 58, w: 38, h: 10 };
             s.config.optionsPositions[optionIdx] = { ...curPos, w: newW, h: newH };
           }
-        } else if (dragState.mode === 'RESIZE_LEFT' && item.id === dragState.primaryId) {
+        }
+        // 3. IZMĒRA MAIŅA NO KREISĀS PUSES (RESIZE_LEFT)
+        else if (dragState.mode === 'RESIZE_LEFT' && item.id === dragState.primaryId) {
           let newX = Math.round(item.origX + deltaXPercent);
           let newW = Math.round(item.origW - deltaXPercent);
           let newH = Math.round(item.origH + deltaYPercent);
@@ -927,14 +936,20 @@ export default function Studio() {
             newW = Math.round(newW / 2) * 2;
             newH = Math.round(newH / 2) * 2;
           }
-          if (newW >= 8 && newX >= 0) {
-            if (item.target === 'LAYOUT') {
-              const el = s.config.layout.find((x) => x.id === item.id);
-              if (el) { el.x = newX; el.w = newW; el.h = newH; }
-            } else if (optionIdx !== null) {
-              const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 58, w: 38, h: 10 };
-              s.config.optionsPositions[optionIdx] = { ...curPos, x: newX, w: newW, h: newH };
+          newW = Math.max(4, Math.min(newW, 100));
+          newH = Math.max(3, Math.min(newH, 100));
+          newX = Math.max(0, Math.min(newX, 95));
+
+          if (item.target === 'LAYOUT') {
+            const el = s.config.layout.find((x) => x.id === item.id);
+            if (el) {
+              el.x = newX;
+              el.w = newW;
+              el.h = newH;
             }
+          } else if (optionIdx !== null) {
+            const curPos = s.config.optionsPositions[optionIdx] || { x: 10, y: 58, w: 38, h: 10 };
+            s.config.optionsPositions[optionIdx] = { ...curPos, x: newX, w: newW, h: newH };
           }
         }
       });
@@ -979,23 +994,26 @@ export default function Studio() {
     }
   };
 
+  // 🌟 MEDIJA PIEVIENOŠANA: BILLBOARD slaidā automātiski iestata ALWAYS redzamību!
   const addMediaElement = (fileName: string) => {
     const isVideo = /\.(mp4|mov|webm)$/i.test(fileName);
     const isAudio = /\.(mp3|wav|ogg)$/i.test(fileName);
+    const isCurrentBillboard = activeSlide?.type === 'BILLBOARD';
 
     const newElement: CanvasElement = {
       id: `media-${Date.now()}`,
       type: isVideo ? 'VIDEO' : isAudio ? 'AUDIO' : 'IMAGE',
       content: fileName,
-      x: 30,
-      y: 30,
-      w: 40,
-      h: isAudio ? 12 : 35,
+      x: 25,
+      y: 20,
+      w: 50,
+      h: isAudio ? 12 : 50,
       volume: 100,
       trimStart: 0,
       trimEnd: 30,
+      loop: false,
       isTrimEndCustom: false,
-      visibility: 'DURING_QUESTION',
+      visibility: isCurrentBillboard ? 'ALWAYS' : 'DURING_QUESTION',
       blurMode: 'NONE',
       blurAmount: 12
     };
@@ -1017,6 +1035,13 @@ export default function Studio() {
         media.ontimeupdate = null;
       }
     };
+  };
+
+  const stopPreviewFragment = () => {
+    if (previewMediaRef.current) {
+      previewMediaRef.current.pause();
+      previewMediaRef.current.ontimeupdate = null;
+    }
   };
 
   const handleOpenProject = async (name: string) => {
@@ -1094,7 +1119,6 @@ export default function Studio() {
 
   const diplomaCfg: DiplomaConfig = mobileBranding.diplomaConfig || {};
 
-  // Kanvas fona saskaņošana ar izvēlēto skatuves tēmu
   const getCanvasPreviewBg = () => {
     if (activeSlide?.config?.backgroundUrl) {
       return `url(${MEDIA_BASE_URL}/${activeSlide.config.backgroundUrl})`;
@@ -1327,6 +1351,7 @@ export default function Studio() {
                       {s.config?.autoStart && <span title="Automātiskais starts" style={{ color: '#00e5ff', marginRight: '4px' }}>⚡</span>}
                       {s.type === 'TIMER' && <span title="Taimeris / Pulkstenis" style={{ color: '#ffc107', marginRight: '4px' }}>⏱️</span>}
                       {s.config?.playerUIMode === 'MUSIC_DUAL' && <span title="Muzikālā spēle" style={{ color: '#ff007f', marginRight: '4px' }}>🎵</span>}
+                      {s.type === 'BILLBOARD' && <span title="Informatīvais ekrāns" style={{ color: '#28a745', marginRight: '4px' }}>📢</span>}
                       ☰ {idx + 1}. {s.title}
                     </span>
 
@@ -1403,6 +1428,7 @@ export default function Studio() {
               const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 85 : 60));
               const blurVal = (el.blurMode === 'STATIC' || el.blurMode === 'PROGRESSIVE') ? `${el.blurAmount || 12}px` : 'none';
               const calculatedFontSize = getStudioFontSize(el.fontSize);
+              const isMediaBox = el.type === 'IMAGE' || el.type === 'VIDEO';
 
               return (
                 <div
@@ -1425,8 +1451,8 @@ export default function Studio() {
                     left: `${el.x}%`,
                     top: `${el.y}%`,
                     width: `${el.w}%`,
+                    height: isMediaBox ? `${el.h}%` : 'auto',
                     minHeight: `${el.h}%`,
-                    height: 'auto',
                     border: isSelected ? '2px dashed #00ff00' : 'none',
                     cursor: isEditing ? 'text' : 'move',
                     display: 'flex',
@@ -1435,7 +1461,7 @@ export default function Studio() {
                     background: el.type === 'QUESTION' || el.type === 'TEXT' ? bgRgba : 'transparent',
                     backdropFilter: el.type === 'QUESTION' || el.type === 'TEXT' ? 'blur(6px)' : 'none',
                     borderRadius: el.type === 'QUESTION' ? '12px' : '6px',
-                    padding: '10px 15px',
+                    padding: el.type === 'QUESTION' ? '10px 15px' : el.type === 'TEXT' ? '6px 10px' : '0',
                     boxSizing: 'border-box',
                     zIndex: isSelected ? 25 : 5,
                     fontFamily: el.fontFamily || 'Segoe UI',
@@ -1481,7 +1507,7 @@ export default function Studio() {
                     )
                   ) : el.type === 'IMAGE' ? (
                     <img
-                      src={`${MEDIA_BASE_URL}/${el.content}`}
+                      src={`${MEDIA_BASE_URL}/${encodeURIComponent(el.content).replace(/%2F/g, '/')}`}
                       alt="img"
                       style={{
                         width: '100%',
@@ -1497,7 +1523,8 @@ export default function Studio() {
                       ref={(r) => {
                         if (isSelected) previewMediaRef.current = r;
                       }}
-                      src={`${MEDIA_BASE_URL}/${el.content}`}
+                      src={`${MEDIA_BASE_URL}/${encodeURIComponent(el.content).replace(/%2F/g, '/')}`}
+                      loop={!!el.loop}
                       style={{
                         width: '100%',
                         height: '100%',
@@ -1513,7 +1540,8 @@ export default function Studio() {
                         ref={(r) => {
                           if (isSelected) previewMediaRef.current = r;
                         }}
-                        src={`${MEDIA_BASE_URL}/${el.content}`}
+                        src={`${MEDIA_BASE_URL}/${encodeURIComponent(el.content).replace(/%2F/g, '/')}`}
+                        loop={!!el.loop}
                       />
                       <span>🎵 {el.content}</span>
                     </div>
@@ -1586,7 +1614,7 @@ export default function Studio() {
                   <div
                     key={`order-card-preview-${idx}`}
                     style={{
-                      background: hexToRgba(activeSlide.config.optionsBgColor || '#00', activeSlide.config.optionsBgOpacity ?? 85),
+                      background: hexToRgba(activeSlide.config.optionsBgColor || '#000', activeSlide.config.optionsBgOpacity ?? 85),
                       padding: '8px 16px',
                       borderRadius: '8px',
                       border: '1px solid #333',
@@ -1880,6 +1908,7 @@ export default function Studio() {
                 </button>
               </div>
 
+              {/* Teksta parametri */}
               {selectedElements.some((el) => el.type === 'QUESTION' || el.type === 'TEXT') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
                   <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
@@ -1912,6 +1941,24 @@ export default function Studio() {
                 </div>
               )}
 
+              {/* 🌟 MEDIJU REDZAMĪBA (Kad rādīt/atskaņot) - IMAGE, VIDEO, AUDIO */}
+              {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO' || el.type === 'AUDIO') && (
+                <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
+                  <label style={labelStyle}>Kad rādīt / atskaņot:</label>
+                  <select
+                    style={{ ...selectStyle, borderColor: '#00e5ff' }}
+                    value={primarySelectedElement.visibility || (activeSlide.type === 'BILLBOARD' ? 'ALWAYS' : 'DURING_QUESTION')}
+                    onChange={(e) => updateSelectedElements((el) => { el.visibility = e.target.value as any; })}
+                  >
+                    <option value="ALWAYS">👁️ Vienmēr (visā slaida laikā)</option>
+                    <option value="DURING_QUESTION">⏳ Tikai jautājuma laikā</option>
+                    <option value="UNTIL_REVEAL">🔍 Līdz pareizās atbildes atklāšanai</option>
+                    <option value="AFTER_REVEAL">🎉 Tikai pēc atbildes atklāšanas</option>
+                  </select>
+                </div>
+              )}
+
+              {/* 🌫️ Aizmiglojums (Blur) - Attēlam un Video */}
               {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
                   <label style={labelStyle}>Aizmiglojums (Blur):</label>
@@ -1943,9 +1990,50 @@ export default function Studio() {
                 </div>
               )}
 
+              {/* ✂️ Video & Audio: Apgriešana, Skaļums */}
               {selectedElements.some((el) => el.type === 'VIDEO' || el.type === 'AUDIO') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#aaa', marginBottom: '2px' }}>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={labelStyle}>Sākums (sek):</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={primarySelectedElement.trimStart ?? 0}
+                        onChange={(e) => {
+                          const val = Math.max(0, parseFloat(e.target.value) || 0);
+                          updateSelectedElements((el) => { el.trimStart = val; });
+                        }}
+                        style={inputStyle}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={labelStyle}>Beigas (sek):</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={primarySelectedElement.trimEnd ?? 30}
+                        onChange={(e) => {
+                          const val = Math.max(0, parseFloat(e.target.value) || 0);
+                          updateSelectedElements((el) => { el.trimEnd = val; });
+                        }}
+                        style={inputStyle}
+                      />
+                    </div>
+                  </div>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: '#ccc', margin: '6px 0', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!primarySelectedElement.loop}
+                      onChange={(e) => updateSelectedElements((el) => { el.loop = e.target.checked; })}
+                    />
+                    🔁 Atkārtot bezgalīgi (Loop cilpa)
+                  </label>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#aaa', marginBottom: '2px', marginTop: '6px' }}>
                     <span>Skaļums:</span>
                     <span style={{ color: '#00ff00', fontWeight: 'bold' }}>{primarySelectedElement.volume ?? 100}%</span>
                   </div>
@@ -1962,9 +2050,21 @@ export default function Studio() {
                     }}
                     style={{ width: '100%', accentColor: '#00ff00' }}
                   />
-                  <button style={{ ...btnSmallAction, background: '#28a745', marginTop: '6px' }} onClick={() => playPreviewFragment(primarySelectedElement)}>
-                    ▶️ Pārbaudīt skaņu
-                  </button>
+
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                    <button
+                      style={{ ...btnSmallAction, flex: 1, background: '#28a745', margin: 0 }}
+                      onClick={() => playPreviewFragment(primarySelectedElement)}
+                    >
+                      ▶️ Pārbaudīt
+                    </button>
+                    <button
+                      style={{ ...btnSmallAction, flex: 1, background: '#dc3545', margin: 0 }}
+                      onClick={stopPreviewFragment}
+                    >
+                      ⏹️ Apturēt
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1979,7 +2079,6 @@ export default function Studio() {
 
             {sections.branding && (
               <div style={{ marginTop: '10px' }}>
-                {/* 🌟 4 JAUNO TV EKRĀNA TĒMU IZVĒLNE */}
                 <div style={{ background: '#1c2833', border: '1px solid #ffd700', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
                   <label style={{ ...labelStyle, color: '#ffd700', fontWeight: 'bold', marginTop: 0 }}>
                     👑 Prezentācijas TV ekrāna stils / tēma:
@@ -2232,15 +2331,28 @@ export default function Studio() {
                 <select
                   style={selectStyle}
                   value={activeSlide.type}
-                  onChange={(e) => updateActiveSlide((s) => (s.type = e.target.value as any), true)}
+                  onChange={(e) => {
+                    const newType = e.target.value as any;
+                    updateActiveSlide((s) => {
+                      s.type = newType;
+                      // 🌟 Ja pārslēdz uz BILLBOARD, automātiski visiem medijiem uzliek ALWAYS
+                      if (newType === 'BILLBOARD') {
+                        s.config.layout.forEach((el) => {
+                          if (el.type === 'IMAGE' || el.type === 'VIDEO' || el.type === 'AUDIO') {
+                            el.visibility = 'ALWAYS';
+                          }
+                        });
+                      }
+                    }, true);
+                  }}
                 >
                   <option value="QUESTION">Question (Jautājums)</option>
+                  <option value="BILLBOARD">📢 Billboard (Informatīvs ekrāns)</option>
                   <option value="TIMER">⏱️ Timer (Taimeris / Pulkstenis)</option>
                   <option value="BUZZER_RACE">Buzzer Race (Ātrā pults)</option>
                   <option value="ORDERING">Ordering (Secības kārtošana)</option>
                   <option value="MAJORITY">Majority Rules (Vairākums)</option>
                   <option value="LEADERBOARD">Leaderboard (Līderu tabula)</option>
-                  <option value="BILLBOARD">Billboard (Informatīvs ekrāns)</option>
                 </select>
 
                 {activeSlide.type === 'LEADERBOARD' && (
@@ -2405,7 +2517,7 @@ export default function Studio() {
                     </div>
                   )}
 
-                  {/* ⚡ ĀTRĀ PULTS IESTATĪJUMI */}
+                  {/* ĀTRĀ PULTS */}
                   {activeSlide.type === 'BUZZER_RACE' && (
                     <div style={{ background: '#261c02', border: '1px solid #ffc107', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
                       <label style={{ ...labelStyle, color: '#ffc107', fontWeight: 'bold' }}>Ātrās pults atbildēšanas veids:</label>
@@ -2442,7 +2554,7 @@ export default function Studio() {
                     </div>
                   )}
 
-                  {/* 🔢 SECĪBAS KĀRTOŠANAS IESTATĪJUMI */}
+                  {/* SECĪBAS KĀRTOŠANA */}
                   {activeSlide.type === 'ORDERING' && (
                     <div style={{ background: '#15222e', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
                       <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#00e5ff', marginBottom: '6px' }}>
@@ -2453,7 +2565,7 @@ export default function Studio() {
                           <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#0a1520', padding: '3px 6px', borderRadius: '4px' }}>
                             <span style={{ color: '#00e5ff', fontWeight: 'bold', fontSize: '0.8rem' }}>#{idx + 1}</span>
                             <input
-                              style={{ ...inputStyle, flex: 1, padding: '2px 4px', fontSize: '0.8rem' }}
+                              style={{ ...inputStyle, padding: '2px 4px', fontSize: '0.8rem' }}
                               value={opt}
                               onChange={(e) => {
                                 const val = e.target.value;
@@ -2841,7 +2953,6 @@ export default function Studio() {
               onChange={(e) => processImportText(e.target.value)}
             />
 
-            {/* 🌟 PRIEKŠSKATĪJUMS AR DILSTOŠIEM / FIKSĒTIEM PUNKTIEM */}
             {importedQuestions.length > 0 && (
               <div style={{ maxHeight: '180px', overflowY: 'auto', background: '#0d0d0d', border: '1px solid #222', borderRadius: '8px', padding: '8px' }}>
                 <div style={{ fontSize: '0.8rem', color: '#aaa', marginBottom: '6px', fontWeight: 'bold' }}>

@@ -267,23 +267,28 @@ const MediaLayoutItem: React.FC<{
   subState: string;
   isRevealed: boolean;
   sceneDuration?: number;
+  sceneType?: string;
   endTime?: number | null;
   onCustomMediaEnded?: () => void;
-}> = ({ el, subState, isRevealed, sceneDuration = 30, endTime, onCustomMediaEnded }) => {
+}> = ({ el, subState, isRevealed, sceneDuration = 30, sceneType, endTime, onCustomMediaEnded }) => {
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const vis = el.visibility || (el.type === 'QUESTION' || el.type === 'TEXT' ? 'ALWAYS' : 'DURING_QUESTION');
-  const src = `${MEDIA_BASE_URL}/${el.content}`;
+  const src = `${MEDIA_BASE_URL}/${encodeURIComponent(el.content).replace(/%2F/g, '/')}`;
 
   const currentSub = (subState || 'IDLE').toUpperCase();
   const isRevealPhase = isRevealed || currentSub === 'REVEAL';
+  const isBillboard = sceneType === 'BILLBOARD';
 
+  // 🌟 VIEDĀ REDZAMĪBA: BILLBOARD slaidā mediji ir redzami VIENMĒR
   const isVisible =
+    isBillboard ||
     vis === 'ALWAYS' ||
     (vis === 'DURING_QUESTION' && ['ACTIVE', 'PAUSED', 'STATS', 'SUMMARY'].includes(currentSub) && !isRevealPhase) ||
     (vis === 'UNTIL_REVEAL' && ['READY', 'ACTIVE', 'PAUSED', 'STATS', 'SUMMARY'].includes(currentSub) && !isRevealPhase) ||
     (vis === 'AFTER_REVEAL' && isRevealPhase);
 
   const shouldPlay = isVisible && currentSub !== 'PAUSED' && (
+    isBillboard ||
     (vis === 'ALWAYS' && ['ACTIVE', 'STATS', 'SUMMARY', 'REVEAL'].includes(currentSub)) ||
     ((vis === 'DURING_QUESTION' || vis === 'UNTIL_REVEAL') && currentSub === 'ACTIVE') ||
     (vis === 'AFTER_REVEAL' && isRevealPhase)
@@ -315,7 +320,7 @@ const MediaLayoutItem: React.FC<{
   });
 
   useEffect(() => {
-    if (!el.blurMode || el.blurMode === 'NONE') {
+    if (!el.blurMode || el.blurMode === 'NONE' || isBillboard) {
       setCurrentBlurPx(0);
       return;
     }
@@ -350,29 +355,22 @@ const MediaLayoutItem: React.FC<{
       const interval = setInterval(updateProgressiveBlur, 100);
       return () => clearInterval(interval);
     }
-  }, [el.blurMode, initialBlurAmount, currentSub, isRevealPhase, endTime, sceneDuration]);
+  }, [el.blurMode, initialBlurAmount, currentSub, isRevealPhase, endTime, sceneDuration, isBillboard]);
 
   const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 85 : 60));
   const filterStyle = currentBlurPx > 0 ? `blur(${currentBlurPx}px)` : 'none';
 
-  const style: React.CSSProperties = {
+  // 🎯 PRECIZS NOVIETOJUMA UN IZMĒRA STILS ATBILSTOŠI STUDIJAS KANVAI
+  const baseBoxStyle: React.CSSProperties = {
     position: 'absolute',
     left: `${el.x}%`,
     top: `${el.y}%`,
     width: `${el.w}%`,
-    minHeight: `${el.h}%`,
-    height: 'auto',
-    zIndex: el.z || el.zIndex || 2,
-    color: el.color || '#ffffff',
-    fontFamily: el.fontFamily || 'Segoe UI',
-    fontSize: getPresentationFontSize(el.fontSize),
-    fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal'),
-    whiteSpace: 'pre-wrap',
-    textAlign: 'center',
+    height: `${el.h}%`,
+    zIndex: el.z || el.zIndex || 5,
     display: isVisible ? 'flex' : 'none',
     alignItems: 'center',
     justifyContent: 'center',
-    wordBreak: 'break-word',
     boxSizing: 'border-box'
   };
 
@@ -380,12 +378,21 @@ const MediaLayoutItem: React.FC<{
     return (
       <div
         style={{
-          ...style,
+          ...baseBoxStyle,
+          height: 'auto',
+          minHeight: `${el.h}%`,
           background: bgRgba,
           padding: el.type === 'QUESTION' ? '16px 28px' : '10px',
           borderRadius: el.type === 'QUESTION' ? '22px' : '8px',
           backdropFilter: 'blur(16px)',
           border: 'none',
+          color: el.color || '#ffffff',
+          fontFamily: el.fontFamily || 'Segoe UI',
+          fontSize: getPresentationFontSize(el.fontSize),
+          fontWeight: el.fontWeight || (el.bold ? 'bold' : 'normal'),
+          whiteSpace: 'pre-wrap',
+          textAlign: 'center',
+          wordBreak: 'break-word',
           textShadow: '0 2px 10px #000',
           boxShadow: '0 8px 32px rgba(0,0,0,0.8)'
         }}
@@ -397,81 +404,89 @@ const MediaLayoutItem: React.FC<{
 
   if (el.type === 'IMAGE' && el.content) {
     return (
-      <img
-        src={src}
-        style={{
-          ...style,
-          objectFit: 'contain',
-          borderRadius: '16px',
-          display: isVisible ? 'block' : 'none',
-          border: 'none',
-          filter: filterStyle,
-          transition: el.blurMode === 'PROGRESSIVE' ? 'filter 0.2s linear' : 'none'
-        }}
-        alt="Medijs"
-      />
+      <div style={baseBoxStyle}>
+        <img
+          src={src}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+            borderRadius: '16px',
+            border: 'none',
+            filter: filterStyle,
+            transition: el.blurMode === 'PROGRESSIVE' ? 'filter 0.2s linear' : 'none',
+            display: 'block'
+          }}
+          alt="Medijs"
+        />
+      </div>
     );
   }
 
   if (el.type === 'VIDEO' && el.content) {
     return (
-      <video
-        ref={(v) => { mediaRef.current = v; }}
-        src={src}
-        preload="auto"
-        style={{
-          ...style,
-          objectFit: 'contain',
-          borderRadius: '16px',
-          display: isVisible ? 'block' : 'none',
-          border: 'none',
-          filter: filterStyle,
-          transition: el.blurMode === 'PROGRESSIVE' ? 'filter 0.2s linear' : 'none'
-        }}
-        loop={!!el.loop}
-        playsInline
-        onTimeUpdate={() => {
-          const v = mediaRef.current;
-          if (v && el.trimEnd && v.currentTime >= el.trimEnd) {
-            if (el.loop) {
-              v.currentTime = el.trimStart || 0;
-              v.play().catch(() => {});
-            } else {
-              v.pause();
-              if (onCustomMediaEnded) onCustomMediaEnded();
+      <div style={baseBoxStyle}>
+        <video
+          ref={(v) => { mediaRef.current = v; }}
+          src={src}
+          preload="auto"
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+            borderRadius: '16px',
+            border: 'none',
+            filter: filterStyle,
+            transition: el.blurMode === 'PROGRESSIVE' ? 'filter 0.2s linear' : 'none',
+            display: 'block'
+          }}
+          loop={!!el.loop}
+          playsInline
+          onTimeUpdate={() => {
+            const v = mediaRef.current;
+            if (v && el.trimEnd && v.currentTime >= el.trimEnd) {
+              if (el.loop) {
+                v.currentTime = el.trimStart || 0;
+                v.play().catch(() => {});
+              } else {
+                v.pause();
+                if (onCustomMediaEnded) onCustomMediaEnded();
+              }
             }
-          }
-        }}
-        onEnded={() => {
-          if (!el.loop && onCustomMediaEnded) onCustomMediaEnded();
-        }}
-      />
+          }}
+          onEnded={() => {
+            if (!el.loop && onCustomMediaEnded) onCustomMediaEnded();
+          }}
+        />
+      </div>
     );
   }
 
   if (el.type === 'AUDIO' && el.content) {
     return (
-      <audio
-        ref={(a) => { mediaRef.current = a; }}
-        src={src}
-        preload="auto"
-        loop={!!el.loop}
-        onTimeUpdate={() => {
-          const a = mediaRef.current;
-          if (a && el.trimEnd && a.currentTime >= el.trimEnd) {
-            if (el.loop) {
-              a.currentTime = el.trimStart || 0;
-              a.play().catch(() => {});
-            } else {
-              a.pause();
-              if (onCustomMediaEnded) onCustomMediaEnded();
+      <div style={baseBoxStyle}>
+        <audio
+          ref={(a) => { mediaRef.current = a; }}
+          src={src}
+          preload="auto"
+          loop={!!el.loop}
+          onTimeUpdate={() => {
+            const a = mediaRef.current;
+            if (a && el.trimEnd && a.currentTime >= el.trimEnd) {
+              if (el.loop) {
+                a.currentTime = el.trimStart || 0;
+                a.play().catch(() => {});
+              } else {
+                a.pause();
+                if (onCustomMediaEnded) onCustomMediaEnded();
+              }
             }
-          }
-        }}
-        onEnded={() => {
-          if (!el.loop && onCustomMediaEnded) onCustomMediaEnded();
-        }}
-      />
+          }}
+          onEnded={() => {
+            if (!el.loop && onCustomMediaEnded) onCustomMediaEnded();
+          }}
+        />
+      </div>
     );
   }
 
@@ -580,7 +595,6 @@ const TopBar: React.FC<TopBarProps> = ({
     };
   };
 
-  // Tēmu specifiskais stils augšējai joslai
   const getThemeTopBarStyle = (): React.CSSProperties => {
     switch (theme) {
       case 'TV_SHOW':
@@ -655,7 +669,6 @@ const TopBar: React.FC<TopBarProps> = ({
     }
   };
 
-  // 🌟 TĒMU SPECIFISKAIS PUNKTU LOGA STILS
   const getThemePointsBadgeStyle = (): React.CSSProperties => {
     switch (theme) {
       case 'TV_SHOW':
@@ -711,7 +724,6 @@ const TopBar: React.FC<TopBarProps> = ({
   return (
     <>
       <div style={getThemeTopBarStyle()}>
-        {/* PIN un QR kods */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div
             style={{
@@ -747,7 +759,6 @@ const TopBar: React.FC<TopBarProps> = ({
           )}
         </div>
 
-        {/* 🌟 CENTRĀLAIS STATUSA / ATBILŽU LAUKS (PUNKTINI VAI PĒDĒJIE 5 SPĒLĒTĀJI) */}
         <div style={votersBox}>
           {isSummaryPhase && (summaryStats || scene?.summaryStats) ? (
             (() => {
@@ -789,7 +800,6 @@ const TopBar: React.FC<TopBarProps> = ({
               ⏸️ SPĒLE IEPAUZĒTA
             </span>
           ) : missingCount > 5 ? (
-            /* 🌟 VAIRĀK PAR 5 — RĀDĀM DINAMISKA IZMĒRA PULSĒJOŠUS PUNKTIŅUS */
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '520px', flexWrap: 'wrap', justifyContent: 'center' }}>
               <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center', maxHeight: '55px', overflow: 'hidden' }}>
                 {[...Array(Math.min(missingCount, 120))].map((_, i) => (
@@ -798,7 +808,6 @@ const TopBar: React.FC<TopBarProps> = ({
               </div>
             </div>
           ) : missingCount > 0 ? (
-            /* 🌟 PĒDĒJIE 5 VAI MAZĀK — RĀDĀM KONKRĒTO SPĒLĒTĀJU VĀRDUS AR PULTS # UN KOMANDU */
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
               <span style={{ color: '#ffc107', fontWeight: 'bold', fontSize: '0.95vw', textTransform: 'uppercase', textShadow: '0 0 10px #ffc107' }}>
                 GAIDĀM ATBILDES ({missingCount}):
@@ -829,7 +838,6 @@ const TopBar: React.FC<TopBarProps> = ({
           )}
         </div>
 
-        {/* ⏱️ PULKSTENIS / TAIMERIS ATKARĪBĀ NO TĒMAS */}
         {hasTimer && (
           theme === 'MINIMAL' ? (
             <CircularTimer remainingSec={remainingSeconds} totalSec={totalDurationSeconds} isPaused={isPaused} />
@@ -877,7 +885,6 @@ const TopBar: React.FC<TopBarProps> = ({
           👥 {votedCount} / {participantCount}
         </div>
 
-        {/* 🌟 TĒMAI PIELĀGOTS PUNKTU LOGS */}
         <div style={getThemePointsBadgeStyle()}>
           ⭐ {isRevealed ? 'REZULTĀTS' : `${currentPoints} / ${maxPoints} PTS`}
         </div>
@@ -1149,7 +1156,6 @@ export default function Presentation() {
       window.close();
     };
 
-    // 🌟 DROŠA BALSOJUMU ATJAUNOŠANA (Nekad nepazaudē votedPlayerIds sarakstu)
     const handleVotesUpdated = (data: any) => {
       setVoteData((prev) => ({
         summary: data?.summary || {},
@@ -1510,7 +1516,6 @@ export default function Presentation() {
   const thirdPlace = totalCount >= 3 ? activePodiumList[2] : null;
 
   const remainingList = totalCount > 3 ? activePodiumList.slice(3) : [];
-  const totalRemainingPages = Math.max(1, Math.ceil(remainingList.length / 10));
   const currentRemainingPageList = remainingList.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10);
 
   const optionsRevealTiming = branding?.optionsRevealTiming || 'ON_ACTIVE';
@@ -1528,7 +1533,6 @@ export default function Presentation() {
   const optCorrectColor = scene?.config?.optionsCorrectColor || '#00ff00';
   const totalVotesReceived = voteData.votedCount || 1;
 
-  // 🌟 TĒMAI PIELĀGOTS ATBILŽU RENDERS AR 1:1 STUDIJAS KOORDINĀTĀM
   const renderOptionItem = (opt: string, i: number, customStyle: React.CSSProperties = {}) => {
     const letter = String.fromCharCode(65 + i);
     const optKey = (opt && opt.trim() !== '') ? opt : letter;
@@ -1744,290 +1748,301 @@ export default function Presentation() {
         />
       )}
 
-      {/* 🎯 KANVAS LAUKUMS */}
+      {/* 🎯 GALVENAIS 16:9 KANVAS LAUKUMS (Identisks Studijas proporcijām) */}
       <div
         style={{
           position: 'absolute',
-          top: 0,
+          top: isFullContent ? 0 : '80px',
+          bottom: 0,
           left: 0,
-          width: '100%',
-          height: '100%',
+          right: 0,
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: isFullContent ? 'center' : 'flex-start',
-          boxSizing: 'border-box',
+          justifyContent: 'center',
           overflow: 'hidden',
           zIndex: 10
         }}
       >
-        {scene?.config?.layout?.map((el: any, idx: number) => (
-          <MediaLayoutItem
-            key={el.id || `layout-el-${idx}`}
-            el={el}
-            subState={currentSub}
-            isRevealed={isRevealed}
-            sceneDuration={scene?.config?.duration || scene?.config?.timeLimit || 30}
-            endTime={scene?.endTime}
-            onCustomMediaEnded={handleCustomMediaEnded}
-          />
-        ))}
+        <div
+          style={{
+            width: '100%',
+            height: '100%',
+            maxWidth: isFullContent ? '100vw' : '100vw',
+            maxHeight: isFullContent ? '100vh' : 'calc(100vh - 80px)',
+            aspectRatio: '16 / 9',
+            position: 'relative',
+            overflow: 'hidden'
+          }}
+        >
+          {scene?.config?.layout?.map((el: any, idx: number) => (
+            <MediaLayoutItem
+              key={el.id || `layout-el-${idx}`}
+              el={el}
+              subState={currentSub}
+              isRevealed={isRevealed}
+              sceneDuration={scene?.config?.duration || scene?.config?.timeLimit || 30}
+              sceneType={scene?.type}
+              endTime={scene?.endTime}
+              onCustomMediaEnded={handleCustomMediaEnded}
+            />
+          ))}
 
-        {/* ⏱️ TAIMERA / PULKSTEŅA EKRĀNS */}
-        {scene?.type === 'TIMER' && (
-          <div
-            style={{
-              position: 'absolute',
-              left: scene.config?.timerPlacement === 'TOP_RIGHT' ? 'auto' : '50%',
-              right: scene.config?.timerPlacement === 'TOP_RIGHT' ? '50px' : 'auto',
-              top: scene.config?.timerPlacement === 'TOP_RIGHT' ? '40px' : '50%',
-              transform: scene.config?.timerPlacement === 'TOP_RIGHT' ? 'none' : 'translate(-50%, -50%)',
-              background: 'rgba(10, 10, 10, 0.88)',
-              border: activeTheme === 'TV_SHOW' ? '4px solid #ffd700' : '4px solid #ffc107',
-              borderRadius: '28px',
-              padding: scene.config?.timerPlacement === 'TOP_RIGHT' ? '20px 35px' : '40px 90px',
-              textAlign: 'center',
-              boxShadow: '0 20px 80px rgba(0,0,0,0.9)',
-              backdropFilter: 'blur(16px)',
-              zIndex: 30
-            }}
-          >
-            {scene.config?.timerLabel && (
-              <div style={{ fontSize: '1.8vw', color: '#00e5ff', fontWeight: 'bold', marginBottom: '10px' }}>
-                {scene.config.timerLabel}
+          {/* ⏱️ TAIMERA / PULKSTEŅA EKRĀNS */}
+          {scene?.type === 'TIMER' && (
+            <div
+              style={{
+                position: 'absolute',
+                left: scene.config?.timerPlacement === 'TOP_RIGHT' ? 'auto' : '50%',
+                right: scene.config?.timerPlacement === 'TOP_RIGHT' ? '50px' : 'auto',
+                top: scene.config?.timerPlacement === 'TOP_RIGHT' ? '40px' : '50%',
+                transform: scene.config?.timerPlacement === 'TOP_RIGHT' ? 'none' : 'translate(-50%, -50%)',
+                background: 'rgba(10, 10, 10, 0.88)',
+                border: activeTheme === 'TV_SHOW' ? '4px solid #ffd700' : '4px solid #ffc107',
+                borderRadius: '28px',
+                padding: scene.config?.timerPlacement === 'TOP_RIGHT' ? '20px 35px' : '40px 90px',
+                textAlign: 'center',
+                boxShadow: '0 20px 80px rgba(0,0,0,0.9)',
+                backdropFilter: 'blur(16px)',
+                zIndex: 30
+              }}
+            >
+              {scene.config?.timerLabel && (
+                <div style={{ fontSize: '1.8vw', color: '#00e5ff', fontWeight: 'bold', marginBottom: '10px' }}>
+                  {scene.config.timerLabel}
+                </div>
+              )}
+              <div style={{ fontSize: '7.5vw', fontWeight: '900', color: '#ffc107', letterSpacing: '4px', lineHeight: 1 }}>
+                {scene.config?.timerType === 'CLOCK' ? <ClockDisplay /> : <CountdownDisplay durationSeconds={scene.config?.timerDuration || 300} />}
               </div>
-            )}
-            <div style={{ fontSize: '7.5vw', fontWeight: '900', color: '#ffc107', letterSpacing: '4px', lineHeight: 1 }}>
-              {scene.config?.timerType === 'CLOCK' ? <ClockDisplay /> : <CountdownDisplay durationSeconds={scene.config?.timerDuration || 300} />}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* ⚡ ĀTRĀ PULTS */}
-        {scene?.type === 'BUZZER_RACE' && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
-            {buzzerWinnerData ? (
-              <div style={{ background: 'rgba(20, 15, 0, 0.94)', border: '4px solid #ffd700', borderRadius: '24px', padding: '30px 50px', textAlign: 'center', animation: 'correctGlowPulse 1.2s infinite ease-in-out' }}>
-                <div style={{ fontSize: '3vw', color: '#ffd700', fontWeight: '900' }}>🚨 ĀTRĀKĀ PULTS NOPIKSTĒJA! 🚨</div>
-                <div style={{ fontSize: '4.5vw', color: '#fff', fontWeight: '900', margin: '10px 0' }}>
-                  #{buzzerWinnerData.deviceNumber} {buzzerWinnerData.name}
-                </div>
-                {buzzerWinnerData.teamName && (
-                  <div style={{ fontSize: '2.5vw', color: '#00e5ff', fontWeight: 'bold', marginBottom: '10px' }}>
-                    👥 {buzzerWinnerData.teamName}
+          {/* ⚡ ĀTRĀ PULTS */}
+          {scene?.type === 'BUZZER_RACE' && (
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+              {buzzerWinnerData ? (
+                <div style={{ background: 'rgba(20, 15, 0, 0.94)', border: '4px solid #ffd700', borderRadius: '24px', padding: '30px 50px', textAlign: 'center', animation: 'correctGlowPulse 1.2s infinite ease-in-out' }}>
+                  <div style={{ fontSize: '3vw', color: '#ffd700', fontWeight: '900' }}>🚨 ĀTRĀKĀ PULTS NOPIKSTĒJA! 🚨</div>
+                  <div style={{ fontSize: '4.5vw', color: '#fff', fontWeight: '900', margin: '10px 0' }}>
+                    #{buzzerWinnerData.deviceNumber} {buzzerWinnerData.name}
                   </div>
-                )}
-                <div style={{ fontSize: '2vw', color: '#00ff00', fontWeight: 'bold' }}>
-                  ⏱️ Reakcijas laiks: {formatThinkingTime(buzzerWinnerData.timeSpentMs)}
+                  {buzzerWinnerData.teamName && (
+                    <div style={{ fontSize: '2.5vw', color: '#00e5ff', fontWeight: 'bold', marginBottom: '10px' }}>
+                      👥 {buzzerWinnerData.teamName}
+                    </div>
+                  )}
+                  <div style={{ fontSize: '2vw', color: '#00ff00', fontWeight: 'bold' }}>
+                    ⏱️ Reakcijas laiks: {formatThinkingTime(buzzerWinnerData.timeSpentMs)}
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div style={{ background: 'rgba(0,0,0,0.8)', border: '2px solid #00e5ff', padding: '25px 40px', borderRadius: '20px', textAlign: 'center' }}>
-                <h1 style={{ fontSize: '3.5vw', color: '#ffc107', margin: 0 }}>⚡ ĀTRĀ PULTS ⚡</h1>
-                <p style={{ fontSize: '1.8vw', color: '#fff', marginTop: '10px' }}>Gatavojieties spiest pogu telefonā!</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 🔢 SECĪBAS KĀRTOŠANA */}
-        {scene?.type === 'ORDERING' && (
-          <div style={{ position: 'absolute', bottom: '35px', width: '85%', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 10 }}>
-            {optionsList.map((item: string, idx: number) => (
-              <div
-                key={item}
-                style={{
-                  ...optionCard,
-                  background: isRevealed ? 'rgba(40, 167, 69, 0.85)' : 'rgba(0,0,0,0.85)',
-                  border: isRevealed ? '2px solid #00ff00' : 'none',
-                  padding: '12px 24px'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                  <span style={{ fontSize: '2vw', color: '#00e5ff', fontWeight: '900' }}>#{idx + 1}</span>
-                  <span style={{ fontSize: getOptionFontSize(item), color: '#fff', fontWeight: 'bold' }}>{item}</span>
+              ) : (
+                <div style={{ background: 'rgba(0,0,0,0.8)', border: '2px solid #00e5ff', padding: '25px 40px', borderRadius: '20px', textAlign: 'center' }}>
+                  <h1 style={{ fontSize: '3.5vw', color: '#ffc107', margin: 0 }}>⚡ ĀTRĀ PULTS ⚡</h1>
+                  <p style={{ fontSize: '1.8vw', color: '#fff', marginTop: '10px' }}>Gatavojieties spiest pogu telefonā!</p>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              )}
+            </div>
+          )}
 
-        {/* 🌟 1:1 STUDIJAS ATBILŽU POZICIONĒŠANA */}
-        {shouldShowOptions && scene?.type !== 'ORDERING' && scene?.type !== 'BUZZER_RACE' && scene?.type !== 'TIMER' && (
-          optionsList.map((opt: string, i: number) => {
-            const totalOpt = optionsList.length;
-
-            let defaultPos = {
-              x: 10 + (i % 2) * 42,
-              y: totalOpt > 4 ? 52 + Math.floor(i / 2) * 12 : 58 + Math.floor(i / 2) * 13,
-              w: 38,
-              h: totalOpt > 4 ? 9 : 10
-            };
-
-            if (optLayout === 'RIGHT_COLUMN') {
-              const itemHeight = Math.min(12, Math.floor(65 / totalOpt) - 2);
-              defaultPos = {
-                x: 56,
-                y: 20 + i * (itemHeight + 3),
-                w: 40,
-                h: itemHeight
-              };
-            }
-
-            const savedPos = optPositions[i] || optPositions[String(i)] || optPositions[opt];
-            const pos = (optLayout === 'INDIVIDUAL' && savedPos) ? savedPos : defaultPos;
-            const isOnlyLetter = !opt || opt.trim() === '';
-
-            return renderOptionItem(opt, i, {
-              position: 'absolute',
-              left: `${pos.x}%`,
-              top: `${pos.y}%`,
-              width: isOnlyLetter ? `${pos.w || 8}%` : `${pos.w}%`,
-              height: `${pos.h}%`,
-              minHeight: `${pos.h}%`
-            });
-          })
-        )}
-
-        {/* 2. REGULĀRĀ LĪDERU TABULA */}
-        {scene?.type === 'LEADERBOARD' && !isFinalLb && (
-          <div style={leaderboardOverlay}>
-            <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: '0 0 15px 0' }}>
-              {isTeamMode && showTeamLeaderboard ? '👥 KOMANDU REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
-            </h1>
-            <div>
-              {sortedLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => (
-                <div key={p.id || i} style={leaderRow}>
-                  <span>{leaderboardPage * 10 + i + 1}. {p.name} {isTeamMode && p.teamName && `[${p.teamName}]`}</span>
+          {/* 🔢 SECĪBAS KĀRTOŠANA */}
+          {scene?.type === 'ORDERING' && (
+            <div style={{ position: 'absolute', bottom: '35px', width: '85%', left: '7.5%', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 10 }}>
+              {optionsList.map((item: string, idx: number) => (
+                <div
+                  key={item}
+                  style={{
+                    ...optionCard,
+                    background: isRevealed ? 'rgba(40, 167, 69, 0.85)' : 'rgba(0,0,0,0.85)',
+                    border: isRevealed ? '2px solid #00ff00' : 'none',
+                    padding: '12px 24px'
+                  }}
+                >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <span style={timeTagStyle}>⏱️ {formatThinkingTime(p.totalTimeMs)}</span>
-                    <span style={{ fontWeight: 'bold', color: 'gold' }}>{p.score} pt</span>
+                    <span style={{ fontSize: '2vw', color: '#00e5ff', fontWeight: '900' }}>#{idx + 1}</span>
+                    <span style={{ fontSize: getOptionFontSize(item), color: '#fff', fontWeight: 'bold' }}>{item}</span>
                   </div>
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* 3. 🏆 FINĀLA APBALVOŠANA (VIENSKAITLIS: VICEČEMPIONS / ABSOLŪTAIS ČEMPIONS) */}
-        {scene?.type === 'LEADERBOARD' && isFinalLb && (
-          <div style={podiumWrapper}>
-            {podiumStage < 4 && (
-              <div style={podiumFlexContainer}>
-                <div style={podiumTitleBox}>
-                  <h1 style={{ fontSize: '2.4vw', color: '#ffd700', margin: 0, fontWeight: '900', letterSpacing: '2px' }}>
-                    {finalIsTeamPodium ? '🏆 KOMANDU FINĀLA APBALVOŠANA 🏆' : '🏆 INDIVIDUĀLĀ FINĀLA APBALVOŠANA 🏆'}
+          {/* 🌟 1:1 STUDIJAS ATBILŽU POZICIONĒŠANA */}
+          {shouldShowOptions && scene?.type !== 'ORDERING' && scene?.type !== 'BUZZER_RACE' && scene?.type !== 'TIMER' && (
+            optionsList.map((opt: string, i: number) => {
+              const totalOpt = optionsList.length;
+
+              let defaultPos = {
+                x: 10 + (i % 2) * 42,
+                y: totalOpt > 4 ? 52 + Math.floor(i / 2) * 12 : 58 + Math.floor(i / 2) * 13,
+                w: 38,
+                h: totalOpt > 4 ? 9 : 10
+              };
+
+              if (optLayout === 'RIGHT_COLUMN') {
+                const itemHeight = Math.min(12, Math.floor(65 / totalOpt) - 2);
+                defaultPos = {
+                  x: 56,
+                  y: 20 + i * (itemHeight + 3),
+                  w: 40,
+                  h: itemHeight
+                };
+              }
+
+              const savedPos = optPositions[i] || optPositions[String(i)] || optPositions[opt];
+              const pos = (optLayout === 'INDIVIDUAL' && savedPos) ? savedPos : defaultPos;
+              const isOnlyLetter = !opt || opt.trim() === '';
+
+              return renderOptionItem(opt, i, {
+                position: 'absolute',
+                left: `${pos.x}%`,
+                top: `${pos.y}%`,
+                width: isOnlyLetter ? `${pos.w || 8}%` : `${pos.w}%`,
+                height: `${pos.h}%`,
+                minHeight: `${pos.h}%`
+              });
+            })
+          )}
+
+          {/* 2. REGULĀRĀ LĪDERU TABULA */}
+          {scene?.type === 'LEADERBOARD' && !isFinalLb && (
+            <div style={leaderboardOverlay}>
+              <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: '0 0 15px 0' }}>
+                {isTeamMode && showTeamLeaderboard ? '👥 KOMANDU REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
+              </h1>
+              <div>
+                {sortedLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => (
+                  <div key={p.id || i} style={leaderRow}>
+                    <span>{leaderboardPage * 10 + i + 1}. {p.name} {isTeamMode && p.teamName && `[${p.teamName}]`}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                      <span style={timeTagStyle}>⏱️ {formatThinkingTime(p.totalTimeMs)}</span>
+                      <span style={{ fontWeight: 'bold', color: 'gold' }}>{p.score} pt</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 3. 🏆 FINĀLA APBALVOŠANA */}
+          {scene?.type === 'LEADERBOARD' && isFinalLb && (
+            <div style={podiumWrapper}>
+              {podiumStage < 4 && (
+                <div style={podiumFlexContainer}>
+                  <div style={podiumTitleBox}>
+                    <h1 style={{ fontSize: '2.4vw', color: '#ffd700', margin: 0, fontWeight: '900', letterSpacing: '2px' }}>
+                      {finalIsTeamPodium ? '🏆 KOMANDU FINĀLA APBALVOŠANA 🏆' : '🏆 INDIVIDUĀLĀ FINĀLA APBALVOŠANA 🏆'}
+                    </h1>
+                  </div>
+
+                  <div style={podiumStagesContainer}>
+                    {/* 🥈 2. VIETA */}
+                    {secondPlace && (
+                      <div
+                        style={{
+                          ...pedestalColumn,
+                          opacity: podiumStage >= 2 ? 1 : 0,
+                          transform: podiumStage >= 2 ? 'translateY(0)' : 'translateY(50px)',
+                          transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                        }}
+                      >
+                        <div style={rankTitleBadge}>🥈 VICEČEMPIONS</div>
+                        <div style={podiumTextBadge}>
+                          <span style={podiumNameText} title={secondPlace.name}>
+                            {finalIsTeamPodium ? `👥 ${secondPlace.name}` : secondPlace.name}
+                          </span>
+                          <span style={{ fontSize: '1.4rem', color: '#ffd700', fontWeight: '900' }}>{secondPlace.score} pt</span>
+                          <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}</span>
+                        </div>
+                        <div style={silverPedestal}>
+                          <span style={pedestalNumberText}>2</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 🥇 1. VIETA */}
+                    {firstPlace && (
+                      <div
+                        style={{
+                          ...pedestalColumn,
+                          opacity: podiumStage >= 3 ? 1 : 0,
+                          transform: podiumStage >= 3 ? 'translateY(0)' : 'translateY(60px)',
+                          transition: 'all 0.9s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                        }}
+                      >
+                        <div style={{ fontSize: '3rem', marginBottom: '-6px', filter: 'drop-shadow(0 0 15px gold)' }}>
+                          👑
+                        </div>
+                        <div style={{ ...rankTitleBadge, background: 'linear-gradient(90deg, #ffd700, #ff9800)', color: '#000' }}>
+                          🏆 ABSOLŪTAIS ČEMPIONS 🏆
+                        </div>
+                        <div style={{ ...podiumTextBadge, border: '3px solid #ffd700', boxShadow: '0 0 35px rgba(255,215,0,0.7)' }}>
+                          <span style={{ ...podiumNameText, color: '#ffd700', fontWeight: '900' }} title={firstPlace.name}>
+                            {finalIsTeamPodium ? `👥 ${firstPlace.name}` : firstPlace.name}
+                          </span>
+                          <span style={{ fontSize: '1.7rem', color: '#fff', fontWeight: '900' }}>{firstPlace.score} pt</span>
+                          <span style={{ fontSize: '0.9rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}</span>
+                        </div>
+                        <div style={goldPedestal}>
+                          <span style={pedestalNumberText}>1</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 🥉 3. VIETA */}
+                    {thirdPlace && (
+                      <div
+                        style={{
+                          ...pedestalColumn,
+                          opacity: podiumStage >= 1 ? 1 : 0,
+                          transform: podiumStage >= 1 ? 'translateY(0)' : 'translateY(50px)',
+                          transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
+                        }}
+                      >
+                        <div style={rankTitleBadge}>🥉 BRONZAS GODA VIETA</div>
+                        <div style={podiumTextBadge}>
+                          <span style={podiumNameText} title={thirdPlace.name}>
+                            {finalIsTeamPodium ? `👥 ${thirdPlace.name}` : thirdPlace.name}
+                          </span>
+                          <span style={{ fontSize: '1.4rem', color: '#ffd700', fontWeight: '900' }}>{thirdPlace.score} pt</span>
+                          <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}</span>
+                        </div>
+                        <div style={bronzePedestal}>
+                          <span style={pedestalNumberText}>3</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    style={{
+                      width: '75%',
+                      height: '25px',
+                      background: 'radial-gradient(ellipse at center, rgba(255, 215, 0, 0.35) 0%, rgba(0,0,0,0) 80%)',
+                      filter: 'blur(8px)',
+                      marginTop: '-5px'
+                    }}
+                  />
+                </div>
+              )}
+
+              {podiumStage >= 4 && (
+                <div style={leaderboardOverlay}>
+                  <h1 style={{ fontSize: '2.4vw', color: '#ffc107', margin: '0 0 15px 0' }}>
+                    {finalIsTeamPodium ? 'KOMANDU KOPVĒRTĒJUMS (NO 4. VIETAS)' : 'KOPVĒRTĒJUMS (NO 4. VIETAS)'}
                   </h1>
+                  <div>
+                    {currentRemainingPageList.map((item, i) => (
+                      <div key={item.id || i} style={leaderRow}>
+                        <span>{4 + leaderboardPage * 10 + i}. {item.name}</span>
+                        <span style={{ fontWeight: 'bold', color: 'gold' }}>{item.score} pt</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-
-                <div style={podiumStagesContainer}>
-                  {/* 🥈 2. VIETA — VICEČEMPIONS */}
-                  {secondPlace && (
-                    <div
-                      style={{
-                        ...pedestalColumn,
-                        opacity: podiumStage >= 2 ? 1 : 0,
-                        transform: podiumStage >= 2 ? 'translateY(0)' : 'translateY(50px)',
-                        transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                      }}
-                    >
-                      <div style={rankTitleBadge}>🥈 VICEČEMPIONS</div>
-                      <div style={podiumTextBadge}>
-                        <span style={podiumNameText} title={secondPlace.name}>
-                          {finalIsTeamPodium ? `👥 ${secondPlace.name}` : secondPlace.name}
-                        </span>
-                        <span style={{ fontSize: '1.4rem', color: '#ffd700', fontWeight: '900' }}>{secondPlace.score} pt</span>
-                        <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}</span>
-                      </div>
-                      <div style={silverPedestal}>
-                        <span style={pedestalNumberText}>2</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 🥇 1. VIETA — ABSOLŪTAIS ČEMPIONS */}
-                  {firstPlace && (
-                    <div
-                      style={{
-                        ...pedestalColumn,
-                        opacity: podiumStage >= 3 ? 1 : 0,
-                        transform: podiumStage >= 3 ? 'translateY(0)' : 'translateY(60px)',
-                        transition: 'all 0.9s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                      }}
-                    >
-                      <div style={{ fontSize: '3rem', marginBottom: '-6px', filter: 'drop-shadow(0 0 15px gold)' }}>
-                        👑
-                      </div>
-                      <div style={{ ...rankTitleBadge, background: 'linear-gradient(90deg, #ffd700, #ff9800)', color: '#000' }}>
-                        🏆 ABSOLŪTAIS ČEMPIONS 🏆
-                      </div>
-                      <div style={{ ...podiumTextBadge, border: '3px solid #ffd700', boxShadow: '0 0 35px rgba(255,215,0,0.7)' }}>
-                        <span style={{ ...podiumNameText, color: '#ffd700', fontWeight: '900' }} title={firstPlace.name}>
-                          {finalIsTeamPodium ? `👥 ${firstPlace.name}` : firstPlace.name}
-                        </span>
-                        <span style={{ fontSize: '1.7rem', color: '#fff', fontWeight: '900' }}>{firstPlace.score} pt</span>
-                        <span style={{ fontSize: '0.9rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}</span>
-                      </div>
-                      <div style={goldPedestal}>
-                        <span style={pedestalNumberText}>1</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 🥉 3. VIETA — BRONZAS GODA VIETA */}
-                  {thirdPlace && (
-                    <div
-                      style={{
-                        ...pedestalColumn,
-                        opacity: podiumStage >= 1 ? 1 : 0,
-                        transform: podiumStage >= 1 ? 'translateY(0)' : 'translateY(50px)',
-                        transition: 'all 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
-                      }}
-                    >
-                      <div style={rankTitleBadge}>🥉 BRONZAS GODA VIETA</div>
-                      <div style={podiumTextBadge}>
-                        <span style={podiumNameText} title={thirdPlace.name}>
-                          {finalIsTeamPodium ? `👥 ${thirdPlace.name}` : thirdPlace.name}
-                        </span>
-                        <span style={{ fontSize: '1.4rem', color: '#ffd700', fontWeight: '900' }}>{thirdPlace.score} pt</span>
-                        <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}</span>
-                      </div>
-                      <div style={bronzePedestal}>
-                        <span style={pedestalNumberText}>3</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div
-                  style={{
-                    width: '75%',
-                    height: '25px',
-                    background: 'radial-gradient(ellipse at center, rgba(255, 215, 0, 0.35) 0%, rgba(0,0,0,0) 80%)',
-                    filter: 'blur(8px)',
-                    marginTop: '-5px'
-                  }}
-                />
-              </div>
-            )}
-
-            {podiumStage >= 4 && (
-              <div style={leaderboardOverlay}>
-                <h1 style={{ fontSize: '2.4vw', color: '#ffc107', margin: '0 0 15px 0' }}>
-                  {finalIsTeamPodium ? 'KOMANDU KOPVĒRTĒJUMS (NO 4. VIETAS)' : 'KOPVĒRTĒJUMS (NO 4. VIETAS)'}
-                </h1>
-                <div>
-                  {currentRemainingPageList.map((item, i) => (
-                    <div key={item.id || i} style={leaderRow}>
-                      <span>{4 + leaderboardPage * 10 + i}. {item.name}</span>
-                      <span style={{ fontWeight: 'bold', color: 'gold' }}>{item.score} pt</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -2156,7 +2171,8 @@ const leaderboardOverlay: React.CSSProperties = {
   maxHeight: '75vh',
   zIndex: 40,
   display: 'flex',
-  flexDirection: 'column'
+  flexDirection: 'column',
+  margin: 'auto'
 };
 
 const leaderRow: React.CSSProperties = {
@@ -2176,8 +2192,8 @@ const timeTagStyle: React.CSSProperties = {
 };
 
 const podiumWrapper: React.CSSProperties = {
-  width: '94vw',
-  height: '86vh',
+  width: '100%',
+  height: '100%',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
