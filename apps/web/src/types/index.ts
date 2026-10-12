@@ -21,6 +21,14 @@ export interface CanvasElement {
   blurMode?: 'NONE' | 'STATIC' | 'PROGRESSIVE';
   blurAmount?: number;
   loop?: boolean;
+  zIndex?: number;
+  z?: number;
+
+  // 🌟 Jauns: Mediju piegulēšanas režīms (Ietilpināt / Aizpildīt rāmi / Iestiept pa visu rāmi)
+  fitMode?: 'CONTAIN' | 'COVER' | 'FILL';
+
+  // 🌟 Jauns: Malu noapaļojums pikseļos (regulējams no 0 līdz 50+)
+  borderRadius?: number;
 }
 
 export interface DiplomaConfig {
@@ -77,7 +85,7 @@ export interface Slide {
     playerUIMode?: 'AUTO' | 'CLASSIC_GRID' | 'TEXT_CARDS' | 'MUSIC_DUAL';
     musicCategoryTop?: string;
     musicCategoryBottom?: string;
-    // ⏱️ Jaunā TAIMERA slaida iestatījumi:
+    // ⏱️ Taimera slaida iestatījumi:
     timerType?: 'COUNTDOWN' | 'CLOCK';
     timerPlacement?: 'CENTER' | 'TOP_RIGHT';
     timerLabel?: string;
@@ -95,12 +103,12 @@ export interface MobileBranding {
   appBgColor?: string;
   lobbyMode?: 'CIRCLE' | 'INTERACTIVE_DOTS';
   optionsRevealTiming?: 'ON_ACTIVE' | 'ALWAYS';
+  presentationTheme?: 'NEON' | 'TV_SHOW' | 'ARENA' | 'MINIMAL';
   timerMode?: 'ALL_VOTED' | 'FULL_TIME';
   teamModeEnabled?: boolean;
   teamScoringMode?: 'AVG' | 'SUM';
   predefinedTeams?: string[];
   maxMissedQuestions?: number;
-  // 🌟 Spēles logo pozīcija un diplomu dizains:
   gameLogoPosition?: 'NONE' | 'TOP' | 'BOTTOM';
   diplomaConfig?: DiplomaConfig;
   hostName?: string;
@@ -113,7 +121,8 @@ export interface BuzzerWinner {
   deviceNumber: number;
   teamName?: string;
   timeSpentMs: number;
-  status?: 'ACTIVE' | 'PASSED' | 'AWARDED' | 'FAILED';
+  status?: 'ACTIVE' | 'QUEUED' | 'PASSED' | 'AWARDED' | 'FAILED';
+  submittedAnswers?: string[];
 }
 
 export interface VoteAnswerDetail {
@@ -121,4 +130,77 @@ export interface VoteAnswerDetail {
   timeReceived: number;
   timeSpentMs: number;
   category?: 'TOP' | 'BOTTOM' | 'SINGLE';
+}
+
+// 🌟 Spēlētāja stāvoklis ar vietu dinamiku un atmiņu
+export interface PlayerState {
+  id: string;
+  token?: string;
+  socketId?: string;
+  name: string;
+  deviceNumber?: number;
+  score: number;
+  roundScore: number;
+  lastQuestionScore: number; // Šajā pēdējā jautājumā iegūtie punkti
+  totalTimeMs: number;
+  roundTimeMs: number;
+  rank?: number | null; // Pašreizējā vieta kopvērtējumā
+  previousRank?: number | null; // Vieta pirms šī jautājuma
+  rankDelta?: number; // Kāpums (+), kritums (-), saglabāta (0)
+  isDisabled?: boolean;
+  isBot?: boolean;
+  teamName?: string;
+  isCaptain?: boolean;
+  missedQuestionsCount: number;
+}
+
+// 🌟 Komandas līderu tabulas elements ar dinamiku
+export interface TeamLeaderboardItem {
+  name: string;
+  score: number;
+  rawScore: number;
+  totalTimeMs: number;
+  memberCount: number;
+  members: string[];
+  rank?: number;
+  previousRank?: number | null;
+  rankDelta?: number;
+}
+
+// 🌟 Personīgās statistikas atskaite spēlētāja tālrunim
+export interface PersonalStatsPayload {
+  myRank: number | null;
+  previousRank?: number | null;
+  rankDelta?: number;
+  totalPlayers: number;
+  score: number;
+  roundScore: number;
+  lastQuestionScore?: number;
+  totalTimeMs: number;
+  roundTimeMs: number;
+  lbType: string;
+  teamRank?: number | null;
+  previousTeamRank?: number | null;
+  teamRankDelta?: number;
+  totalTeams?: number;
+  teamScore?: number | null;
+  teamName?: string;
+}
+
+// 🌟 Zibenīgās sinhronizācijas atbilde (atbloķējot tālruni)
+export interface ClientSyncResponse {
+  currentScene: any;
+  subState: string;
+  isBlackout: boolean;
+  score: number;
+  roundScore: number;
+  lastQuestionScore?: number;
+  myRank?: number | null;
+  previousRank?: number | null;
+  rankDelta?: number;
+  teamRank?: number | null;
+  previousTeamRank?: number | null;
+  teamRankDelta?: number;
+  myChoice: string | null;
+  myOptionIds: string[];
 }

@@ -4,7 +4,7 @@ import { useParams } from 'react-router-dom';
 import Timer from './Timer';
 import { BACKEND_URL } from './config';
 import { CanvasElement, BuzzerWinner } from './types';
-import { hexToRgba, getPresentationFontSize, getOptionFontSize, formatThinkingTime } from './utils/formatting';
+import { hexToRgba, getPresentationFontSize, getOptionFontSize, formatThinkingTime, getOfflineQrCodeUrl } from './utils/formatting';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 
@@ -74,7 +74,7 @@ const CountdownDisplay: React.FC<{ durationSeconds: number }> = memo(({ duration
   return <span>{min}:{sec}</span>;
 });
 
-// 🌟 ZELTA KONFETI UN DZIRKSTEĻU DZINĒJS (Čempionam)
+// 🌟 ZELTA KONFETI UN DZIRKSTELES
 const ConfettiCanvas: React.FC<{ active: boolean }> = memo(({ active }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -159,7 +159,7 @@ const ConfettiCanvas: React.FC<{ active: boolean }> = memo(({ active }) => {
   );
 });
 
-// 🌟 SKATUVES PROŽEKTORU STARI (Fonam)
+// 🌟 SKATUVES PROŽEKTORU STARI
 const SpotlightBeams: React.FC = memo(() => {
   return (
     <div
@@ -180,7 +180,7 @@ const SpotlightBeams: React.FC = memo(() => {
   );
 });
 
-// 🌟 CIRKULĀRAIS TAIMERIS (MINIMAL tēmai)
+// 🌟 CIRKULĀRAIS TAIMERIS
 const CircularTimer: React.FC<{
   remainingSec: number;
   totalSec: number;
@@ -223,7 +223,7 @@ const CircularTimer: React.FC<{
   );
 });
 
-// 🌟 DINAMISKĀ LAIKA PROGRESA JOSLA EKRĀNA AUGŠĀ
+// 🌟 LAIKA PROGRESA JOSLA EKRĀNA AUGŠĀ
 const TopTimeProgressBar: React.FC<{
   remainingSec: number;
   totalSec: number;
@@ -262,6 +262,7 @@ const TopTimeProgressBar: React.FC<{
   );
 });
 
+// 🌟 MEDIJU RENDERĒŠANAS KOMPONENTE AR PILNU FITMODE UN BORDERRADIUS
 const MediaLayoutItem: React.FC<{
   el: any;
   subState: string;
@@ -279,7 +280,6 @@ const MediaLayoutItem: React.FC<{
   const isRevealPhase = isRevealed || currentSub === 'REVEAL';
   const isBillboard = sceneType === 'BILLBOARD';
 
-  // 🌟 VIEDĀ REDZAMĪBA: BILLBOARD slaidā mediji ir redzami VIENMĒR
   const isVisible =
     isBillboard ||
     vis === 'ALWAYS' ||
@@ -360,7 +360,10 @@ const MediaLayoutItem: React.FC<{
   const bgRgba = hexToRgba(el.bgColor || '#000000', el.bgOpacity ?? (el.type === 'QUESTION' ? 85 : 60));
   const filterStyle = currentBlurPx > 0 ? `blur(${currentBlurPx}px)` : 'none';
 
-  // 🎯 PRECIZS NOVIETOJUMA UN IZMĒRA STILS ATBILSTOŠI STUDIJAS KANVAI
+  const objFit: React.CSSProperties['objectFit'] =
+    el.fitMode === 'FILL' ? 'fill' : el.fitMode === 'CONTAIN' ? 'contain' : 'cover';
+  const bRadius = `${el.borderRadius !== undefined ? el.borderRadius : 16}px`;
+
   const baseBoxStyle: React.CSSProperties = {
     position: 'absolute',
     left: `${el.x}%`,
@@ -383,7 +386,7 @@ const MediaLayoutItem: React.FC<{
           minHeight: `${el.h}%`,
           background: bgRgba,
           padding: el.type === 'QUESTION' ? '16px 28px' : '10px',
-          borderRadius: el.type === 'QUESTION' ? '22px' : '8px',
+          borderRadius: bRadius,
           backdropFilter: 'blur(16px)',
           border: 'none',
           color: el.color || '#ffffff',
@@ -410,8 +413,8 @@ const MediaLayoutItem: React.FC<{
           style={{
             width: '100%',
             height: '100%',
-            objectFit: 'contain',
-            borderRadius: '16px',
+            objectFit: objFit,
+            borderRadius: bRadius,
             border: 'none',
             filter: filterStyle,
             transition: el.blurMode === 'PROGRESSIVE' ? 'filter 0.2s linear' : 'none',
@@ -433,8 +436,8 @@ const MediaLayoutItem: React.FC<{
           style={{
             width: '100%',
             height: '100%',
-            objectFit: 'contain',
-            borderRadius: '16px',
+            objectFit: objFit,
+            borderRadius: bRadius,
             border: 'none',
             filter: filterStyle,
             transition: el.blurMode === 'PROGRESSIVE' ? 'filter 0.2s linear' : 'none',
@@ -493,7 +496,107 @@ const MediaLayoutItem: React.FC<{
   return null;
 };
 
-// 🌟 PIELĀGOTA AUGŠĒJĀ JOSLA (TOPBAR) AR PRECIZIEM PUNKTIŅIEM UN PĒDĒJIEM 5 SPĒLĒTĀJIEM
+// 🌟 VIETU DINAMIKAS INDIKATORS (TIKAI KOPVĒRTĒJUMAM!)
+const renderPresentationDelta = (delta?: number, isMaxClimber?: boolean, hasBaseline: boolean = true) => {
+  if (!hasBaseline || delta === undefined || delta === null) {
+    return (
+      <span
+        style={{
+          background: 'rgba(255, 255, 255, 0.08)',
+          color: '#888',
+          padding: '2px 7px',
+          borderRadius: '6px',
+          fontSize: '0.8vw',
+          fontWeight: 'bold'
+        }}
+      >
+        —
+      </span>
+    );
+  }
+
+  if (isMaxClimber && delta > 1) {
+    return (
+      <span
+        style={{
+          background: 'linear-gradient(135deg, rgba(255, 193, 7, 0.35), rgba(255, 87, 34, 0.35))',
+          border: '1.5px solid #ff9800',
+          color: '#ffd700',
+          padding: '2px 8px',
+          borderRadius: '10px',
+          fontSize: '0.9vw',
+          fontWeight: '900',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '3px',
+          boxShadow: '0 0 14px rgba(255, 152, 0, 0.7)'
+        }}
+        title="Kārtas lielākais kāpējs!"
+      >
+        🚀 +{delta}
+      </span>
+    );
+  }
+
+  if (delta > 0) {
+    return (
+      <span
+        style={{
+          background: 'rgba(40, 167, 69, 0.25)',
+          border: '1px solid #00ff66',
+          color: '#00ff66',
+          padding: '2px 7px',
+          borderRadius: '8px',
+          fontSize: '0.85vw',
+          fontWeight: '900',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '2px',
+          boxShadow: '0 0 8px rgba(0, 255, 102, 0.35)'
+        }}
+      >
+        ▲ +{delta}
+      </span>
+    );
+  }
+
+  if (delta < 0) {
+    return (
+      <span
+        style={{
+          background: 'rgba(220, 53, 69, 0.25)',
+          border: '1px solid #ff4d4d',
+          color: '#ff4d4d',
+          padding: '2px 7px',
+          borderRadius: '8px',
+          fontSize: '0.85vw',
+          fontWeight: '900',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '2px'
+        }}
+      >
+        ▼ {Math.abs(delta)}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      style={{
+        background: 'rgba(255, 255, 255, 0.08)',
+        color: '#888',
+        padding: '2px 6px',
+        borderRadius: '6px',
+        fontSize: '0.8vw',
+        fontWeight: 'bold'
+      }}
+    >
+      —
+    </span>
+  );
+};
+
 interface TopBarProps {
   pin: string | undefined;
   qrCodeUrl?: string;
@@ -535,7 +638,6 @@ const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const votedCount = voteData.votedCount || 0;
 
-  // 🌟 PRECIZS NEATBILDĒJUŠO SPĒLĒTĀJU SKAITS
   const unvotedPlayers = players.filter(
     (p) => !p.isDisabled && !(voteData.votedPlayerIds || []).includes(p.id)
   );
@@ -575,7 +677,6 @@ const TopBar: React.FC<TopBarProps> = ({
     return () => clearInterval(interval);
   }, [scene?.endTime, scene?.subState, duration, maxPoints, minPoints, hasTimer, isPaused]);
 
-  // 🌟 DINAMISKS PUNKTIŅU IZMĒRS ATKARĪBĀ NO SKAITA
   const getDotStyle = (count: number): React.CSSProperties => {
     let size = 6;
     if (count <= 10) size = 20;
@@ -596,127 +697,49 @@ const TopBar: React.FC<TopBarProps> = ({
   };
 
   const getThemeTopBarStyle = (): React.CSSProperties => {
+    const base = {
+      position: 'fixed' as const,
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '82px',
+      display: 'flex',
+      alignItems: 'center',
+      padding: '0 25px',
+      gap: '15px',
+      zIndex: 30,
+      boxSizing: 'border-box' as const
+    };
+
     switch (theme) {
       case 'TV_SHOW':
         return {
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '82px',
+          ...base,
           background: 'linear-gradient(180deg, rgba(7, 15, 30, 0.95) 0%, rgba(3, 7, 18, 0.85) 100%)',
           borderBottom: '2px solid #ffd700',
-          boxShadow: '0 8px 35px rgba(255, 215, 0, 0.25)',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 30px',
-          gap: '20px',
-          zIndex: 30,
-          boxSizing: 'border-box'
+          boxShadow: '0 8px 35px rgba(255, 215, 0, 0.25)'
         };
       case 'ARENA':
         return {
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '85px',
+          ...base,
           background: 'rgba(10, 10, 10, 0.96)',
           borderBottom: '3px solid #ff0055',
-          boxShadow: '0 8px 30px rgba(255, 0, 85, 0.3)',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 25px',
-          gap: '15px',
-          zIndex: 30,
-          boxSizing: 'border-box'
+          boxShadow: '0 8px 30px rgba(255, 0, 85, 0.3)'
         };
       case 'MINIMAL':
         return {
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '75px',
+          ...base,
           background: 'rgba(20, 20, 20, 0.65)',
           backdropFilter: 'blur(20px)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.12)',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 35px',
-          gap: '25px',
-          zIndex: 30,
-          boxSizing: 'border-box'
+          borderBottom: '1px solid rgba(255, 255, 255, 0.12)'
         };
       case 'NEON':
       default:
         return {
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '70px',
+          ...base,
           background: 'rgba(20, 20, 20, 0.88)',
           backdropFilter: 'blur(12px)',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 30px',
-          gap: '20px',
-          borderBottom: '2px solid rgba(255,255,255,0.12)',
-          zIndex: 30,
-          boxSizing: 'border-box'
-        };
-    }
-  };
-
-  const getThemePointsBadgeStyle = (): React.CSSProperties => {
-    switch (theme) {
-      case 'TV_SHOW':
-        return {
-          background: 'linear-gradient(135deg, #ffd700, #b8860b)',
-          color: '#000',
-          padding: '7px 20px',
-          borderRadius: '25px',
-          fontWeight: '900',
-          fontSize: '1rem',
-          border: '2px solid #ffffff',
-          boxShadow: '0 0 20px rgba(255, 215, 0, 0.65)'
-        };
-      case 'ARENA':
-        return {
-          background: '#120207',
-          color: '#ff0055',
-          padding: '7px 18px',
-          borderRadius: '8px',
-          fontWeight: '900',
-          fontSize: '1.05rem',
-          border: '2px solid #ff0055',
-          boxShadow: '0 0 16px rgba(255, 0, 85, 0.6)',
-          letterSpacing: '1px'
-        };
-      case 'MINIMAL':
-        return {
-          background: 'rgba(255, 255, 255, 0.08)',
-          backdropFilter: 'blur(12px)',
-          color: '#ffffff',
-          padding: '6px 18px',
-          borderRadius: '20px',
-          fontWeight: '600',
-          fontSize: '0.95rem',
-          border: '1px solid rgba(255, 255, 255, 0.25)',
-          boxShadow: '0 4px 15px rgba(0,0,0,0.5)'
-        };
-      case 'NEON':
-      default:
-        return {
-          background: 'rgba(0,0,0,0.85)',
-          color: '#00ff66',
-          padding: '6px 18px',
-          borderRadius: '25px',
-          fontWeight: 'bold',
-          fontSize: '1rem',
-          border: '2px solid #00ff66',
-          boxShadow: '0 0 15px rgba(0, 255, 102, 0.45)'
+          borderBottom: '2px solid rgba(255,255,255,0.12)'
         };
     }
   };
@@ -724,15 +747,15 @@ const TopBar: React.FC<TopBarProps> = ({
   return (
     <>
       <div style={getThemeTopBarStyle()}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div
             style={{
               background: theme === 'TV_SHOW' ? 'linear-gradient(135deg, #18253d, #0b1528)' : 'rgba(0,0,0,0.85)',
-              padding: '6px 18px',
-              borderRadius: theme === 'MINIMAL' ? '8px' : '12px',
-              fontSize: '1.3rem',
+              padding: '6px 16px',
+              borderRadius: '10px',
+              fontSize: '1.25rem',
               fontWeight: '900',
-              border: theme === 'TV_SHOW' ? '2px solid #ffd700' : theme === 'ARENA' ? '2px solid #ff0055' : '2px solid #0f0',
+              border: theme === 'TV_SHOW' ? '2px solid #ffd700' : '2px solid #00ff66',
               color: theme === 'TV_SHOW' ? '#ffd700' : '#fff'
             }}
           >
@@ -754,7 +777,7 @@ const TopBar: React.FC<TopBarProps> = ({
               onClick={() => setShowLargeQr(!showLargeQr)}
               title="Palielināt / Aizvērt QR kodu [Q]"
             >
-              <img src={qrCodeUrl} alt="QR" style={{ width: '44px', height: '44px', borderRadius: '6px' }} />
+              <img src={qrCodeUrl} alt="QR" style={{ width: '42px', height: '42px', borderRadius: '6px' }} />
             </div>
           )}
         </div>
@@ -765,9 +788,9 @@ const TopBar: React.FC<TopBarProps> = ({
               const stats = summaryStats || scene?.summaryStats || {};
               if (stats.isMultiChoice) {
                 return (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
                     <span style={summaryPillGreen}>
-                      🟩 Pilnīgi ({stats.requiredCount}/{stats.requiredCount}): <strong>{stats.fullCorrectCount ?? 0}</strong> ({stats.fullCorrectPct ?? 0}%)
+                      🟩 Pilnīgi: <strong>{stats.fullCorrectCount ?? 0}</strong> ({stats.fullCorrectPct ?? 0}%)
                     </span>
                     <span style={summaryPillYellow}>
                       🟨 Daļēji: <strong>{stats.partialCorrectCount ?? 0}</strong> ({stats.partialCorrectPct ?? 0}%)
@@ -775,28 +798,22 @@ const TopBar: React.FC<TopBarProps> = ({
                     <span style={summaryPillRed}>
                       🟥 Kļūdaini: <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
                     </span>
-                    <span style={summaryPillGray}>
-                      ⏱️ Nokavēja: <strong>{stats.unsubmittedCount ?? 0}</strong>
-                    </span>
                   </div>
                 );
               }
               return (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
                   <span style={summaryPillGreen}>
                     🟩 Pareizi: <strong>{stats.correctCount ?? 0}</strong> ({stats.correctPct ?? 0}%)
                   </span>
                   <span style={summaryPillRed}>
                     🟥 Kļūdaini: <strong>{stats.incorrectCount ?? 0}</strong> ({stats.incorrectPct ?? 0}%)
                   </span>
-                  <span style={summaryPillGray}>
-                    ⏱️ Nokavēja: <strong>{stats.unsubmittedCount ?? 0}</strong>
-                  </span>
                 </div>
               );
             })()
           ) : isPaused ? (
-            <span style={{ color: '#ff9800', fontSize: '1.4vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(255,152,0,0.8)' }}>
+            <span style={{ color: '#ff9800', fontSize: '1.3vw', fontWeight: 'bold' }}>
               ⏸️ SPĒLE IEPAUZĒTA
             </span>
           ) : missingCount > 5 ? (
@@ -809,7 +826,7 @@ const TopBar: React.FC<TopBarProps> = ({
             </div>
           ) : missingCount > 0 ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
-              <span style={{ color: '#ffc107', fontWeight: 'bold', fontSize: '0.95vw', textTransform: 'uppercase', textShadow: '0 0 10px #ffc107' }}>
+              <span style={{ color: '#ffc107', fontWeight: 'bold', fontSize: '0.9vw' }}>
                 GAIDĀM ATBILDES ({missingCount}):
               </span>
               {unvotedPlayers.map((p) => (
@@ -817,22 +834,20 @@ const TopBar: React.FC<TopBarProps> = ({
                   key={p.id}
                   style={{
                     background: 'rgba(255, 193, 7, 0.25)',
-                    border: '2px solid #ffc107',
+                    border: '1px solid #ffc107',
                     color: '#fff',
-                    padding: '3px 10px',
-                    borderRadius: '8px',
+                    padding: '2px 8px',
+                    borderRadius: '6px',
                     fontWeight: 'bold',
-                    fontSize: '0.95vw',
-                    backdropFilter: 'blur(10px)',
-                    boxShadow: '0 0 14px rgba(255, 193, 7, 0.7)'
+                    fontSize: '0.9vw'
                   }}
                 >
-                  #{p.deviceNumber || '?'} {p.name} {isTeamMode && p.teamName ? `[${p.teamName}]` : ''}
+                  #{p.deviceNumber || '?'} {p.name}
                 </span>
               ))}
             </div>
           ) : (
-            <span style={{ color: '#28a745', fontSize: '1.3vw', fontWeight: 'bold', textShadow: '0 0 15px rgba(40,167,69,0.8)' }}>
+            <span style={{ color: '#28a745', fontSize: '1.2vw', fontWeight: 'bold' }}>
               ✅ Visas atbildes saņemtas!
             </span>
           )}
@@ -841,39 +856,6 @@ const TopBar: React.FC<TopBarProps> = ({
         {hasTimer && (
           theme === 'MINIMAL' ? (
             <CircularTimer remainingSec={remainingSeconds} totalSec={totalDurationSeconds} isPaused={isPaused} />
-          ) : theme === 'ARENA' ? (
-            <div
-              style={{
-                background: isDangerTime ? '#ff0055' : '#111',
-                border: isDangerTime ? '3px solid #ffffff' : '3px solid #ff0055',
-                padding: '4px 22px',
-                borderRadius: '8px',
-                fontWeight: '900',
-                fontSize: '2.4rem',
-                color: '#ffffff',
-                letterSpacing: '2px',
-                boxShadow: isDangerTime ? '0 0 35px #ff0055' : '0 0 15px rgba(255, 0, 85, 0.4)',
-                animation: isDangerTime ? 'dangerPulse 0.6s infinite alternate' : 'none'
-              }}
-            >
-              {remainingSeconds}s
-            </div>
-          ) : theme === 'TV_SHOW' ? (
-            <div
-              style={{
-                background: 'radial-gradient(circle at 35% 35%, #ffd700, #b8860b)',
-                color: '#000',
-                padding: '6px 24px',
-                borderRadius: '30px',
-                fontWeight: '900',
-                fontSize: '1.9rem',
-                border: '3px solid #ffffff',
-                boxShadow: '0 0 25px rgba(255, 215, 0, 0.7)',
-                animation: isDangerTime ? 'dangerPulse 0.7s infinite alternate' : 'none'
-              }}
-            >
-              ⏳ {remainingSeconds}
-            </div>
           ) : (
             <div style={{ ...timerBadge, borderColor: isPaused ? '#ff9800' : 'orange' }}>
               <Timer endTime={scene?.endTime} isPaused={isPaused} pausedRemainingMs={scene?.pausedRemainingMs} />
@@ -885,7 +867,15 @@ const TopBar: React.FC<TopBarProps> = ({
           👥 {votedCount} / {participantCount}
         </div>
 
-        <div style={getThemePointsBadgeStyle()}>
+        <div style={{
+          background: 'linear-gradient(135deg, #ffd700, #b8860b)',
+          color: '#000',
+          padding: '6px 16px',
+          borderRadius: '20px',
+          fontWeight: '900',
+          fontSize: '0.95rem',
+          border: '2px solid #fff'
+        }}>
           ⭐ {isRevealed ? 'REZULTĀTS' : `${currentPoints} / ${maxPoints} PTS`}
         </div>
       </div>
@@ -915,6 +905,8 @@ export default function Presentation() {
   const [subState, setSubState] = useState<string>('IDLE');
   const [summaryStats, setSummaryStats] = useState<any>(null);
   const [showLargeQr, setShowLargeQr] = useState<boolean>(false);
+
+  const [isBlackout, setIsBlackout] = useState<boolean>(false);
 
   const [voteData, setVoteData] = useState<{ summary: Record<string, number>; votedCount: number; votedPlayerIds?: string[] }>({
     summary: {},
@@ -1082,7 +1074,11 @@ export default function Presentation() {
     fetch(`${BACKEND_URL}/api/network-ip`)
       .then((r) => r.json())
       .then((d) => {
-        if (d?.tunnelUrl) setConnectionUrl(d.tunnelUrl);
+        if (d?.tunnelUrl) {
+          setConnectionUrl(d.tunnelUrl);
+        } else if (d?.localIp && d.localIp !== 'localhost') {
+          setConnectionUrl(`http://${d.localIp}:5173`);
+        }
       })
       .catch(() => {});
 
@@ -1090,6 +1086,7 @@ export default function Presentation() {
       if (data?.connectionUrl) setConnectionUrl(data.connectionUrl);
       if (data?.currentScene) setScene(data.currentScene);
       if (data?.subState) setSubState(String(data.subState).toUpperCase());
+      if (data?.isBlackout !== undefined) setIsBlackout(data.isBlackout);
       if (data?.summaryStats) setSummaryStats(data.summaryStats);
       if (data?.branding) {
         setBranding((prev: any) => ({ ...prev, ...data.branding }));
@@ -1103,6 +1100,7 @@ export default function Presentation() {
       if (data?.state?.connectionUrl) setConnectionUrl(data.state.connectionUrl);
       if (data?.state?.currentScene) setScene(data.state.currentScene);
       if (data?.state?.subState) setSubState(String(data.state.subState).toUpperCase());
+      if (data?.state?.isBlackout !== undefined) setIsBlackout(data.state.isBlackout);
       if (data?.state?.summaryStats) setSummaryStats(data.state.summaryStats);
       if (data?.state?.branding) {
         setBranding((prev: any) => ({ ...prev, ...data.state.branding }));
@@ -1144,9 +1142,14 @@ export default function Presentation() {
       });
       const nextSub = (newScene?.subState || 'READY').toUpperCase();
       setSubState(nextSub);
+      if (newScene?.isBlackout !== undefined) setIsBlackout(newScene.isBlackout);
       if (newScene?.summaryStats) setSummaryStats(newScene.summaryStats);
       if (nextSub === 'REVEAL') setIsRevealed(true);
       setPodiumStage(0);
+    };
+
+    const handleBlackoutToggled = (active: boolean) => {
+      setIsBlackout(active);
     };
 
     const handleSessionEnded = () => {
@@ -1236,6 +1239,7 @@ export default function Presentation() {
     socket.on('connection-url-changed', handleConnectionUrlChanged);
     socket.on('tunnel-ready', handleTunnelReady);
     socket.on('state-update', handleStateUpdate);
+    socket.on('blackout-toggled', handleBlackoutToggled);
     socket.on('session-ended', handleSessionEnded);
     socket.on('session-closed', handleSessionEnded);
     socket.on('votes-updated', handleVotesUpdated);
@@ -1275,6 +1279,7 @@ export default function Presentation() {
       socket.off('connection-url-changed', handleConnectionUrlChanged);
       socket.off('tunnel-ready', handleTunnelReady);
       socket.off('state-update', handleStateUpdate);
+      socket.off('blackout-toggled', handleBlackoutToggled);
       socket.off('session-ended', handleSessionEnded);
       socket.off('session-closed', handleSessionEnded);
       socket.off('votes-updated', handleVotesUpdated);
@@ -1304,12 +1309,20 @@ export default function Presentation() {
     scene?.type === 'VOTE' ||
     scene?.type === 'ORDERING';
 
-  const isRoundLb = (scene?.config?.lbType || leaderboardType) === 'ROUND';
+  // 🌟 PRECIZI: VAI ŠIS IR KĀRTAS TOPS VAI KOPVĒRTĒJUMS?
+  const isRoundLb = (scene?.config?.lbType || leaderboardType || '').toUpperCase() === 'ROUND';
   const isFinalLb = scene?.type === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
   const isFullContent = scene?.type === 'BILLBOARD' || scene?.type === 'LEADERBOARD' || scene?.type === 'TIMER';
 
   useEffect(() => {
     if (!isMediaReady || !audioBank.current) return;
+    if (isBlackout) {
+      stopSound(audioBank.current.timer);
+      stopSound(audioBank.current.timeUp);
+      stopSound(audioBank.current.reveal);
+      stopSound(audioBank.current.finals);
+      return;
+    }
     if (currentSub === 'ACTIVE' && isQuestionType) {
       stopSound(audioBank.current.timeUp);
       stopSound(audioBank.current.reveal);
@@ -1336,10 +1349,10 @@ export default function Presentation() {
       stopSound(audioBank.current.timer);
       if (!isFinalLb) stopSound(audioBank.current.finals);
     }
-  }, [currentSub, isQuestionType, hasCustomMediaDuringQuestion, isFinalLb, isMediaReady]);
+  }, [currentSub, isQuestionType, hasCustomMediaDuringQuestion, isFinalLb, isMediaReady, isBlackout]);
 
   const handleCustomMediaEnded = () => {
-    if (currentSub === 'ACTIVE' && isQuestionType && audioBank.current) {
+    if (currentSub === 'ACTIVE' && isQuestionType && audioBank.current && !isBlackout) {
       playSound(audioBank.current.timer);
     }
   };
@@ -1385,9 +1398,28 @@ export default function Presentation() {
 
   const baseHost = connectionUrl && connectionUrl.trim() !== '' ? connectionUrl.trim() : window.location.origin;
   const joinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}`;
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(joinUrl)}`;
+  const qrCodeUrl = getOfflineQrCodeUrl(joinUrl, 260);
 
-  // 1. SĀKUMA LOBBY EKRĀNS
+  // AVĀRIJAS SKATUVES AIZSEGS (BLACKOUT)
+  if (isBlackout) {
+    return (
+      <div style={{ ...fullScreenCenter, backgroundColor: '#000000', zIndex: 9999999 }}>
+        {branding.appLogo ? (
+          <img
+            src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
+            alt="Logo"
+            style={{ maxHeight: '180px', maxWidth: '75%', objectFit: 'contain', opacity: 0.9, filter: 'drop-shadow(0 0 30px rgba(255,255,255,0.2))' }}
+          />
+        ) : (
+          <div style={{ color: '#333', fontSize: '2.5vw', fontWeight: 'bold', letterSpacing: '4px' }}>
+            EVENT STUDIO
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // SĀKUMA LOBBY EKRĀNS
   if (!scene) {
     const lobbyMode = branding?.lobbyMode || 'CIRCLE';
     if (lobbyMode === 'INTERACTIVE_DOTS') {
@@ -1497,6 +1529,7 @@ export default function Presentation() {
   const optLayout = scene?.config?.optionsLayout || 'INDIVIDUAL';
   const optPositions = scene?.config?.optionsPositions || {};
 
+  // 🌟 PRECIZI SAKĀRTOTS: KĀRTAS TOPĀ PĒC ROUNDSCORE, KOPVĒRTĒJUMĀ PĒC SCORE
   const sortedLeaderboard = [...leaderboard]
     .filter((p) => !p.isDisabled)
     .sort((a, b) => {
@@ -1517,6 +1550,10 @@ export default function Presentation() {
 
   const remainingList = totalCount > 3 ? activePodiumList.slice(3) : [];
   const currentRemainingPageList = remainingList.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10);
+
+  // Kārtas lielākais kāpējs rādās TIKAI KOPVĒRTĒJUMĀ (!isRoundLb)
+  const maxClimberDelta = Math.max(0, ...activePodiumList.map((x) => (x.previousRank ? (x.rankDelta || 0) : 0)));
+  const biggestClimber = (!isRoundLb && maxClimberDelta > 1) ? activePodiumList.find((x) => x.rankDelta === maxClimberDelta && x.previousRank) : null;
 
   const optionsRevealTiming = branding?.optionsRevealTiming || 'ON_ACTIVE';
   const shouldShowOptions =
@@ -1650,6 +1687,14 @@ export default function Presentation() {
     );
   };
 
+  // 🌟 DINAMISKAIS LĪDERU TABULAS VIRSRAKSTS
+  const getLeaderboardTitle = () => {
+    if (isTeamMode && showTeamLeaderboard) {
+      return isRoundLb ? '🏆 KOMANDU KĀRTAS REZULTĀTI' : '👥 KOMANDU KOPVĒRTĒJUMS';
+    }
+    return isRoundLb ? '🏆 KĀRTAS REZULTĀTI' : '⭐ KOPVĒRTĒJUMS';
+  };
+
   return (
     <div style={containerStyle} className={isShaking ? 'screen-shake' : ''}>
       <style>{`
@@ -1728,6 +1773,7 @@ export default function Presentation() {
         />
       )}
 
+      {/* 🌟 TopBar bez liekās pilnekrāna pogas */}
       {!isFullContent && (
         <TopBar
           pin={pin}
@@ -1748,7 +1794,7 @@ export default function Presentation() {
         />
       )}
 
-      {/* 🎯 GALVENAIS 16:9 KANVAS LAUKUMS (Identisks Studijas proporcijām) */}
+      {/* 🎯 GALVENAIS 16:9 KANVAS LAUKUMS — MATEMĀTISKI PERFEKTS 16:9 BLOKS */}
       <div
         style={{
           position: 'absolute',
@@ -1765,13 +1811,16 @@ export default function Presentation() {
       >
         <div
           style={{
-            width: '100%',
-            height: '100%',
-            maxWidth: isFullContent ? '100vw' : '100vw',
-            maxHeight: isFullContent ? '100vh' : 'calc(100vh - 80px)',
+            width: isFullContent
+              ? 'min(100vw, calc(100vh * 16 / 9))'
+              : 'min(100vw, calc((100vh - 80px) * 16 / 9))',
+            height: isFullContent
+              ? 'min(100vh, calc(100vw * 9 / 16))'
+              : 'min(calc(100vh - 80px), calc(100vw * 9 / 16))',
             aspectRatio: '16 / 9',
             position: 'relative',
-            overflow: 'hidden'
+            overflow: 'hidden',
+            boxSizing: 'border-box'
           }}
         >
           {scene?.config?.layout?.map((el: any, idx: number) => (
@@ -1787,7 +1836,7 @@ export default function Presentation() {
             />
           ))}
 
-          {/* ⏱️ TAIMERA / PULKSTEŅA EKRĀNS */}
+          {/* TAIMERA EKRĀNS */}
           {scene?.type === 'TIMER' && (
             <div
               style={{
@@ -1817,7 +1866,7 @@ export default function Presentation() {
             </div>
           )}
 
-          {/* ⚡ ĀTRĀ PULTS */}
+          {/* ĀTRĀ PULTS */}
           {scene?.type === 'BUZZER_RACE' && (
             <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
               {buzzerWinnerData ? (
@@ -1844,7 +1893,7 @@ export default function Presentation() {
             </div>
           )}
 
-          {/* 🔢 SECĪBAS KĀRTOŠANA */}
+          {/* SECĪBAS KĀRTOŠANA */}
           {scene?.type === 'ORDERING' && (
             <div style={{ position: 'absolute', bottom: '35px', width: '85%', left: '7.5%', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 10 }}>
               {optionsList.map((item: string, idx: number) => (
@@ -1866,7 +1915,6 @@ export default function Presentation() {
             </div>
           )}
 
-          {/* 🌟 1:1 STUDIJAS ATBILŽU POZICIONĒŠANA */}
           {shouldShowOptions && scene?.type !== 'ORDERING' && scene?.type !== 'BUZZER_RACE' && scene?.type !== 'TIMER' && (
             optionsList.map((opt: string, i: number) => {
               const totalOpt = optionsList.length;
@@ -1903,27 +1951,157 @@ export default function Presentation() {
             })
           )}
 
-          {/* 2. REGULĀRĀ LĪDERU TABULA */}
+          {/* 🌟 2. PILNEKRĀNA LĪDERU TABULA AR FIKSĒTIEM SLOTIEM (NO-STRETCH GRID) */}
           {scene?.type === 'LEADERBOARD' && !isFinalLb && (
-            <div style={leaderboardOverlay}>
-              <h1 style={{ fontSize: '2.5vw', color: '#ffc107', margin: '0 0 15px 0' }}>
-                {isTeamMode && showTeamLeaderboard ? '👥 KOMANDU REZULTĀTI' : '⭐ KOPVĒRTĒJUMS'}
-              </h1>
-              <div>
-                {sortedLeaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((p, i) => (
-                  <div key={p.id || i} style={leaderRow}>
-                    <span>{leaderboardPage * 10 + i + 1}. {p.name} {isTeamMode && p.teamName && `[${p.teamName}]`}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                      <span style={timeTagStyle}>⏱️ {formatThinkingTime(p.totalTimeMs)}</span>
-                      <span style={{ fontWeight: 'bold', color: 'gold' }}>{p.score} pt</span>
-                    </div>
+            <div style={{
+              width: '92%',
+              height: '90%',
+              margin: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'rgba(10, 10, 10, 0.94)',
+              borderRadius: '24px',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              padding: '2% 3%',
+              boxSizing: 'border-box',
+              overflow: 'hidden',
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.95)',
+              backdropFilter: 'blur(20px)'
+            }}>
+              {/* Virsraksta josla */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', paddingBottom: '1%', flexShrink: 0 }}>
+                <div>
+                  <h1 style={{ fontSize: '2.4vw', color: '#ffc107', margin: 0, fontWeight: '900', letterSpacing: '1px' }}>
+                    {getLeaderboardTitle()}
+                  </h1>
+                  <span style={{ fontSize: '0.85vw', color: isRoundLb ? '#00e5ff' : '#aaa', fontWeight: 'bold' }}>
+                    {isRoundLb ? '📍 Šīs kārtas rezultāti' : '⭐ Kopējā punktu summa visā spēlē'}
+                  </span>
+                </div>
+
+                {/* 🚀 Kārtas lielākais kāpējs rādās TIKAI KOPVĒRTĒJUMĀ */}
+                {!isRoundLb && biggestClimber && (
+                  <div style={{
+                    background: 'linear-gradient(135deg, rgba(255, 193, 7, 0.25), rgba(255, 87, 34, 0.25))',
+                    border: '1.5px solid #ff9800',
+                    padding: '3px 12px',
+                    borderRadius: '16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '0.9vw',
+                    color: '#ffd700',
+                    fontWeight: 'bold',
+                    boxShadow: '0 0 15px rgba(255, 152, 0, 0.5)'
+                  }}>
+                    <span>🚀 Kārtas kāpējs:</span>
+                    <strong style={{ color: '#fff' }}>{biggestClimber.name}</strong>
+                    <span style={{ color: '#00ff66' }}>(+{maxClimberDelta} vietas)</span>
                   </div>
-                ))}
+                )}
+              </div>
+
+              {/* 🌟 Rindu konteiners: Fiksēta augstuma sloti, lai 1 spēlētājs NEKAD neizstieptos pa visu ekrānu! */}
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'flex-start',
+                flex: 1,
+                marginTop: '1.2%',
+                overflow: 'hidden',
+                gap: '8px'
+              }}>
+                {(isTeamMode && showTeamLeaderboard ? teamLeaderboard : sortedLeaderboard)
+                  .slice(leaderboardPage * 10, (leaderboardPage + 1) * 10)
+                  .map((item, i) => {
+                    const currentNum = leaderboardPage * 10 + i + 1;
+                    const isTopClimber = !isRoundLb && item.rankDelta === maxClimberDelta && maxClimberDelta > 1;
+
+                    const itemScore = isRoundLb ? (item.roundScore ?? 0) : (item.score ?? 0);
+                    const itemTime = isRoundLb ? (item.roundTimeMs ?? 0) : (item.totalTimeMs ?? 0);
+                    const hasBaseline = Boolean(item.previousRank !== null && item.previousRank !== undefined);
+
+                    // 🌟 TOP 3 VIETU VIZUĀLĀ IZCELŠANA
+                    let rowBorder = '1px solid rgba(255, 255, 255, 0.08)';
+                    let rowBackground = 'rgba(255, 255, 255, 0.03)';
+                    let medalBadge = `${currentNum}.`;
+
+                    if (currentNum === 1) {
+                      rowBorder = '2px solid #ffd700';
+                      rowBackground = 'linear-gradient(90deg, rgba(255, 215, 0, 0.22) 0%, rgba(255, 215, 0, 0.04) 100%)';
+                      medalBadge = '🥇';
+                    } else if (currentNum === 2) {
+                      rowBorder = '1.5px solid #cbd5e1';
+                      rowBackground = 'linear-gradient(90deg, rgba(200, 210, 225, 0.18) 0%, rgba(200, 210, 225, 0.03) 100%)';
+                      medalBadge = '🥈';
+                    } else if (currentNum === 3) {
+                      rowBorder = '1.5px solid #cd7f32';
+                      rowBackground = 'linear-gradient(90deg, rgba(205, 127, 50, 0.18) 0%, rgba(205, 127, 50, 0.03) 100%)';
+                      medalBadge = '🥉';
+                    } else if (isTopClimber) {
+                      rowBorder = '1.5px solid #ff9800';
+                      rowBackground = 'rgba(255, 152, 0, 0.14)';
+                    }
+
+                    return (
+                      <div
+                        key={item.id || item.name || i}
+                        style={{
+                          height: 'calc((100% - 72px) / 10)',
+                          minHeight: '42px',
+                          maxHeight: '56px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '0 18px',
+                          borderRadius: '10px',
+                          border: rowBorder,
+                          background: rowBackground,
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <span style={{
+                            fontWeight: '900',
+                            minWidth: '32px',
+                            fontSize: currentNum <= 3 ? '1.4vw' : '1.1vw',
+                            color: currentNum === 1 ? '#ffd700' : currentNum === 2 ? '#cbd5e1' : currentNum === 3 ? '#cd7f32' : '#888'
+                          }}>
+                            {medalBadge}
+                          </span>
+
+                          {/* Kārtas topā bultiņas nerādām! Tikai Kopvērtējumā. */}
+                          {!isRoundLb && renderPresentationDelta(item.rankDelta, isTopClimber, hasBaseline)}
+
+                          <span style={{
+                            fontWeight: currentNum <= 3 ? '900' : 'bold',
+                            fontSize: 'clamp(1rem, 1.35vw, 1.65rem)',
+                            color: currentNum === 1 ? '#ffd700' : '#fff'
+                          }}>
+                            {item.name} {isTeamMode && !showTeamLeaderboard && item.teamName && `[${item.teamName}]`}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                          <span style={timeTagStyle}>⏱️ {formatThinkingTime(itemTime)}</span>
+                          
+                          {/* 🌟 TĪRS PUNKTU APZĪMĒJUMS: 345 pt */}
+                          <span style={{
+                            fontWeight: '900',
+                            color: currentNum === 1 ? '#ffd700' : 'gold',
+                            fontSize: 'clamp(1.1rem, 1.55vw, 1.95rem)'
+                          }}>
+                            {itemScore} pt
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           )}
 
-          {/* 3. 🏆 FINĀLA APBALVOŠANA */}
+          {/* 🌟 3. FINĀLA APBALVOŠANA */}
           {scene?.type === 'LEADERBOARD' && isFinalLb && (
             <div style={podiumWrapper}>
               {podiumStage < 4 && (
@@ -1951,7 +2129,11 @@ export default function Presentation() {
                             {finalIsTeamPodium ? `👥 ${secondPlace.name}` : secondPlace.name}
                           </span>
                           <span style={{ fontSize: '1.4rem', color: '#ffd700', fontWeight: '900' }}>{secondPlace.score} pt</span>
-                          <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}</span>
+                          
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                            <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(secondPlace.totalTimeMs)}</span>
+                            {renderPresentationDelta(secondPlace.rankDelta, false, Boolean(secondPlace.previousRank))}
+                          </div>
                         </div>
                         <div style={silverPedestal}>
                           <span style={pedestalNumberText}>2</span>
@@ -1980,7 +2162,11 @@ export default function Presentation() {
                             {finalIsTeamPodium ? `👥 ${firstPlace.name}` : firstPlace.name}
                           </span>
                           <span style={{ fontSize: '1.7rem', color: '#fff', fontWeight: '900' }}>{firstPlace.score} pt</span>
-                          <span style={{ fontSize: '0.9rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}</span>
+                          
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                            <span style={{ fontSize: '0.9rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(firstPlace.totalTimeMs)}</span>
+                            {renderPresentationDelta(firstPlace.rankDelta, false, Boolean(firstPlace.previousRank))}
+                          </div>
                         </div>
                         <div style={goldPedestal}>
                           <span style={pedestalNumberText}>1</span>
@@ -2004,7 +2190,11 @@ export default function Presentation() {
                             {finalIsTeamPodium ? `👥 ${thirdPlace.name}` : thirdPlace.name}
                           </span>
                           <span style={{ fontSize: '1.4rem', color: '#ffd700', fontWeight: '900' }}>{thirdPlace.score} pt</span>
-                          <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}</span>
+                          
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                            <span style={{ fontSize: '0.85rem', color: '#00e5ff' }}>⏱️ {formatThinkingTime(thirdPlace.totalTimeMs)}</span>
+                            {renderPresentationDelta(thirdPlace.rankDelta, false, Boolean(thirdPlace.previousRank))}
+                          </div>
                         </div>
                         <div style={bronzePedestal}>
                           <span style={pedestalNumberText}>3</span>
@@ -2012,6 +2202,24 @@ export default function Presentation() {
                       </div>
                     )}
                   </div>
+
+                  {biggestClimber && podiumStage >= 3 && (
+                    <div style={{
+                      marginTop: '15px',
+                      background: 'rgba(20, 20, 20, 0.85)',
+                      border: '2px solid #ff9800',
+                      padding: '8px 24px',
+                      borderRadius: '16px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      boxShadow: '0 0 25px rgba(255, 152, 0, 0.4)'
+                    }}>
+                      <span style={{ fontSize: '1.2vw', color: '#ffd700' }}>🔥 Turnīra lielākais kāpējs:</span>
+                      <strong style={{ fontSize: '1.3vw', color: '#fff' }}>{biggestClimber.name}</strong>
+                      <span style={{ fontSize: '1.2vw', color: '#00ff66', fontWeight: 'bold' }}>(+{maxClimberDelta} vietas uz augšu!)</span>
+                    </div>
+                  )}
 
                   <div
                     style={{
@@ -2026,15 +2234,43 @@ export default function Presentation() {
               )}
 
               {podiumStage >= 4 && (
-                <div style={leaderboardOverlay}>
-                  <h1 style={{ fontSize: '2.4vw', color: '#ffc107', margin: '0 0 15px 0' }}>
+                <div style={{
+                  width: '92%',
+                  height: '90%',
+                  margin: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  background: 'rgba(10, 10, 10, 0.94)',
+                  borderRadius: '24px',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  padding: '2% 3%',
+                  boxSizing: 'border-box',
+                  overflow: 'hidden'
+                }}>
+                  <h1 style={{ fontSize: '2.4vw', color: '#ffc107', margin: '0 0 10px 0', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '1%' }}>
                     {finalIsTeamPodium ? 'KOMANDU KOPVĒRTĒJUMS (NO 4. VIETAS)' : 'KOPVĒRTĒJUMS (NO 4. VIETAS)'}
                   </h1>
-                  <div>
+                  <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', flex: 1, gap: '8px', overflow: 'hidden' }}>
                     {currentRemainingPageList.map((item, i) => (
-                      <div key={item.id || i} style={leaderRow}>
-                        <span>{4 + leaderboardPage * 10 + i}. {item.name}</span>
-                        <span style={{ fontWeight: 'bold', color: 'gold' }}>{item.score} pt</span>
+                      <div key={item.id || item.name || i} style={{
+                        height: 'calc((100% - 72px) / 10)',
+                        minHeight: '42px',
+                        maxHeight: '56px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0 18px',
+                        borderRadius: '10px',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        boxSizing: 'border-box'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <span style={{ fontWeight: 'bold', fontSize: '1.1vw', color: '#aaa' }}>{4 + leaderboardPage * 10 + i}.</span>
+                          {renderPresentationDelta(item.rankDelta, false, Boolean(item.previousRank))}
+                          <span style={{ fontWeight: 'bold', fontSize: 'clamp(1rem, 1.35vw, 1.65rem)' }}>{item.name}</span>
+                        </div>
+                        <span style={{ fontWeight: '900', color: 'gold', fontSize: 'clamp(1.1rem, 1.55vw, 1.95rem)' }}>{item.score} pt</span>
                       </div>
                     ))}
                   </div>
@@ -2059,7 +2295,8 @@ const fullScreen: React.CSSProperties = {
   color: '#fff',
   fontFamily: 'Segoe UI, Arial, sans-serif',
   overflow: 'hidden',
-  position: 'relative'
+  position: 'relative',
+  overscrollBehavior: 'none'
 };
 
 const fullScreenCenter: React.CSSProperties = {
@@ -2090,7 +2327,7 @@ const timerBadge: React.CSSProperties = {
 };
 
 const statsBadge: React.CSSProperties = {
-  fontSize: '1.2rem',
+  fontSize: '1.15rem',
   fontWeight: 'bold',
   background: 'rgba(0,0,0,0.7)',
   padding: '6px 14px',
@@ -2131,7 +2368,7 @@ const summaryPillGreen: React.CSSProperties = {
   background: 'rgba(40, 167, 69, 0.3)',
   border: '2px solid #28a745',
   color: '#00ff00',
-  padding: '5px 14px',
+  padding: '4px 12px',
   borderRadius: '10px',
   fontWeight: 'bold'
 };
@@ -2140,7 +2377,7 @@ const summaryPillYellow: React.CSSProperties = {
   background: 'rgba(255, 193, 7, 0.25)',
   border: '2px solid #ffc107',
   color: '#ffc107',
-  padding: '5px 12px',
+  padding: '4px 10px',
   borderRadius: '10px',
   fontWeight: 'bold'
 };
@@ -2149,42 +2386,13 @@ const summaryPillRed: React.CSSProperties = {
   background: 'rgba(220, 53, 69, 0.3)',
   border: '2px solid #dc3545',
   color: '#ff4d4d',
-  padding: '5px 14px',
+  padding: '4px 12px',
   borderRadius: '10px',
   fontWeight: 'bold'
-};
-
-const summaryPillGray: React.CSSProperties = {
-  background: 'rgba(108, 117, 125, 0.3)',
-  border: '2px solid #6c757d',
-  color: '#ddd',
-  padding: '5px 14px',
-  borderRadius: '10px',
-  fontWeight: 'bold'
-};
-
-const leaderboardOverlay: React.CSSProperties = {
-  background: 'rgba(10, 10, 10, 0.92)',
-  padding: '35px',
-  borderRadius: '24px',
-  width: '68vw',
-  maxHeight: '75vh',
-  zIndex: 40,
-  display: 'flex',
-  flexDirection: 'column',
-  margin: 'auto'
-};
-
-const leaderRow: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  fontSize: '1.8vw',
-  borderBottom: '1px solid rgba(255,255,255,0.12)',
-  padding: '10px 0'
 };
 
 const timeTagStyle: React.CSSProperties = {
-  fontSize: '1.2vw',
+  fontSize: '1.1vw',
   color: '#00e5ff',
   background: 'rgba(0, 229, 255, 0.15)',
   padding: '2px 8px',

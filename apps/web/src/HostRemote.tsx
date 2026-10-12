@@ -2,6 +2,52 @@ import React, { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { BACKEND_URL } from './config';
 
+// 🌟 UNIVERSĀLA HAPTISKĀ REAKCIJA VADĪTĀJAM (Android vibrācija + iPhone taktilais mehāniskais klikšķis)
+let sharedHapticCtx: AudioContext | null = null;
+const initHapticContext = () => {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioCtx && !sharedHapticCtx) {
+      sharedHapticCtx = new AudioCtx();
+    }
+    if (sharedHapticCtx && sharedHapticCtx.state === 'suspended') {
+      sharedHapticCtx.resume().catch(() => {});
+    }
+  } catch {}
+};
+
+const triggerHaptic = (type: 'success' | 'warn' | 'tap' = 'tap') => {
+  if ('vibrate' in navigator) {
+    try {
+      if (type === 'success') navigator.vibrate([80, 50, 140]);
+      else if (type === 'warn') navigator.vibrate([100, 50, 100]);
+      else navigator.vibrate(60);
+    } catch {}
+  }
+
+  try {
+    initHapticContext();
+    if (sharedHapticCtx && sharedHapticCtx.state === 'running') {
+      const osc = sharedHapticCtx.createOscillator();
+      const gain = sharedHapticCtx.createGain();
+      osc.type = 'triangle';
+
+      const startFreq = type === 'success' ? 440 : type === 'warn' ? 220 : 320;
+      const endFreq = type === 'success' ? 160 : type === 'warn' ? 70 : 80;
+      osc.frequency.setValueAtTime(startFreq, sharedHapticCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(endFreq, sharedHapticCtx.currentTime + 0.04);
+
+      gain.gain.setValueAtTime(0.7, sharedHapticCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, sharedHapticCtx.currentTime + 0.04);
+
+      osc.connect(gain);
+      gain.connect(sharedHapticCtx.destination);
+      osc.start();
+      osc.stop(sharedHapticCtx.currentTime + 0.04);
+    }
+  } catch {}
+};
+
 export default function HostRemote() {
   const params = new URLSearchParams(window.location.search);
   const [pin, setPin] = useState(params.get('pin') || localStorage.getItem('host_remote_pin') || '');
@@ -10,14 +56,19 @@ export default function HostRemote() {
 
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isAuthorized, setIsAuthorized] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Cilnes vadītāja tālrunī: Galvenā pults VAI Slaidu saraksts
   const [activeTab, setActiveTab] = useState<'REMOTE' | 'SLIDES'>('REMOTE');
   const [slideSearchQuery, setSlideSearchQuery] = useState('');
 
+  // Līderu tabulas paginācijas stāvoklis
+  const [lbPage, setLbPage] = useState<number>(0);
+
   const [gameState, setGameState] = useState<{
     currentScene: any;
     subState: string;
+    isBlackout?: boolean;
     currentSceneIdx: number;
     totalScenes: number;
     nextSceneTitle: string;
@@ -28,43 +79,106 @@ export default function HostRemote() {
   } | null>(null);
 
   const prevSubStateRef = useRef<string>('');
+  const lastAdvanceTap = useRef<number>(0);
+  const noSleepVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  // 1. Ekrāna negulēšana vadītājam (WakeLock)
+  // Pārbaudām, vai ierīce atbalsta Fullscreen API
+  const isFullscreenSupported = typeof document !== 'undefined' && Boolean(
+    document.fullscreenEnabled || (document as any).webkitFullscreenEnabled
+  );
+
+  const toggleFullscreen = () => {
+    triggerHaptic('tap');
+    if (!document.fullscreenElement) {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+        setIsFullscreen(true);
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+        setIsFullscreen(false);
+      }
+    }
+  };
+
+  // 🌟 1. NEIZSLĒDZAMĀ EKRĀNA DZINĒJS (Android & iOS WakeLock + Video Loop)
   useEffect(() => {
     let wakeLock: any = null;
+    let isLocked = false;
+
     const requestLock = async () => {
       if ('wakeLock' in navigator && (navigator as any).wakeLock) {
-        try { 
-          wakeLock = await (navigator as any).wakeLock.request('screen'); 
+        try {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+          isLocked = true;
+          wakeLock.addEventListener('release', () => {
+            isLocked = false;
+          });
         } catch {}
       }
     };
+
     requestLock();
-    return () => { 
-      if (wakeLock) wakeLock.release().catch(() => {}); 
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        requestLock();
+      }
+    };
+
+    const handleUserInteraction = () => {
+      initHapticContext();
+      if (!isLocked) requestLock();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    document.addEventListener('touchstart', handleUserInteraction, { passive: true });
+    document.addEventListener('click', handleUserInteraction, { passive: true });
+
+    // iOS Safari mikrovideoplūsma fona aizmigšanas bloķēšanai
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 2;
+      canvas.height = 2;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, 2, 2);
+      }
+      if ((canvas as any).captureStream && noSleepVideoRef.current) {
+        const stream = (canvas as any).captureStream(2);
+        noSleepVideoRef.current.srcObject = stream;
+        noSleepVideoRef.current.play().catch(() => {});
+      }
+    } catch {}
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+      document.removeEventListener('touchstart', handleUserInteraction);
+      document.removeEventListener('click', handleUserInteraction);
+      if (wakeLock) wakeLock.release().catch(() => {});
     };
   }, []);
 
-  // 2. Haptiskā vibrācija pie fāžu maiņas
+  // 🌟 2. Haptiskā atbilde pie fāžu maiņas
   useEffect(() => {
     const curSub = gameState?.subState;
     if (curSub && curSub !== prevSubStateRef.current) {
-      if ('vibrate' in navigator) {
-        try {
-          if (curSub === 'ACTIVE') {
-            navigator.vibrate(60);
-          } else if (curSub === 'STATS') {
-            navigator.vibrate([80, 60, 80]);
-          } else if (curSub === 'REVEAL') {
-            navigator.vibrate([100, 50, 100, 50, 150]);
-          }
-        } catch {}
+      if (curSub === 'ACTIVE') {
+        triggerHaptic('tap');
+      } else if (curSub === 'STATS') {
+        triggerHaptic('tap');
+      } else if (curSub === 'REVEAL') {
+        triggerHaptic('success');
       }
       prevSubStateRef.current = curSub;
     }
   }, [gameState?.subState]);
 
-  // 3. Socket inicializēšana vienu reizi
+  // 3. Socket savienojums
   useEffect(() => {
     const s = io(BACKEND_URL, { reconnection: true });
     setSocket(s);
@@ -89,6 +203,18 @@ export default function HostRemote() {
       if (data.hostName && !hostName) {
         setHostName(data.hostName);
       }
+      if (data.currentSceneIdx !== gameState?.currentSceneIdx) {
+        setLbPage(0);
+      }
+    });
+
+    s.on('leaderboard-page-change', (page: number) => {
+      setLbPage(page);
+    });
+
+    s.on('blackout-toggled', (isBlackout: boolean) => {
+      setGameState((prev) => (prev ? { ...prev, isBlackout } : prev));
+      triggerHaptic('warn');
     });
 
     s.on('session-ended', () => {
@@ -109,6 +235,7 @@ export default function HostRemote() {
 
   const handleConnect = (e: React.FormEvent) => {
     e.preventDefault();
+    triggerHaptic('tap');
     if (!pin || !hostToken) return alert('Ievadi PIN un Host Token!');
     localStorage.setItem('host_remote_pin', pin.trim());
     localStorage.setItem('host_remote_token', hostToken.trim());
@@ -124,27 +251,26 @@ export default function HostRemote() {
     }
   };
 
-  // Vadības komandas
+  // 🌟 PĀRSTRĀDĀTS ADVANCE: BEZ FORCE, AR 500MS KLIENTA SLĒDZENI
   const handleAdvance = () => {
     if (gameState?.subState === 'ACTIVE') return;
-    if ('vibrate' in navigator) {
-      try { navigator.vibrate(50); } catch {}
-    }
-    socket?.emit('host:advance', { pin, hostToken, force: true });
+
+    const now = Date.now();
+    if (now - lastAdvanceTap.current < 500) return; // 🌟 Aizsardzība pret nejaušu dubultklikšķi!
+    lastAdvanceTap.current = now;
+
+    triggerHaptic('tap');
+    socket?.emit('host:advance', { pin, hostToken }); // Nav 'force: true', lai nepārrautu aktīvo jautājumu!
   };
 
   const handleBacktrack = () => {
     if (!window.confirm('Vai tiešām vēlies spert soli atpakaļ?')) return;
-    if ('vibrate' in navigator) {
-      try { navigator.vibrate(80); } catch {}
-    }
+    triggerHaptic('warn');
     socket?.emit('host:backtrack', { pin, hostToken });
   };
 
   const handleTogglePause = () => {
-    if ('vibrate' in navigator) {
-      try { navigator.vibrate(40); } catch {}
-    }
+    triggerHaptic('tap');
     if (gameState?.subState === 'PAUSED') {
       socket?.emit('host:resume-session', { pin, hostToken });
     } else {
@@ -154,37 +280,53 @@ export default function HostRemote() {
 
   const handleRestartScene = () => {
     if (!window.confirm('Restartēt šo jautājumu no jauna?')) return;
-    if ('vibrate' in navigator) {
-      try { navigator.vibrate(100); } catch {}
-    }
+    triggerHaptic('warn');
     socket?.emit('host:restart-scene', { pin, hostToken });
   };
 
   const handleToggleStageQr = () => {
-    if ('vibrate' in navigator) {
-      try { navigator.vibrate(35); } catch {}
-    }
+    triggerHaptic('tap');
     socket?.emit('host:toggle-qr-zoom', { pin, hostToken });
   };
 
+  const handleToggleBlackout = () => {
+    triggerHaptic('warn');
+    socket?.emit('host:toggle-blackout', { pin, hostToken });
+  };
+
+  const handleToggleChart = () => {
+    triggerHaptic('tap');
+    socket?.emit('host:toggle-chart', { pin, hostToken });
+  };
+
+  const handleToggleTeamView = () => {
+    triggerHaptic('tap');
+    socket?.emit('host:toggle-team-view', { pin, hostToken });
+  };
+
+  const handleChangeLbPage = (delta: number) => {
+    const newPage = Math.max(0, lbPage + delta);
+    setLbPage(newPage);
+    triggerHaptic('tap');
+    socket?.emit('host:change-leaderboard-page', { pin, hostToken, page: newPage });
+  };
+
   const handleJumpToScene = (sceneIndex: number) => {
-    if ('vibrate' in navigator) {
-      try { navigator.vibrate(70); } catch {}
-    }
+    triggerHaptic('tap');
     socket?.emit('host:jump-to-scene', { pin, hostToken, sceneIndex });
     setActiveTab('REMOTE');
   };
 
   const handlePlaySfx = (sfx: string) => {
-    if ('vibrate' in navigator) {
-      try { navigator.vibrate(30); } catch {}
-    }
+    triggerHaptic('tap');
     socket?.emit('host:play-sfx', { pin, hostToken, sfx });
   };
 
   if (!isAuthorized) {
     return (
       <div style={containerStyle}>
+        <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
+
         <div style={cardStyle}>
           <div style={{ fontSize: '3rem', marginBottom: '8px' }}>🎙️</div>
           <h1 style={{ color: '#ffc107', margin: '0 0 8px 0', fontSize: '1.4rem' }}>VADĪTĀJA PULTS</h1>
@@ -219,6 +361,8 @@ export default function HostRemote() {
 
   const scene = gameState?.currentScene;
   const subState = gameState?.subState || 'IDLE';
+  const isBlackout = !!gameState?.isBlackout;
+  const isLeaderboardScene = scene?.type === 'LEADERBOARD';
   const config = scene?.config || {};
   const correctAnswers = config.correctAnswers || config.correctOrder || [];
   const notes = config.notes || '';
@@ -231,6 +375,8 @@ export default function HostRemote() {
 
   return (
     <div style={containerStyle}>
+      <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
+
       {/* 1. AUGŠĒJĀ JOSLA */}
       <div style={headerStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -240,8 +386,14 @@ export default function HostRemote() {
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <button onClick={() => setActiveTab(activeTab === 'REMOTE' ? 'SLIDES' : 'REMOTE')} style={btnTabToggle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          {/* Pilnekrāna poga tikai tad, ja ierīce to atbalsta */}
+          {isFullscreenSupported && (
+            <button onClick={toggleFullscreen} style={btnHeaderSquare} title="Ieslēgt / Izslēgt pilnekrānu">
+              {isFullscreen ? '⛶' : '⛶'}
+            </button>
+          )}
+          <button onClick={() => { triggerHaptic('tap'); setActiveTab(activeTab === 'REMOTE' ? 'SLIDES' : 'REMOTE'); }} style={btnTabToggle}>
             {activeTab === 'REMOTE' ? '📋 Slaidi' : '🎙️ Pults'}
           </button>
           <button onClick={handleToggleStageQr} style={btnQrHeader} title="Ieslēgt/izslēgt QR lielajā ekrānā">
@@ -253,7 +405,26 @@ export default function HostRemote() {
         </div>
       </div>
 
-      {/* 2. CILNE: SLAIDU SARAKSTS AR MEKLĒTĀJU */}
+      {/* 🌟 BRĪDINĀJUMS, JA SKATUVES EKRĀNS IR AIZSEGTS */}
+      {isBlackout && (
+        <div
+          onClick={handleToggleBlackout}
+          style={{
+            background: '#dc3545',
+            color: '#fff',
+            padding: '8px',
+            textAlign: 'center',
+            fontSize: '0.85rem',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+            borderBottom: '2px solid #fff'
+          }}
+        >
+          🚨 SKATUVE AIZSEGTA (BLACKOUT)! Pieskaries, lai atvērtu.
+        </div>
+      )}
+
+      {/* 2. CILNE: SLAIDU SARAKSTS */}
       {activeTab === 'SLIDES' ? (
         <div style={{ flex: 1, padding: '12px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <input
@@ -299,34 +470,36 @@ export default function HostRemote() {
         </div>
       ) : (
         /* 3. CILNE: GALVENĀ VADĪBAS PULTS */
-        <div style={{ flex: 1, padding: '10px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#181818', padding: '4px 8px', borderRadius: '6px' }}>
+        <div style={{ flex: 1, padding: '10px 12px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#181818', padding: '4px 10px', borderRadius: '6px' }}>
             <span style={{ fontSize: '0.75rem', color: '#888' }}>Vadītājs:</span>
             <input
               value={hostName}
               onChange={(e) => handleUpdateHostName(e.target.value)}
               placeholder="Ievadi savu vārdu..."
-              style={{ background: 'transparent', border: 'none', color: '#ffc107', fontWeight: 'bold', fontSize: '0.8rem', textAlign: 'right', outline: 'none' }}
+              style={{ background: 'transparent', border: 'none', color: '#ffc107', fontWeight: 'bold', fontSize: '0.85rem', textAlign: 'right', outline: 'none' }}
             />
           </div>
 
+          {/* Pašreizējais slaids */}
           <div style={sectionBox}>
-            <div style={{ fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold' }}>
+            <div style={{ fontSize: '0.72rem', color: '#ffc107', fontWeight: 'bold' }}>
               📋 PAŠREIZĒJAIS SLAIDS:
             </div>
             <div style={{ fontSize: '1.05rem', fontWeight: 'bold', color: '#fff', marginTop: '2px' }}>
               {scene?.title || 'Slaids'} ({scene?.type})
             </div>
             {config.layout?.find((el: any) => el.type === 'QUESTION')?.content && (
-              <div style={{ fontSize: '0.9rem', color: '#ddd', marginTop: '4px', fontStyle: 'italic' }}>
+              <div style={{ fontSize: '0.88rem', color: '#ddd', marginTop: '4px', fontStyle: 'italic' }}>
                 "{config.layout.find((el: any) => el.type === 'QUESTION')?.content}"
               </div>
             )}
           </div>
 
+          {/* Špikeris vadītājam */}
           {correctAnswers.length > 0 && (
             <div style={{ ...sectionBox, border: '2px solid #00ff00', background: 'rgba(0, 255, 0, 0.08)' }}>
-              <div style={{ fontSize: '0.75rem', color: '#00ff00', fontWeight: 'bold' }}>
+              <div style={{ fontSize: '0.72rem', color: '#00ff00', fontWeight: 'bold' }}>
                 ✅ PAREIZĀ ATBILDE (ŠPIKERIS):
               </div>
               <div style={{ fontSize: '1.25rem', fontWeight: '900', color: '#00ff00', marginTop: '2px' }}>
@@ -335,12 +508,13 @@ export default function HostRemote() {
             </div>
           )}
 
+          {/* Piezīmes */}
           {notes && (
             <div style={{ ...sectionBox, border: '1px solid #ffc107', background: 'rgba(255, 193, 7, 0.08)' }}>
-              <div style={{ fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold' }}>
+              <div style={{ fontSize: '0.72rem', color: '#ffc107', fontWeight: 'bold' }}>
                 💡 PIEZĪMES VADĪTĀJAM:
               </div>
-              <div style={{ fontSize: '0.9rem', color: '#fff', marginTop: '3px', whiteSpace: 'pre-wrap', lineHeight: 1.3 }}>
+              <div style={{ fontSize: '0.88rem', color: '#fff', marginTop: '3px', whiteSpace: 'pre-wrap', lineHeight: 1.3 }}>
                 {notes}
               </div>
             </div>
@@ -350,25 +524,76 @@ export default function HostRemote() {
             🔜 Nākamais: <strong style={{ color: '#aaa' }}>{gameState?.nextSceneTitle}</strong>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '4px' }}>
+          {/* 🌟 LĪDERU TABULAS VADĪBA (Parādās tikai pie LEADERBOARD!) */}
+          {isLeaderboardScene && (
+            <div style={{ background: '#1c1c1c', border: '1px solid #ffc107', borderRadius: '10px', padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold', textAlign: 'center' }}>
+                🏆 LĪDERU TABULAS LAPAS:
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button onClick={() => handleChangeLbPage(-1)} disabled={lbPage === 0} style={{ ...btnNavTile, opacity: lbPage === 0 ? 0.35 : 1 }}>
+                  ⬅️ Iepr. lapa
+                </button>
+                <span style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#fff', minWidth: '60px', textAlign: 'center' }}>
+                  Lapa {lbPage + 1}
+                </span>
+                <button onClick={() => handleChangeLbPage(1)} style={btnNavTile}>
+                  Nākamā lapa ➡️
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Skaņas efekti */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px' }}>
+            <button onClick={() => handlePlaySfx('applause')} style={btnSfx}>👏 Aplausi</button>
             <button onClick={() => handlePlaySfx('correct')} style={btnSfx}>🔔 Pareizi</button>
             <button onClick={() => handlePlaySfx('wrong')} style={btnSfx}>❌ Kļūda</button>
             <button onClick={() => handlePlaySfx('buzzer_hit')} style={btnSfx}>⚡ Pults</button>
             <button onClick={() => handlePlaySfx('suspense')} style={btnSfx}>🥁 Spriedze</button>
           </div>
+        </div>
+      )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
-            <button onClick={handleBacktrack} style={btnSecondary}>↩️ Atpakaļ</button>
-            <button onClick={handleTogglePause} style={{ ...btnSecondary, color: '#ff9800' }}>
+      {/* 🌟 ERGONOMISKAIS SKATUVES VADĪBAS PULTS BLOKS VIRSS SPACE POGAS */}
+      {activeTab === 'REMOTE' && (
+        <div style={{ padding: '8px 12px', background: '#161616', borderTop: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+            <button onClick={handleTogglePause} style={{ ...btnTile, color: subState === 'PAUSED' ? '#00ff00' : '#ff9800' }}>
               {subState === 'PAUSED' ? '▶️ Turpināt' : '⏸️ Pauze'}
             </button>
-            <button onClick={handleRestartScene} style={{ ...btnSecondary, color: '#ff4d4d' }}>🔄 Restartēt</button>
+            <button onClick={handleToggleChart} style={{ ...btnTile, color: '#00e5ff' }}>
+              📊 Statistika
+            </button>
+            <button onClick={handleToggleTeamView} style={{ ...btnTile, color: '#ffc107' }}>
+              👥 Komandas
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+            <button onClick={handleBacktrack} style={{ ...btnTile, color: '#ccc' }}>
+              ↩️ Atpakaļ
+            </button>
+            <button onClick={handleRestartScene} style={{ ...btnTile, color: '#ff4d4d' }}>
+              🔄 No jauna
+            </button>
+            <button
+              onClick={handleToggleBlackout}
+              style={{
+                ...btnTile,
+                background: isBlackout ? '#dc3545' : '#222',
+                color: isBlackout ? '#fff' : '#ffc107',
+                border: isBlackout ? '1.5px solid #fff' : '1px solid #333'
+              }}
+            >
+              {isBlackout ? '🔴 Aizsegts' : '⬛ Melns'}
+            </button>
           </div>
         </div>
       )}
 
-      {/* 🚀 MILZĪGĀ SPACE / TĀLĀK POGA AR LIVE SKAITĪTĀJU */}
-      <div style={{ padding: '10px 12px', background: '#181818', borderTop: '1px solid #333' }}>
+      {/* 🚀 MILZĪGĀ SPACE / TĀLĀK POGA AR DROŠĪBAS SLĒDZENI */}
+      <div style={{ padding: '10px 12px 14px 12px', background: '#181818', borderTop: '1px solid #333', flexShrink: 0 }}>
         <button
           onClick={handleAdvance}
           disabled={isTimeActive}
@@ -380,8 +605,7 @@ export default function HostRemote() {
               : subState === 'PAUSED'
               ? '#ff9800'
               : 'linear-gradient(135deg, #28a745, #20c997)',
-            cursor: isTimeActive ? 'not-allowed' : 'pointer',
-            touchAction: 'manipulation'
+            cursor: isTimeActive ? 'not-allowed' : 'pointer'
           }}
         >
           {isTimeActive ? (
@@ -423,7 +647,9 @@ const containerStyle: React.CSSProperties = {
   fontFamily: 'Segoe UI, sans-serif',
   display: 'flex',
   flexDirection: 'column',
-  overflow: 'hidden'
+  overflow: 'hidden',
+  overscrollBehaviorY: 'contain',
+  touchAction: 'manipulation'
 };
 
 const headerStyle: React.CSSProperties = {
@@ -433,7 +659,7 @@ const headerStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  padding: '0 10px',
+  padding: '0 8px',
   flexShrink: 0
 };
 
@@ -478,51 +704,83 @@ const btnBigAdvance: React.CSSProperties = {
   borderRadius: '12px',
   fontSize: '1.15rem',
   fontWeight: '900',
-  boxShadow: '0 4px 15px rgba(0,0,0,0.4)'
+  boxShadow: '0 4px 15px rgba(0,0,0,0.4)',
+  touchAction: 'manipulation'
 };
 
-const btnSecondary: React.CSSProperties = {
-  padding: '7px 4px',
+const btnTile: React.CSSProperties = {
+  padding: '10px 4px',
   background: '#222',
-  color: '#ccc',
-  border: '1px solid #444',
-  borderRadius: '6px',
-  fontSize: '0.75rem',
+  border: '1px solid #333',
+  borderRadius: '8px',
+  fontSize: '0.82rem',
   fontWeight: 'bold',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  touchAction: 'manipulation'
+};
+
+const btnNavTile: React.CSSProperties = {
+  flex: 1,
+  padding: '8px',
+  background: '#ffc107',
+  color: '#000',
+  border: 'none',
+  borderRadius: '6px',
+  fontWeight: '900',
+  fontSize: '0.85rem',
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const btnSfx: React.CSSProperties = {
-  padding: '7px 2px',
-  background: '#2a2a2a',
+  padding: '6px 2px',
+  background: '#222',
   color: '#00e5ff',
+  border: '1px solid #333',
+  borderRadius: '6px',
+  fontSize: '0.72rem',
+  fontWeight: 'bold',
+  cursor: 'pointer',
+  touchAction: 'manipulation'
+};
+
+const btnHeaderSquare: React.CSSProperties = {
+  padding: '4px 7px',
+  background: '#222',
+  color: '#fff',
   border: '1px solid #444',
   borderRadius: '6px',
-  fontSize: '0.75rem',
+  fontSize: '0.8rem',
   fontWeight: 'bold',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const btnTabToggle: React.CSSProperties = {
-  padding: '4px 8px',
+  padding: '4px 7px',
   background: '#333',
   color: '#00e5ff',
   border: '1px solid #00e5ff',
   borderRadius: '4px',
   fontSize: '0.75rem',
   fontWeight: 'bold',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const btnQrHeader: React.CSSProperties = {
-  padding: '4px 8px',
+  padding: '4px 7px',
   background: '#007bff',
   color: '#fff',
   border: 'none',
   borderRadius: '4px',
   fontSize: '0.75rem',
   fontWeight: 'bold',
-  cursor: 'pointer'
+  cursor: 'pointer',
+  touchAction: 'manipulation'
 };
 
 const sectionBox: React.CSSProperties = {

@@ -1,10 +1,56 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { BACKEND_URL } from './config';
-import { formatThinkingTime } from './utils/formatting';
+import { formatThinkingTime, getOfflineQrCodeUrl } from './utils/formatting';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
 const BUTTON_COLORS = ['#007bff', '#fd7e14', '#28a745', '#ffc107', '#6f42c1', '#17a2b8'];
+
+// 🌟 UNIVERSĀLA HAPTISKĀ REAKCIJA SPĒLĒTĀJAM (Android vibrācija + iPhone taktilais klikšķis)
+let sharedHapticCtx: AudioContext | null = null;
+const initHapticContext = () => {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioCtx && !sharedHapticCtx) {
+      sharedHapticCtx = new AudioCtx();
+    }
+    if (sharedHapticCtx && sharedHapticCtx.state === 'suspended') {
+      sharedHapticCtx.resume().catch(() => {});
+    }
+  } catch {}
+};
+
+const triggerHaptic = (type: 'success' | 'warn' | 'tap' = 'tap') => {
+  if ('vibrate' in navigator) {
+    try {
+      if (type === 'success') navigator.vibrate([70, 40, 130]);
+      else if (type === 'warn') navigator.vibrate([100, 50, 100]);
+      else navigator.vibrate(50);
+    } catch {}
+  }
+
+  try {
+    initHapticContext();
+    if (sharedHapticCtx && sharedHapticCtx.state === 'running') {
+      const osc = sharedHapticCtx.createOscillator();
+      const gain = sharedHapticCtx.createGain();
+      osc.type = 'triangle';
+
+      const startFreq = type === 'success' ? 440 : type === 'warn' ? 220 : 320;
+      const endFreq = type === 'success' ? 160 : type === 'warn' ? 70 : 80;
+      osc.frequency.setValueAtTime(startFreq, sharedHapticCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(endFreq, sharedHapticCtx.currentTime + 0.04);
+
+      gain.gain.setValueAtTime(0.7, sharedHapticCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, sharedHapticCtx.currentTime + 0.04);
+
+      osc.connect(gain);
+      gain.connect(sharedHapticCtx.destination);
+      osc.start();
+      osc.stop(sharedHapticCtx.currentTime + 0.04);
+    }
+  } catch {}
+};
 
 export default function Player() {
   const params = new URLSearchParams(window.location.search);
@@ -26,28 +72,38 @@ export default function Player() {
     return id;
   });
 
+  const [playerToken, setPlayerToken] = useState<string>(() => localStorage.getItem('player_token') || '');
+
   const [socket, setSocket] = useState<Socket | null>(null);
   const [deviceNumber, setDeviceNumber] = useState<number | null>(null);
   const [isJoined, setIsJoined] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
   const [isDisabledAfk, setIsDisabledAfk] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [scene, setScene] = useState<any>(null);
   const [subState, setSubState] = useState<string>('IDLE');
 
   const [showCaptainQrModal, setShowCaptainQrModal] = useState(false);
 
-  // Parastās balsošanas izvēles
+  // Pārbaudām, vai ierīce fiziski atbalsta Fullscreen API (Android atbalsta, iPhone Safari nē)
+  const isFullscreenSupported = typeof document !== 'undefined' && Boolean(
+    document.fullscreenEnabled || (document as any).webkitFullscreenEnabled
+  );
+
+  const isIosDevice = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  // Balsošanas izvēles
   const [myChoice, setMyChoice] = useState<string | null>(() => localStorage.getItem('player_current_choice'));
   const [stagedChoice, setStagedChoice] = useState<string | null>(null);
   const [selectedMultipleOptions, setSelectedMultipleOptions] = useState<string[]>([]);
 
-  // 🎵 Muzikālās spēles (MUSIC_DUAL) izvēles
+  // 🎵 Muzikālā spēle
   const [musicTopChoice, setMusicTopChoice] = useState<string | null>(() => localStorage.getItem('player_music_top'));
   const [musicBottomChoice, setMusicBottomChoice] = useState<string | null>(() => localStorage.getItem('player_music_bottom'));
   const [stagedMusicTop, setStagedMusicTop] = useState<string | null>(null);
   const [stagedMusicBottom, setStagedMusicBottom] = useState<string | null>(null);
 
-  // 🔢 Secības kārtošana & ⚡ Ātrā pults
+  // 🔢 Secība & ⚡ Pults
   const [orderedItems, setOrderedItems] = useState<string[]>([]);
   const [buzzerPressedOrder, setBuzzerPressedOrder] = useState<number | null>(null);
   const [isMyBuzzerTurn, setIsMyBuzzerTurn] = useState<boolean>(false);
@@ -59,26 +115,38 @@ export default function Player() {
   const [podiumStage, setPodiumStage] = useState<number>(0);
   const [buzzerTestPresses, setBuzzerTestPresses] = useState(0);
 
-  // 🌟 Zibenīgās personīgās statistikas stāvoklis (Vienmēr zina savu vietu)
+  // 🌟 Zibenīgās personīgās statistikas stāvoklis
   const [personalStats, setPersonalStats] = useState<{
     myRank: number | null;
+    previousRank?: number | null;
+    rankDelta?: number;
     totalPlayers: number;
     score: number;
     roundScore: number;
+    lastQuestionScore?: number;
     totalTimeMs: number;
     roundTimeMs: number;
+    lbType?: string;
     teamRank?: number | null;
+    previousTeamRank?: number | null;
+    teamRankDelta?: number;
     totalTeams?: number;
     teamScore?: number | null;
+    teamName?: string;
+    isInitialBaseline?: boolean;
   } | null>(() => {
     const savedScore = localStorage.getItem('player_saved_score');
     return savedScore ? {
       myRank: null,
+      previousRank: null,
+      rankDelta: 0,
       totalPlayers: 1,
       score: Number(savedScore) || 0,
       roundScore: 0,
+      lastQuestionScore: 0,
       totalTimeMs: 0,
-      roundTimeMs: 0
+      roundTimeMs: 0,
+      isInitialBaseline: true
     } : null;
   });
 
@@ -112,18 +180,80 @@ export default function Player() {
   });
 
   const [serverBaseUrl, setServerBaseUrl] = useState<string>('');
+  const noSleepVideoRef = useRef<HTMLVideoElement | null>(null);
 
+  const toggleFullscreen = () => {
+    triggerHaptic('tap');
+    if (!document.fullscreenElement) {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+        setIsFullscreen(true);
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+        setIsFullscreen(false);
+      }
+    }
+  };
+
+  // 🌟 1. NEIZSLĒDZAMĀ EKRĀNA DZINĒJS (iOS Safari & Android No-Sleep)
   useEffect(() => {
     let wakeLock: any = null;
-    const requestWakeLock = async () => {
+    let isLocked = false;
+
+    const requestLock = async () => {
       if ('wakeLock' in navigator && (navigator as any).wakeLock) {
         try {
           wakeLock = await (navigator as any).wakeLock.request('screen');
+          isLocked = true;
+          wakeLock.addEventListener('release', () => {
+            isLocked = false;
+          });
         } catch {}
       }
     };
-    requestWakeLock();
+
+    requestLock();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        requestLock();
+      }
+    };
+
+    const handleUserInteraction = () => {
+      initHapticContext();
+      if (!isLocked) requestLock();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    document.addEventListener('touchstart', handleUserInteraction, { passive: true });
+    document.addEventListener('click', handleUserInteraction, { passive: true });
+
+    // iOS Safari mikrovideoplūsma fona aizmigšanas bloķēšanai
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 2;
+      canvas.height = 2;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, 2, 2);
+      }
+      if ((canvas as any).captureStream && noSleepVideoRef.current) {
+        const stream = (canvas as any).captureStream(2);
+        noSleepVideoRef.current.srcObject = stream;
+        noSleepVideoRef.current.play().catch(() => {});
+      }
+    } catch {}
+
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+      document.removeEventListener('touchstart', handleUserInteraction);
+      document.removeEventListener('click', handleUserInteraction);
       if (wakeLock) wakeLock.release().catch(() => {});
     };
   }, []);
@@ -170,6 +300,7 @@ export default function Player() {
       const savedName = localStorage.getItem('player_name');
       const savedTeam = urlTeam || localStorage.getItem('player_team') || '';
       const savedCaptain = urlTeam ? false : localStorage.getItem('player_is_captain') === 'true';
+      const savedToken = localStorage.getItem('player_token') || undefined;
       const wasJoined = sessionStorage.getItem('player_active_session') === 'true';
 
       if (savedPin) {
@@ -182,7 +313,8 @@ export default function Player() {
           name: savedName.trim(),
           teamName: savedTeam,
           isCaptain: savedCaptain,
-          playerId
+          playerId,
+          playerToken: savedToken
         });
       }
     };
@@ -196,6 +328,12 @@ export default function Player() {
       setIsGameOver(false);
       setIsDisabledAfk(false);
       sessionStorage.setItem('player_active_session', 'true');
+
+      if (data?.playerToken) {
+        setPlayerToken(data.playerToken);
+        localStorage.setItem('player_token', data.playerToken);
+      }
+
       if (data?.deviceNumber) setDeviceNumber(data.deviceNumber);
       if (data?.teamName) setTeamName(data.teamName);
       if (data?.isCaptain !== undefined) setIsCaptain(data.isCaptain);
@@ -212,6 +350,9 @@ export default function Player() {
         if (data.currentScene.type === 'ORDERING') {
           setOrderedItems([...(data.currentScene.config?.options || [])]);
         }
+        if (data.currentScene.type === 'LEADERBOARD' && data.currentScene.config?.lbType) {
+          setLeaderboardType(data.currentScene.config.lbType.toUpperCase());
+        }
       }
       const currentSub = (data?.subState || data?.currentScene?.subState || 'IDLE').toUpperCase();
       setSubState(currentSub);
@@ -220,15 +361,50 @@ export default function Player() {
         localStorage.setItem('player_saved_score', String(data.score));
         setPersonalStats({
           myRank: data?.myRank ?? null,
+          previousRank: null,
+          rankDelta: 0,
           totalPlayers: data?.totalPlayers ?? 1,
           score: data.score,
           roundScore: data.roundScore ?? 0,
+          lastQuestionScore: data.lastQuestionScore ?? 0,
           totalTimeMs: 0,
           roundTimeMs: 0,
           teamRank: data?.teamRank ?? null,
+          previousTeamRank: null,
+          teamRankDelta: 0,
           totalTeams: data?.totalTeams ?? 1,
-          teamScore: data?.teamScore ?? null
+          teamScore: data?.teamScore ?? null,
+          isInitialBaseline: true
         });
+      }
+    });
+
+    s.on('client:sync-response', (data: any) => {
+      if (data?.currentScene) {
+        setScene(data.currentScene);
+        if (data.currentScene.type === 'LEADERBOARD' && data.currentScene.config?.lbType) {
+          setLeaderboardType(data.currentScene.config.lbType.toUpperCase());
+        }
+      }
+      if (data?.subState) setSubState(data.subState.toUpperCase());
+      if (data?.myChoice) {
+        setMyChoice(data.myChoice);
+        localStorage.setItem('player_current_choice', data.myChoice);
+      }
+      if (data?.myOptionIds && Array.isArray(data.myOptionIds)) {
+        setSelectedMultipleOptions(data.myOptionIds);
+      }
+      if (data?.score !== undefined) {
+        setPersonalStats((prev) => prev ? {
+          ...prev,
+          score: data.score,
+          roundScore: data.roundScore ?? prev.roundScore,
+          lastQuestionScore: data.lastQuestionScore ?? prev.lastQuestionScore,
+          myRank: data.myRank ?? prev.myRank,
+          previousRank: data.previousRank ?? prev.previousRank,
+          rankDelta: data.rankDelta ?? prev.rankDelta,
+          isInitialBaseline: Boolean(data.isInitialBaseline)
+        } : null);
       }
     });
 
@@ -252,6 +428,10 @@ export default function Player() {
       setScene(newScene);
       const newSub = (newScene?.subState || 'READY').toUpperCase();
       setSubState(newSub);
+
+      if (newScene?.type === 'LEADERBOARD' && newScene?.config?.lbType) {
+        setLeaderboardType(newScene.config.lbType.toUpperCase());
+      }
 
       if (newSub === 'READY') {
         setMyChoice(null);
@@ -279,12 +459,26 @@ export default function Player() {
       if (data?.score !== undefined) {
         localStorage.setItem('player_saved_score', String(data.score));
       }
+
+      if (data?.lbType) {
+        setLeaderboardType(data.lbType.toUpperCase());
+      }
+
+      // Haptika tikai tad, ja tas ir īsts kāpums (no 2. kārtas)
+      if (!data?.isInitialBaseline) {
+        if (data?.rankDelta && data.rankDelta > 0) {
+          triggerHaptic('success');
+        } else if (data?.rankDelta && data.rankDelta < 0) {
+          triggerHaptic('warn');
+        }
+      }
     });
 
     s.on('buzzer-race-press', (data: { winner: any; allWinners: any[] }) => {
       if (data?.winner?.playerId === playerId) {
         setBuzzerPressedOrder(data.winner.position);
         setIsMyBuzzerTurn(true);
+        triggerHaptic('success');
       } else {
         setIsMyBuzzerTurn(false);
       }
@@ -296,7 +490,7 @@ export default function Player() {
         setLeaderboardType('TOTAL');
       } else {
         setLeaderboard(payload?.data || []);
-        setLeaderboardType((payload?.lbType || 'TOTAL').toUpperCase());
+        if (payload?.lbType) setLeaderboardType(payload.lbType.toUpperCase());
       }
       setPodiumStage(0);
     });
@@ -317,6 +511,9 @@ export default function Player() {
     s.on('session-ended', () => {
       sessionStorage.removeItem('player_active_session');
       localStorage.removeItem('player_pin');
+      localStorage.removeItem('player_token');
+      localStorage.removeItem('player_team');
+      localStorage.removeItem('player_is_captain');
       localStorage.removeItem('player_current_choice');
       localStorage.removeItem('player_music_top');
       localStorage.removeItem('player_music_bottom');
@@ -336,6 +533,7 @@ export default function Player() {
       setBuzzerPressedOrder(null);
       setIsMyBuzzerTurn(false);
       setPin('');
+      setPlayerToken('');
       setPersonalStats(null);
       alert('Vadītājs ir beidzis spēles sesiju.');
     });
@@ -348,6 +546,20 @@ export default function Player() {
   }, [playerId, urlPin, urlTeam]);
 
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && socket && isJoined && pin) {
+        socket.emit('client:request-sync', { pin, playerId, playerToken });
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, [socket, isJoined, pin, playerId, playerToken]);
+
+  useEffect(() => {
     if (socket && pin && pin.trim().length >= 4) {
       socket.emit('get-branding', { pin: pin.trim() });
     }
@@ -357,6 +569,7 @@ export default function Player() {
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
+    triggerHaptic('tap');
     if (!pin.trim()) return alert('Lūdzu ievadiet PIN kodu!');
     if (!name.trim()) return alert('Lūdzu ievadiet savu vārdu!');
 
@@ -380,7 +593,8 @@ export default function Player() {
         name: name.trim(),
         teamName: isTeamMode ? teamName.trim() : '',
         isCaptain: isTeamMode ? !isTeamFromQr : false,
-        playerId
+        playerId,
+        playerToken: playerToken || undefined
       });
     }
   };
@@ -394,25 +608,76 @@ export default function Player() {
   const playerUIMode: 'AUTO' | 'CLASSIC_GRID' | 'TEXT_CARDS' | 'MUSIC_DUAL' =
     scene?.config?.playerUIMode || 'AUTO';
 
-  // Pārbauda vai variantiem ir reāls teksts (nevis tikai viens burts A, B, C)
   const hasOptionText = rawOptions.some((opt) => opt && opt.trim() !== '' && !/^[A-F]$/i.test(opt.trim()));
   const shouldShowVerticalCards =
     playerUIMode === 'TEXT_CARDS' || playerUIMode === 'MUSIC_DUAL' || hasOptionText;
 
-  // ==========================================
-  // 🎵 1. MUZIKĀLĀ SPĒLE (MUSIC_DUAL) - STABIŅĀ
-  // ==========================================
+  const renderRankDeltaPill = (delta?: number, isBaseline: boolean = false) => {
+    if (isBaseline || delta === undefined || delta === null || delta === 0) {
+      return (
+        <span style={{
+          background: 'rgba(108, 117, 125, 0.25)',
+          border: '1px solid #6c757d',
+          color: '#ccc',
+          padding: '2px 8px',
+          borderRadius: '12px',
+          fontSize: '0.8rem',
+          fontWeight: 'bold',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '3px'
+        }}>
+          — Saglabāta
+        </span>
+      );
+    }
+    if (delta > 0) {
+      return (
+        <span style={{
+          background: 'rgba(40, 167, 69, 0.25)',
+          border: '1.5px solid #28a745',
+          color: '#00ff66',
+          padding: '2px 8px',
+          borderRadius: '12px',
+          fontSize: '0.85rem',
+          fontWeight: '900',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '3px',
+          boxShadow: '0 0 10px rgba(40, 167, 69, 0.5)'
+        }}>
+          ▲ +{delta} {delta === 1 ? 'vieta' : 'vietas'}
+        </span>
+      );
+    }
+    return (
+      <span style={{
+        background: 'rgba(220, 53, 69, 0.25)',
+        border: '1px solid #dc3545',
+        color: '#ff4d4d',
+        padding: '2px 8px',
+        borderRadius: '12px',
+        fontSize: '0.85rem',
+        fontWeight: '900',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '3px'
+      }}>
+        ▼ {Math.abs(delta)} {Math.abs(delta) === 1 ? 'vieta' : 'vietas'}
+      </span>
+    );
+  };
+
+  // Muzikālā spēle
   const handleMusicOptionClick = (option: string, letter: string, isTopCategory: boolean) => {
     if (!socket || subState !== 'ACTIVE' || isDisabledAfk) return;
+    triggerHaptic('tap');
     const choiceValue = option || letter;
 
     if (submitMode === 'CONFIRM') {
-      try { if ('vibrate' in navigator) navigator.vibrate(35); } catch {}
       if (isTopCategory) setStagedMusicTop(choiceValue);
       else setStagedMusicBottom(choiceValue);
     } else {
-      try { if ('vibrate' in navigator) navigator.vibrate(60); } catch {}
-
       let newTop = musicTopChoice;
       let newBottom = musicBottomChoice;
 
@@ -439,6 +704,7 @@ export default function Player() {
       socket.emit('participant:submit-answer', {
         pin,
         playerId,
+        playerToken,
         answers: activeAnswers,
         answer: combinedChoice
       });
@@ -447,7 +713,7 @@ export default function Player() {
 
   const handleMusicConfirmSubmit = () => {
     if (!stagedMusicTop || !stagedMusicBottom || myChoice || !socket || subState !== 'ACTIVE' || isDisabledAfk) return;
-    try { if ('vibrate' in navigator) navigator.vibrate(100); } catch {}
+    triggerHaptic('tap');
 
     const combinedChoice = `${stagedMusicTop} + ${stagedMusicBottom}`;
     setMusicTopChoice(stagedMusicTop);
@@ -460,47 +726,56 @@ export default function Player() {
     socket.emit('participant:submit-answer', {
       pin,
       playerId,
+      playerToken,
       answers: [stagedMusicTop, stagedMusicBottom],
       answer: combinedChoice
     });
   };
 
-  // ==========================================
-  // 🅰️ STANDARTA BALSOŠANAS APSTRĀDE
-  // ==========================================
+  // Standarta balsošana
   const handleSingleVoteClick = (option: string, letter: string) => {
     if (myChoice || !socket || subState === 'PAUSED' || isDisabledAfk) return;
+    triggerHaptic('tap');
 
     if (submitMode === 'CONFIRM') {
-      try { if ('vibrate' in navigator) navigator.vibrate(40); } catch {}
       setStagedChoice(option || letter);
     } else {
-      try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
       const chosenStr = option || letter;
       setMyChoice(chosenStr);
       localStorage.setItem('player_current_choice', chosenStr);
-      socket.emit('participant:submit-answer', { pin, answer: chosenStr, answers: [chosenStr], playerId });
+      socket.emit('participant:submit-answer', { 
+        pin, 
+        answer: chosenStr, 
+        answers: [chosenStr], 
+        playerId, 
+        playerToken 
+      });
     }
   };
 
   const handleConfirmSingleVote = () => {
     if (!stagedChoice || myChoice || !socket || subState === 'PAUSED' || isDisabledAfk) return;
-    try { if ('vibrate' in navigator) navigator.vibrate(80); } catch {}
+    triggerHaptic('tap');
     setMyChoice(stagedChoice);
     localStorage.setItem('player_current_choice', stagedChoice);
-    socket.emit('participant:submit-answer', { pin, answer: stagedChoice, answers: [stagedChoice], playerId });
+    socket.emit('participant:submit-answer', { 
+      pin, 
+      answer: stagedChoice, 
+      answers: [stagedChoice], 
+      playerId, 
+      playerToken 
+    });
   };
 
   const toggleMultiSelectOption = (item: string) => {
     if (myChoice || subState === 'PAUSED' || isDisabledAfk) return;
+    triggerHaptic('tap');
 
     setSelectedMultipleOptions((prev) => {
       if (prev.includes(item)) {
-        try { if ('vibrate' in navigator) navigator.vibrate(30); } catch {}
         return prev.filter((x) => x !== item);
       } else {
         if (prev.length >= maxRequiredChoices) return prev;
-        try { if ('vibrate' in navigator) navigator.vibrate(50); } catch {}
         return [...prev, item];
       }
     });
@@ -508,7 +783,7 @@ export default function Player() {
 
   const handleMultiVoteSubmit = () => {
     if (myChoice || !socket || selectedMultipleOptions.length !== maxRequiredChoices || subState === 'PAUSED' || isDisabledAfk) return;
-    try { if ('vibrate' in navigator) navigator.vibrate(100); } catch {}
+    triggerHaptic('tap');
 
     const chosenStr = selectedMultipleOptions.join(', ');
     setMyChoice(chosenStr);
@@ -518,35 +793,35 @@ export default function Player() {
       pin,
       answer: chosenStr,
       answers: selectedMultipleOptions,
-      playerId
+      playerId,
+      playerToken
     });
   };
 
-  // ⚡ ĀTRĀ PULTS (BUZZER RACE)
   const handleBuzzerPress = () => {
     if (subState === 'READY') {
-      try { if ('vibrate' in navigator) navigator.vibrate(40); } catch {}
+      triggerHaptic('tap');
       return;
     }
     if (subState === 'ACTIVE' && !buzzerPressedOrder) {
-      try { if ('vibrate' in navigator) navigator.vibrate([100, 50, 100]); } catch {}
+      triggerHaptic('warn');
       setBuzzerPressedOrder(1);
       socket?.emit('participant:submit-answer', {
         pin,
         answer: 'BUZZ',
         answers: ['BUZZ'],
-        playerId
+        playerId,
+        playerToken
       });
     }
   };
 
-  // 🔢 Secības kārtošana (ORDERING)
   const moveOrderingItem = (index: number, direction: 'UP' | 'DOWN') => {
     if (myChoice || subState !== 'ACTIVE' || isDisabledAfk) return;
+    triggerHaptic('tap');
     const targetIdx = direction === 'UP' ? index - 1 : index + 1;
     if (targetIdx < 0 || targetIdx >= orderedItems.length) return;
 
-    try { if ('vibrate' in navigator) navigator.vibrate(40); } catch {}
     const updated = [...orderedItems];
     const temp = updated[index];
     updated[index] = updated[targetIdx];
@@ -556,7 +831,7 @@ export default function Player() {
 
   const handleOrderingSubmit = () => {
     if (myChoice || !socket || subState !== 'ACTIVE' || isDisabledAfk) return;
-    try { if ('vibrate' in navigator) navigator.vibrate(100); } catch {}
+    triggerHaptic('tap');
 
     const orderStr = orderedItems.join(' ➔ ');
     setMyChoice(orderStr);
@@ -565,13 +840,14 @@ export default function Player() {
       pin,
       answer: orderStr,
       answers: orderedItems,
-      playerId
+      playerId,
+      playerToken
     });
   };
 
   const handleTestBuzzer = () => {
     if (!socket) return;
-    try { if ('vibrate' in navigator) navigator.vibrate(60); } catch {}
+    triggerHaptic('tap');
     setBuzzerTestPresses((prev) => prev + 1);
     socket.emit('participant:test-buzzer', { pin, playerId });
   };
@@ -579,6 +855,7 @@ export default function Player() {
   const handleLeaveOrNewGame = () => {
     sessionStorage.removeItem('player_active_session');
     localStorage.removeItem('player_pin');
+    localStorage.removeItem('player_token');
     localStorage.removeItem('player_team');
     localStorage.removeItem('player_is_captain');
     localStorage.removeItem('player_current_choice');
@@ -600,18 +877,24 @@ export default function Player() {
     setBuzzerPressedOrder(null);
     setIsMyBuzzerTurn(false);
     setPin('');
+    setPlayerToken('');
     setPersonalStats(null);
   };
 
-  const isRoundLb = leaderboardType === 'ROUND';
+  const isRoundLb = (scene?.config?.lbType || personalStats?.lbType || leaderboardType || '').toUpperCase() === 'ROUND';
   const totalPlayersCount = personalStats?.totalPlayers ?? 1;
   const myRank = personalStats?.myRank ?? '-';
+  const rankDelta = personalStats?.rankDelta ?? 0;
+  const lastQuestionScore = personalStats?.lastQuestionScore ?? 0;
+  const isBaseline = Boolean(personalStats?.isInitialBaseline);
+
   const currentScoreToDisplay = personalStats ? (isRoundLb ? personalStats.roundScore : personalStats.score) : 0;
   const currentTimeToDisplay = personalStats ? (isRoundLb ? personalStats.roundTimeMs : personalStats.totalTimeMs) : 0;
 
   const myTeamRank = personalStats?.teamRank ?? '-';
+  const teamRankDelta = personalStats?.teamRankDelta ?? 0;
   const totalTeamsCount = personalStats?.totalTeams ?? 1;
-  const currentTeamScoreToDisplay = personalStats?.teamScore ?? 0;
+  const currentTeamScoreToDisplay = personalStats ? (personalStats.teamScore ?? 0) : 0;
 
   const appBgStyle: React.CSSProperties = {
     ...fullScreenMobile,
@@ -627,7 +910,7 @@ export default function Player() {
 
   const baseHost = serverBaseUrl && serverBaseUrl.trim() !== '' ? serverBaseUrl.trim() : window.location.origin;
   const captainJoinUrl = `${baseHost.replace(/\/$/, '')}/?pin=${pin}&team=${encodeURIComponent(teamName)}`;
-  const captainQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(captainJoinUrl)}`;
+  const captainQrUrl = getOfflineQrCodeUrl(captainJoinUrl, 220);
 
   const isExactChoicesSelected = selectedMultipleOptions.length === maxRequiredChoices;
   const isFinalLeaderboard = scene?.type === 'LEADERBOARD' && (scene?.config?.lbType === 'FINAL' || leaderboardType === 'FINAL');
@@ -651,6 +934,8 @@ export default function Player() {
   if (!isJoined) {
     return (
       <div style={appBgStyle}>
+        <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
+
         <div style={loginCard}>
           {branding.appLogo ? (
             <div style={{ textAlign: 'center', marginBottom: '12px' }}>
@@ -723,6 +1008,13 @@ export default function Player() {
               {isTeamMode && !isTeamFromQr ? 'IZVEIDOT KOMANDU 👑' : 'SĀKT SPĒLI 🚀'}
             </button>
           </form>
+
+          {/* 🌟 Ieteikums iPhone lietotājiem par pilnekrānu */}
+          {isIosDevice && (
+            <div style={{ marginTop: '12px', fontSize: '0.72rem', color: '#888', lineHeight: 1.3 }}>
+              💡 iPhone pilnekrānam: Safari apakšā spied <strong>'Dalīties'</strong> (Share) ➔ <strong>'Pievienot sākuma ekrānam'</strong>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -748,12 +1040,23 @@ export default function Player() {
   if (!scene) {
     return (
       <div style={{ ...fullScreenMobile, backgroundColor: '#000', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+        <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
+
         <div style={mobileHeader}>
-          <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
-          <span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#ffc107' }}>
-            {name} {isTeamMode && teamName && `[${teamName}]`}
-          </span>
-          <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
+            <span style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#ffc107' }}>
+              {name} {isTeamMode && teamName && `[${teamName}]`}
+            </span>
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {/* Pilnekrāna poga rādās tikai ierīcēs, kas to atbalsta (Android) */}
+            {isFullscreenSupported && (
+              <button onClick={toggleFullscreen} style={btnFullscreenBadge} title="Pilnekrāns">⛶</button>
+            )}
+            <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
+          </div>
         </div>
 
         <div style={{ margin: 'auto', textAlign: 'center', padding: '15px', width: '90%', maxWidth: '380px', overflowY: 'auto' }}>
@@ -830,8 +1133,11 @@ export default function Player() {
           {isTeamMode && teamName && (
             <div style={{ ...rankBadge, borderColor: '#00e5ff', background: '#0a1d2e', marginBottom: '10px' }}>
               <div style={{ fontSize: '0.85rem', color: '#00e5ff', fontWeight: 'bold' }}>👥 KOMANDAS REZULTĀTS ({teamName}):</div>
-              <div style={{ fontSize: '2.4rem', fontWeight: 'bold', color: '#00ff00', margin: '3px 0' }}>
-                #{myTeamRank} <span style={{ fontSize: '1.2rem', color: '#888' }}>/ {totalTeamsCount}</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', margin: '4px 0' }}>
+                <span style={{ fontSize: '2.4rem', fontWeight: 'bold', color: '#00ff00' }}>
+                  #{myTeamRank} <span style={{ fontSize: '1.2rem', color: '#888' }}>/ {totalTeamsCount}</span>
+                </span>
+                {renderRankDeltaPill(teamRankDelta, isBaseline)}
               </div>
               <div style={{ fontSize: '1.05rem', color: '#fff' }}>
                 Komandas punkti: <strong style={{ color: 'gold' }}>{currentTeamScoreToDisplay} pt</strong>
@@ -841,8 +1147,11 @@ export default function Player() {
 
           <div style={rankBadge}>
             <div style={{ fontSize: '0.85rem', color: '#aaa' }}>👤 Tavs individuālais rezultāts:</div>
-            <div style={{ fontSize: '2.2rem', fontWeight: 'bold', color: '#ffc107', margin: '3px 0' }}>
-              #{myRank} <span style={{ fontSize: '1.2rem', color: '#888' }}>/ {totalPlayersCount}</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', margin: '4px 0' }}>
+              <span style={{ fontSize: '2.2rem', fontWeight: 'bold', color: '#ffc107' }}>
+                #{myRank} <span style={{ fontSize: '1.2rem', color: '#888' }}>/ {totalPlayersCount}</span>
+              </span>
+              {renderRankDeltaPill(rankDelta, isBaseline)}
             </div>
             <div style={{ fontSize: '1.1rem', color: '#fff' }}>
               Individuālie punkti: <strong style={{ color: 'gold' }}>{currentScoreToDisplay} pt</strong>
@@ -862,16 +1171,18 @@ export default function Player() {
 
   return (
     <div style={appBgStyle}>
+      <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
+
       <div style={mobileHeader}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
-          <span style={{ fontWeight: 'bold', fontSize: '0.9rem', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontWeight: 'bold', fontSize: '0.9rem', maxWidth: '95px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {name}
           </span>
           {isTeamMode && teamName && <span style={{ fontSize: '0.75rem', color: '#00e5ff' }}>[{teamName}]</span>}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
           {isTeamMode && isCaptain && (
             <button
               onClick={() => setShowCaptainQrModal(true)}
@@ -879,6 +1190,17 @@ export default function Player() {
               title="Parādīt komandas QR kodu jaunam biedram"
             >
               👑 + Biedrs (QR)
+            </button>
+          )}
+
+          {/* Pilnekrāna poga rādās tikai ierīcēs, kas to atbalsta (Android) */}
+          {isFullscreenSupported && (
+            <button
+              onClick={toggleFullscreen}
+              style={btnFullscreenBadge}
+              title="Ieslēgt pilnekrānu"
+            >
+              {isFullscreen ? '⛶' : '⛶'}
             </button>
           )}
 
@@ -926,7 +1248,7 @@ export default function Player() {
               👑 TAVA KOMANDA: {teamName}
             </div>
             <div style={{ fontSize: '0.85rem', color: '#ccc', marginBottom: '10px' }}>
-              Parādi šo QR kodu, lai pievienotu spēlētāju savam galdiņam!
+              Parādi šo QR kodu, lai pievienotu spēlētāju savam galdiņam:
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
@@ -996,6 +1318,7 @@ export default function Player() {
           </div>
         )}
 
+        {/* 🌟 LĪDERU TABULA: TIKAI ŠEIT RĀDĀS STATISTIKA, VIETAS UN DELTAS! */}
         {scene?.type === 'LEADERBOARD' && subState !== 'PAUSED' && (
           <div style={infoCard}>
             {isFinalLeaderboard && podiumStage < 3 ? (
@@ -1009,44 +1332,63 @@ export default function Player() {
             ) : (
               <div>
                 <div style={{ fontSize: '2.5rem', marginBottom: '6px' }}>
-                  {leaderboardType === 'FINAL' ? '👑' : leaderboardType === 'ROUND' ? '🏆' : '⭐'}
+                  {leaderboardType === 'FINAL' ? '👑' : isRoundLb ? '🏆' : '⭐'}
                 </div>
-                <h2 style={{ color: '#ffc107', margin: '0 0 8px 0', fontSize: '1.3rem' }}>
+                
+                <h2 style={{ color: '#ffc107', margin: '0 0 4px 0', fontSize: '1.3rem' }}>
                   {leaderboardType === 'FINAL'
                     ? 'FINĀLA REZULTĀTI'
-                    : leaderboardType === 'ROUND'
-                    ? 'KĀRTAS REZULTĀTI'
-                    : 'KOPVĒRTĒJUMS'}
+                    : isRoundLb
+                    ? '🏆 KĀRTAS REZULTĀTI'
+                    : '⭐ KOPVĒRTĒJUMS'}
                 </h2>
 
+                <div style={{ fontSize: '0.8rem', color: isRoundLb ? '#00e5ff' : '#aaa', marginBottom: '10px', fontWeight: 'bold' }}>
+                  {isRoundLb ? '📍 Rāda tikai šajā kārtā iegūtos punktus' : '⭐ Visu kārtu kopējā punktu summa'}
+                </div>
+
                 {isTeamMode && teamName && (
-                  <div style={{ ...rankBadge, borderColor: '#00e5ff', background: '#0a1d2e', padding: '8px', margin: '6px 0' }}>
+                  <div style={{ ...rankBadge, borderColor: '#00e5ff', background: '#0a1d2e', padding: '10px', margin: '8px 0' }}>
                     <div style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>
                       👥 Komanda: {teamName}
                     </div>
-                    <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#00ff00', margin: '2px 0' }}>
-                      #{myTeamRank} <span style={{ fontSize: '1rem', color: '#888' }}>/ {totalTeamsCount} komandām</span>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', margin: '3px 0' }}>
+                      <span style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#00ff00' }}>
+                        #{myTeamRank} <span style={{ fontSize: '1rem', color: '#888' }}>/ {totalTeamsCount}</span>
+                      </span>
+                      {!isRoundLb && renderRankDeltaPill(teamRankDelta, isBaseline)}
                     </div>
                     <div style={{ fontSize: '0.95rem', color: '#fff' }}>
-                      {leaderboardType === 'ROUND' ? 'Kārtas komandas punkti:' : 'Kopējie komandas punkti:'}{' '}
+                      {isRoundLb ? 'Komandas punkti šajā kārtā:' : 'Kopējie komandas punkti:'}{' '}
                       <strong style={{ color: 'gold' }}>{currentTeamScoreToDisplay} pt</strong>
                     </div>
                   </div>
                 )}
 
-                <div style={{ ...rankBadge, padding: '8px', margin: '6px 0' }}>
+                <div style={{ ...rankBadge, padding: '10px', margin: '8px 0' }}>
                   <div style={{ fontSize: '0.8rem', color: '#aaa' }}>
-                    👤 Tavs individuālais sniegums:
+                    👤 {isRoundLb ? 'Tavs sniegums šajā kārtā:' : 'Tavs kopvērtējuma sniegums:'}
                   </div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#ffc107', margin: '2px 0' }}>
-                    #{myRank} <span style={{ fontSize: '1rem', color: '#888' }}>/ {totalPlayersCount} spēlētājiem</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', margin: '3px 0' }}>
+                    <span style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#ffc107' }}>
+                      #{myRank} <span style={{ fontSize: '1rem', color: '#888' }}>/ {totalPlayersCount}</span>
+                    </span>
+                    {!isRoundLb && renderRankDeltaPill(rankDelta, isBaseline)}
                   </div>
-                  <div style={{ fontSize: '0.95rem', color: '#fff' }}>
-                    {leaderboardType === 'ROUND' ? 'Kārtas punkti:' : 'Kopējie punkti:'}{' '}
+                  
+                  <div style={{ fontSize: '1.05rem', color: '#fff', margin: '4px 0' }}>
+                    {isRoundLb ? 'Kārtā nopelnīti:' : 'Kopā nopelnīti:'}{' '}
                     <strong style={{ color: 'gold' }}>{currentScoreToDisplay} pt</strong>
                   </div>
-                  <div style={{ fontSize: '0.85rem', color: '#00e5ff', marginTop: '2px' }}>
-                    ⏱️ Laiks: {formatThinkingTime(currentTimeToDisplay)}
+
+                  {isRoundLb && (
+                    <div style={{ fontSize: '0.8rem', color: '#aaa' }}>
+                      (Kopvērtējumā kopā: <strong style={{ color: '#fff' }}>{personalStats?.score || 0} pt</strong>)
+                    </div>
+                  )}
+
+                  <div style={{ fontSize: '0.85rem', color: '#00e5ff', marginTop: '4px' }}>
+                    ⏱️ {isRoundLb ? 'Kārtas laiks:' : 'Kopējais laiks:'} {formatThinkingTime(currentTimeToDisplay)}
                   </div>
                 </div>
               </div>
@@ -1054,7 +1396,7 @@ export default function Player() {
           </div>
         )}
 
-        {/* ⚡ ĀTRĀ PULTS (BUZZER RACE) */}
+        {/* ⚡ ĀTRĀ PULTS */}
         {isBuzzerRace && subState !== 'PAUSED' && (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
             {isMyBuzzerTurn && scene?.config?.buzzerRaceType === 'WITH_OPTIONS' ? (
@@ -1123,7 +1465,7 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🔢 SECĪBAS KĀRTOŠANA (ORDERING) */}
+        {/* 🔢 SECĪBAS KĀRTOŠANA */}
         {isOrdering && subState !== 'PAUSED' && (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '10px 0' }}>
             {subState === 'READY' && (
@@ -1183,9 +1525,7 @@ export default function Player() {
           </div>
         )}
 
-        {/* ======================================================== */}
-        {/* 🎵 2. MUZIKĀLĀ SPĒLE (MUSIC_DUAL) — STABIŅĀ NO AUGŠAS UZ LEJU */}
-        {/* ======================================================== */}
+        {/* 🎵 2. MUZIKĀLĀ SPĒLE */}
         {isMusicMode && !isBuzzerRace && !isOrdering && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '4px 0', overflowY: 'auto' }}>
             {subState === 'READY' && (
@@ -1201,8 +1541,6 @@ export default function Player() {
 
             {subState === 'ACTIVE' && (
               <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                
-                {/* 1. KATEGORIJA: IZPILDĪTĀJS (A, B, C STABIŅĀ) */}
                 <div style={{ background: 'rgba(0, 229, 255, 0.08)', border: '1px solid #00e5ff', borderRadius: '12px', padding: '10px' }}>
                   <div style={{ fontSize: '0.9rem', color: '#00e5ff', fontWeight: 'bold', marginBottom: '8px', textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}>
                     <span>{scene?.config?.musicCategoryTop || '🎤 Izpildītājs'}:</span>
@@ -1242,7 +1580,6 @@ export default function Player() {
                   </div>
                 </div>
 
-                {/* 2. KATEGORIJA: DZIESMAS NOSAUKUMS (D, E, F STABIŅĀ) */}
                 <div style={{ background: 'rgba(255, 0, 127, 0.08)', border: '1px solid #ff007f', borderRadius: '12px', padding: '10px' }}>
                   <div style={{ fontSize: '0.9rem', color: '#ff007f', fontWeight: 'bold', marginBottom: '8px', textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}>
                     <span>{scene?.config?.musicCategoryBottom || '🎵 Dziesmas nosaukums'}:</span>
@@ -1312,15 +1649,24 @@ export default function Player() {
                 <h2 style={{ color: subState === 'REVEAL' ? '#28a745' : '#ffc107', margin: 0 }}>
                   {subState === 'REVEAL' ? 'PAREIZĀ ATBILDE ATKLĀTA!' : 'BALSOŠANA NOSLĒGUSIES!'}
                 </h2>
-                <p style={{ color: '#ccc', marginTop: '8px' }}>Skaties pareizo izpildītāju un dziesmu lielajā ekrānā!</p>
+                
+                {/* 🌟 PĒC JAUTĀJUMA: RĀDA TIKAI UN VIENĪGI ŠĪ JAUTĀJUMA PUKTUS! */}
+                {subState === 'REVEAL' && (
+                  <div style={{ marginTop: '12px', background: 'rgba(0,0,0,0.6)', padding: '12px', borderRadius: '12px', border: '1px solid #333' }}>
+                    <div style={{ fontSize: '1.35rem', color: lastQuestionScore > 0 ? '#00ff00' : '#ff4d4d', fontWeight: '900', margin: '4px 0' }}>
+                      {lastQuestionScore > 0 ? `🎉 +${lastQuestionScore} pt!` : '❌ 0 pt šajā jautājumā'}
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: '#aaa', marginTop: '6px' }}>
+                      Gatavojies nākamajam jautājumam!
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
         )}
 
-        {/* ======================================================== */}
-        {/* 🅰️ 3. STANDARTA JAUTĀJUMI — TEKSTS VIENMĒR STABIŅĀ */}
-        {/* ======================================================== */}
+        {/* 🅰️ 3. STANDARTA JAUTĀJUMI */}
         {!isMusicMode && !isBuzzerRace && !isOrdering && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' }}>
             {subState === 'READY' && (
@@ -1345,7 +1691,6 @@ export default function Player() {
                     : 'SPIED ATBILDI:'}
                 </div>
 
-                {/* Ja ir teksts — VIENMĒR rādām stabiņā no augšas uz leju! Ja tikai burti — lielās pogas. */}
                 {shouldShowVerticalCards ? (
                   <div
                     style={{
@@ -1390,7 +1735,6 @@ export default function Player() {
                     })}
                   </div>
                 ) : (
-                  /* Ja jautājumam nav teksta (tikai burti A, B, C, D) — rādām klasiskās lielās pogas */
                   <div
                     style={{
                       display: 'grid',
@@ -1456,13 +1800,24 @@ export default function Player() {
                     ? 'PAREIZĀ ATBILDE ATKLĀTA!'
                     : 'BALSOŠANA NOSLĒGUSIES!'}
                 </h2>
-                <p style={{ color: '#ccc', fontSize: '1rem', margin: 0 }}>
-                  {subState === 'REVEAL'
-                    ? 'Skaties rezultātus un punktus lielajā ekrānā!'
-                    : subState === 'SUMMARY'
-                    ? 'Skaties atbilžu kopsavilkumu lielajā ekrānā!'
-                    : 'Gaidiet rezultātu atklāšanu...'}
-                </p>
+
+                {/* 🌟 PĒC JAUTĀJUMA: RĀDA TIKAI ŠĪ JAUTĀJUMA PUNKTUS! NEKĀDAS STATISTIKAS! */}
+                {subState === 'REVEAL' ? (
+                  <div style={{ marginTop: '12px', background: 'rgba(0,0,0,0.6)', padding: '14px', borderRadius: '12px', border: '1px solid #333' }}>
+                    <div style={{ fontSize: '1.4rem', color: lastQuestionScore > 0 ? '#00ff00' : '#ff4d4d', fontWeight: '900', margin: '4px 0' }}>
+                      {lastQuestionScore > 0 ? `🎉 +${lastQuestionScore} pt!` : '❌ 0 pt šajā jautājumā'}
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: '#aaa', marginTop: '6px' }}>
+                      Gatavojies nākamajam jautājumam!
+                    </div>
+                  </div>
+                ) : (
+                  <p style={{ color: '#ccc', fontSize: '1rem', margin: 0 }}>
+                    {subState === 'SUMMARY'
+                      ? 'Skaties atbilžu kopsavilkumu lielajā ekrānā!'
+                      : 'Gaidiet rezultātu atklāšanu...'}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -1490,7 +1845,8 @@ const fullScreenMobile: React.CSSProperties = {
   zIndex: 999999,
   overflow: 'hidden',
   boxSizing: 'border-box',
-  overscrollBehavior: 'none'
+  overscrollBehaviorY: 'contain',
+  touchAction: 'manipulation'
 };
 
 const mobileHeader: React.CSSProperties = {
@@ -1501,7 +1857,7 @@ const mobileHeader: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  padding: '0 12px',
+  padding: '0 10px',
   flexShrink: 0
 };
 
@@ -1518,9 +1874,21 @@ const btnCaptainBadge: React.CSSProperties = {
   background: 'linear-gradient(135deg, #ffc107, #ff9800)',
   color: '#000',
   border: '1px solid #fff',
-  padding: '3px 8px',
+  padding: '3px 7px',
   borderRadius: '6px',
-  fontSize: '0.75rem',
+  fontSize: '0.72rem',
+  fontWeight: 'bold',
+  cursor: 'pointer',
+  touchAction: 'manipulation'
+};
+
+const btnFullscreenBadge: React.CSSProperties = {
+  background: 'rgba(255, 255, 255, 0.12)',
+  border: '1px solid rgba(255, 255, 255, 0.25)',
+  color: '#fff',
+  padding: '3px 7px',
+  borderRadius: '6px',
+  fontSize: '0.8rem',
   fontWeight: 'bold',
   cursor: 'pointer',
   touchAction: 'manipulation'
@@ -1590,7 +1958,7 @@ const infoCard: React.CSSProperties = {
   background: 'rgba(20, 20, 20, 0.9)',
   border: '1px solid rgba(255, 255, 255, 0.15)',
   borderRadius: '16px',
-  padding: '20px 15px',
+  padding: '18px 14px',
   width: '90%',
   maxWidth: '360px',
   boxShadow: '0 10px 30px rgba(0,0,0,0.9)'
@@ -1600,8 +1968,8 @@ const rankBadge: React.CSSProperties = {
   background: 'rgba(0, 0, 0, 0.75)',
   border: '2px solid #ffc107',
   borderRadius: '10px',
-  padding: '12px',
-  margin: '12px 0'
+  padding: '10px',
+  margin: '8px 0'
 };
 
 const textHeaderBadge: React.CSSProperties = {
@@ -1672,7 +2040,6 @@ const btnMoveOrder: React.CSSProperties = {
   touchAction: 'manipulation'
 };
 
-// 🌟 VERTIKĀLĀS KARTĪTES STILS (STABIŅĀ NO AUGŠAS UZ LEJU)
 const btnVerticalCard: React.CSSProperties = {
   width: '100%',
   minHeight: '48px',

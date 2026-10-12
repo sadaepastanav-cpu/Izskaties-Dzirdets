@@ -64,13 +64,34 @@ logEvent('INFO', `Serveris inicializēts. Admin atslēga: ${process.env.ADMIN_AP
 
 let publicTunnelUrl = '';
 let tunnelProcess: ChildProcessWithoutNullStreams | null = null;
-let tunnelRestartTimeout: NodeJS.Timeout | null = null;
 
 const MEDIA_ROOT_DIR = path.resolve(process.cwd(), '../../public/uploads');
 let currentProjectPath = MEDIA_ROOT_DIR;
 if (!fs.existsSync(currentProjectPath)) {
   fs.mkdirSync(currentProjectPath, { recursive: true });
 }
+
+const isSystemProtectedPath = (targetPath: string): boolean => {
+  const normalized = path.resolve(targetPath).toLowerCase();
+  const blockedPaths = [
+    'c:\\windows',
+    'c:\\windows\\system32',
+    '/etc',
+    '/bin',
+    '/sbin',
+    '/usr',
+    '/var',
+    '/sys',
+    '/proc',
+    '/dev'
+  ];
+  return blockedPaths.some((p) => normalized === p || normalized.startsWith(p + path.sep));
+};
+
+const safeResolve = (userFileName: string): string => {
+  const safeBase = path.basename(userFileName);
+  return path.join(currentProjectPath, safeBase);
+};
 
 // ==========================================
 // 2. CORS UN RATE LIMITING
@@ -124,11 +145,6 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
     return next();
   }
   return res.status(403).json({ error: 'Piekļuve liegta: Nepieciešama derīga administratora atslēga.' });
-};
-
-const safeResolve = (userFileName: string): string => {
-  const safeBase = path.basename(userFileName);
-  return path.join(currentProjectPath, safeBase);
 };
 
 const getLocalIpAddress = () => {
@@ -185,15 +201,31 @@ const upload = multer({
   }
 });
 
+const sanitizeCsvCell = (val: any): string => {
+  const str = String(val ?? '');
+  if (/^[=\+\-@\t\r]/.test(str)) {
+    return `"'${str.replace(/"/g, '""')}"`;
+  }
+  return `"${str.replace(/"/g, '""')}"`;
+};
+
+// ==========================================
+// SPĒLĒTĀJA UN SESIJAS STRUKTŪRA
+// ==========================================
 interface PlayerState {
   id: string;
+  token?: string;
   socketId?: string;
   name: string;
   deviceNumber?: number;
   score: number;
   roundScore: number;
+  lastQuestionScore: number;
   totalTimeMs: number;
   roundTimeMs: number;
+  rank?: number | null;
+  previousRank?: number | null;
+  rankDelta?: number;
   isDisabled?: boolean;
   isBot?: boolean;
   teamName?: string;
@@ -206,8 +238,12 @@ const sessionScores = new Map<string, Map<string, PlayerState>>();
 const participants = new Map<string, Set<string>>();
 const sessionHostTokens = new Map<string, string>();
 const sessionTimers = new Map<string, NodeJS.Timeout>();
+
+const sessionTeamPreviousRanks = new Map<string, Map<string, number>>();
+
 const socketPlayerMap = new Map<string, { pin: string; playerId: string }>();
 const playerIdToSocketMap = new Map<string, string>();
+
 const snapshotDebounceTimers = new Map<string, NodeJS.Timeout>();
 const lastAdvanceTimestamps = new Map<string, number>();
 const voteBroadcastThrottleTimers = new Map<string, NodeJS.Timeout>();
@@ -246,9 +282,11 @@ const sanitizeSceneForPlayer = (scene: any, subState: string) => {
 // 🌟 STĀVOKĻA IZPLATĪŠANA
 const emitStateUpdate = (pin: string, scene: any, subState: string, extra: any = {}) => {
   const sanitized = sanitizeSceneForPlayer(scene, subState);
-  io.to(pin).emit('state-update', { ...sanitized, subState, ...extra });
-
   const s = sessions.get(pin);
+  const isBlackout = !!s?.isBlackout;
+
+  io.to(pin).emit('state-update', { ...sanitized, subState, isBlackout, ...extra });
+
   const playersMap = sessionScores.get(pin);
   if (s) {
     const nextScene = s.scenes[s.currentSceneIdx + 1];
@@ -257,6 +295,7 @@ const emitStateUpdate = (pin: string, scene: any, subState: string, extra: any =
     io.to(`${pin}_host`).emit('host-state-update', {
       currentScene: scene,
       subState,
+      isBlackout,
       currentSceneIdx: s.currentSceneIdx,
       totalScenes: s.scenes.length,
       nextSceneTitle: nextScene?.title || 'Spēles beigas',
@@ -291,6 +330,7 @@ const executeSaveSnapshot = (pin: string) => {
       pin,
       hostToken,
       hostName: state.hostName || '',
+      questionsScored: state.questionsScored || 0,
       state: cleanState,
       scores: Array.from(scores?.entries() || [])
     };
@@ -338,12 +378,18 @@ const resetRoundScores = (pin: string) => {
     playersMap.forEach((p) => {
       p.roundScore = 0;
       p.roundTimeMs = 0;
+      p.lastQuestionScore = 0;
     });
   }
 };
 
-const getSortedLeaderboard = (playersMap: Map<string, PlayerState>, isRound: boolean = false): PlayerState[] => {
-  return Array.from(playersMap.values())
+// 🌟 SAKĀRTOTA LĪDERU TABULA AR 1. KĀRTAS DELTAS AIZSARDZĪBU
+const getSortedLeaderboard = (
+  playersMap: Map<string, PlayerState>,
+  isRound: boolean = false,
+  isInitialBaseline: boolean = false
+): PlayerState[] => {
+  const sorted = Array.from(playersMap.values())
     .filter((p) => !p.isDisabled)
     .sort((a, b) => {
       const scoreA = isRound ? a.roundScore || 0 : a.score || 0;
@@ -353,9 +399,39 @@ const getSortedLeaderboard = (playersMap: Map<string, PlayerState>, isRound: boo
       const timeB = isRound ? b.roundTimeMs || 0 : b.totalTimeMs || 0;
       return timeA - timeB;
     });
+
+  return sorted.map((p, idx) => {
+    const currentRank = idx + 1;
+    let delta = 0;
+    let prevRank = p.previousRank;
+
+    if (!isInitialBaseline && p.previousRank !== null && p.previousRank !== undefined) {
+      delta = p.previousRank - currentRank;
+    } else {
+      prevRank = null;
+      delta = 0;
+    }
+
+    p.rank = currentRank;
+    p.rankDelta = delta;
+
+    return {
+      ...p,
+      rank: currentRank,
+      previousRank: prevRank,
+      rankDelta: delta
+    };
+  });
 };
 
-const getSortedTeamLeaderboard = (playersMap: Map<string, PlayerState>, scoringMode: 'AVG' | 'SUM' = 'AVG', isRound: boolean = false) => {
+// 🌟 KOMANDU LĪDERU TABULA
+const getSortedTeamLeaderboard = (
+  pin: string,
+  playersMap: Map<string, PlayerState>,
+  scoringMode: 'AVG' | 'SUM' = 'AVG',
+  isRound: boolean = false,
+  isInitialBaseline: boolean = false
+) => {
   const teamsMap = new Map<string, { name: string; score: number; totalTimeMs: number; memberCount: number; members: string[] }>();
 
   playersMap.forEach((p) => {
@@ -379,6 +455,8 @@ const getSortedTeamLeaderboard = (playersMap: Map<string, PlayerState>, scoringM
     t.members.push(p.name);
   });
 
+  const prevTeamsMap = sessionTeamPreviousRanks.get(pin);
+
   return Array.from(teamsMap.values())
     .map((t) => ({
       name: t.name,
@@ -391,19 +469,42 @@ const getSortedTeamLeaderboard = (playersMap: Map<string, PlayerState>, scoringM
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return a.totalTimeMs - b.totalTimeMs;
+    })
+    .map((t, idx) => {
+      const currentRank = idx + 1;
+      let delta = 0;
+      let prevRank: number | null = null;
+
+      if (!isInitialBaseline && prevTeamsMap && prevTeamsMap.has(t.name)) {
+        prevRank = prevTeamsMap.get(t.name)!;
+        delta = prevRank - currentRank;
+      }
+
+      return {
+        ...t,
+        rank: currentRank,
+        previousRank: prevRank,
+        rankDelta: delta
+      };
     });
 };
 
+// 🌟 LĪDERU TABULAS UN PERSONĪGĀS STATISTIKAS IZPLATĪŠANA
 const broadcastLeaderboardAndPersonalStats = (pin: string, isRound: boolean = false) => {
   const playersMap = sessionScores.get(pin);
   const session = sessions.get(pin);
   if (!playersMap || !session) return;
 
-  const lbType = isRound ? 'ROUND' : (session?.currentScene?.config?.lbType || 'TOTAL');
-  const sortedLb = getSortedLeaderboard(playersMap, isRound);
-  const sortedTeams = getSortedTeamLeaderboard(playersMap, session?.branding?.teamScoringMode || 'AVG', isRound);
+  const questionsScored = session.questionsScored || 0;
+  const isInitialBaseline = questionsScored <= 1;
 
-  // Pilnais saraksts iet TIKAI uz lielo ekrānu un vadītāja paneli
+  const isRoundScene = session?.currentScene?.type === 'LEADERBOARD' && session?.currentScene?.config?.lbType === 'ROUND';
+  const effectiveIsRound = isRound || isRoundScene;
+  const lbType = effectiveIsRound ? 'ROUND' : (session?.currentScene?.config?.lbType || 'TOTAL');
+
+  const sortedLb = getSortedLeaderboard(playersMap, effectiveIsRound, isInitialBaseline);
+  const sortedTeams = getSortedTeamLeaderboard(pin, playersMap, session?.branding?.teamScoringMode || 'AVG', effectiveIsRound, isInitialBaseline);
+
   io.to(`${pin}_screens`).emit('leaderboard-update', { data: sortedLb, lbType });
   io.to(`${pin}_screens`).emit('team-leaderboard-update', { data: sortedTeams, lbType });
   io.to(`${pin}_host`).emit('leaderboard-update', { data: sortedLb, lbType });
@@ -412,35 +513,44 @@ const broadcastLeaderboardAndPersonalStats = (pin: string, isRound: boolean = fa
   const totalPlayers = sortedLb.length;
   const totalTeams = sortedTeams.length;
 
-  // Telefoni saņem TIKAI savu personīgo vietu un punktus
-  sortedLb.forEach((player, idx) => {
+  sortedLb.forEach((player) => {
     if (player.isBot) return;
     const targetSocketId = player.socketId || playerIdToSocketMap.get(player.id);
     if (!targetSocketId) return;
 
     let teamRank: number | null = null;
+    let previousTeamRank: number | null = null;
+    let teamRankDelta: number = 0;
     let teamData: any = null;
 
     if (player.teamName) {
       const tIdx = sortedTeams.findIndex((t) => t.name.toLowerCase() === player.teamName?.toLowerCase());
       if (tIdx !== -1) {
-        teamRank = tIdx + 1;
         teamData = sortedTeams[tIdx];
+        teamRank = teamData.rank;
+        previousTeamRank = teamData.previousRank;
+        teamRankDelta = teamData.rankDelta;
       }
     }
 
     io.to(targetSocketId).emit('my-personal-stats', {
-      myRank: idx + 1,
+      myRank: player.rank,
+      previousRank: player.previousRank,
+      rankDelta: isInitialBaseline ? 0 : (player.rankDelta ?? 0),
       totalPlayers,
       score: player.score || 0,
       roundScore: player.roundScore || 0,
+      lastQuestionScore: player.lastQuestionScore || 0,
       totalTimeMs: player.totalTimeMs || 0,
       roundTimeMs: player.roundTimeMs || 0,
       lbType,
       teamRank,
+      previousTeamRank,
+      teamRankDelta: isInitialBaseline ? 0 : teamRankDelta,
       totalTeams,
       teamScore: teamData?.score ?? null,
-      teamName: player.teamName || ''
+      teamName: player.teamName || '',
+      isInitialBaseline
     });
   });
 };
@@ -465,7 +575,7 @@ function startCloudflareTunnel(onReady?: (url: string) => void) {
     const handleOutput = (data: any) => {
       const output = data.toString();
       const match = output.match(/https:\/\/(?!api\.)([a-zA-Z0-9-]+)\.trycloudflare\.com/i);
-      
+
       if (match && !publicTunnelUrl) {
         publicTunnelUrl = match[0];
         logEvent('INFO', `=========================================`);
@@ -504,8 +614,7 @@ function startCloudflareTunnel(onReady?: (url: string) => void) {
 }
 
 // ==========================================
-// 4. BALSOŠANAS APSTRĀDE AR THROTTLING (250ms)
-// 🌟 LABOTS: Telefoni saņem uz _players, lai nepārrakstītu TV ekrānu!
+// 4. BALSOŠANAS APSTRĀDE AR THROTTLING
 // ==========================================
 const triggerVotesUpdatedThrottled = (pin: string) => {
   if (voteBroadcastThrottleTimers.has(pin)) return;
@@ -524,18 +633,14 @@ const triggerVotesUpdatedThrottled = (pin: string) => {
 
     const votedPlayerIds = s.votes.map((v: any) => v.playerId);
 
-    // TV ekrānam un vadītājam — pilnais saraksts ar votedPlayerIds (punktiņiem un pēdējiem 5 spēlētājiem)
     io.to(`${pin}_screens`).emit('votes-updated', { summary, votedCount: s.votes.length, votedPlayerIds });
     io.to(`${pin}_host`).emit('votes-updated', { summary, votedCount: s.votes.length, votedPlayerIds });
-
-    // Telefoniem — tikai kopsavilkums bez smagā saraksta uz _players istabu
     io.to(`${pin}_players`).emit('votes-updated', { summary, votedCount: s.votes.length });
   }, 250);
 
   voteBroadcastThrottleTimers.set(pin, timer);
 };
 
-// 🌟 SALABOTA BUZZER UN STANDARTA BALSOŠANAS APSTRĀDE
 const handleVote = (pin: string, answers: string[], playerId: string) => {
   const s = sessions.get(pin);
   const playersMap = sessionScores.get(pin);
@@ -548,13 +653,12 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
     const now = Date.now();
     const timeSpentMs = Math.max(0, now - (s.questionStartTime || now));
 
-    // ⚡ ĀTRĀS PULTS (BUZZER RACE) APSTRĀDE
+    // ⚡ ĀTRĀ PULTS (BUZZER RACE)
     if (s.currentScene?.type === 'BUZZER_RACE') {
       if (!s.buzzerRaceWinners) s.buzzerRaceWinners = [];
       const maxQueue = s.currentScene.config?.buzzerMaxQueue || 5;
       const isBuzzOnly = answers.includes('BUZZ');
 
-      // 1. Spēlētājs piesakās rindā
       if (isBuzzOnly) {
         const alreadyInQueue = s.buzzerRaceWinners.some((w: any) => w.playerId === playerId);
         if (alreadyInQueue || s.buzzerRaceWinners.length >= maxQueue) return;
@@ -578,7 +682,6 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
         return;
       }
 
-      // 2. Ātrākais spēlētājs (#1) iesniedz atbildes variantu
       const activeWinner = s.buzzerRaceWinners.find((w: any) => w.playerId === playerId && w.status === 'ACTIVE');
       if (activeWinner && !isBuzzOnly) {
         activeWinner.submittedAnswers = answers;
@@ -588,13 +691,29 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
         const isCorrect = correctAnswers.some((ans: string) => answers.includes(ans));
 
         if (config.buzzerEvaluationMode !== 'MANUAL') {
+          const questionsScored = s.questionsScored || 0;
+          if (questionsScored >= 1) {
+            const preLb = getSortedLeaderboard(playersMap, false, false);
+            preLb.forEach((p, idx) => {
+              const org = playersMap.get(p.id);
+              if (org) org.previousRank = idx + 1;
+            });
+            const preTeams = getSortedTeamLeaderboard(pin, playersMap, s?.branding?.teamScoringMode || 'AVG', false, false);
+            const teamPrevMap = new Map<string, number>();
+            preTeams.forEach((t, idx) => teamPrevMap.set(t.name, idx + 1));
+            sessionTeamPreviousRanks.set(pin, teamPrevMap);
+          }
+
           const maxPts = config.pointsMax ?? config.points ?? 10;
           const awarded = isCorrect ? maxPts : 0;
 
+          player.lastQuestionScore = awarded;
           player.score = (player.score || 0) + awarded;
           player.roundScore = (player.roundScore || 0) + awarded;
           player.totalTimeMs = (player.totalTimeMs || 0) + timeSpentMs;
           player.roundTimeMs = (player.roundTimeMs || 0) + timeSpentMs;
+
+          s.questionsScored = (s.questionsScored || 0) + 1;
 
           io.to(pin).emit('play-sfx', { sfx: isCorrect ? 'correct' : 'wrong' });
           broadcastLeaderboardAndPersonalStats(pin, false);
@@ -608,11 +727,10 @@ const handleVote = (pin: string, answers: string[], playerId: string) => {
         }
         return;
       }
-
       return;
     }
 
-    // 🅰️ STANDARTA BALSOŠANAS LOĢIKA
+    // 🅰️ STANDARTA BALSOŠANA
     const existingIndex = s.votes.findIndex((v: any) => v.playerId === playerId);
     if (existingIndex !== -1) {
       const existingVote = s.votes[existingIndex];
@@ -685,6 +803,11 @@ app.post('/api/set-path', requireAdminAuth, (req, res) => {
     if (typeof rawPath === 'string' && rawPath.trim()) {
       const cleaned = rawPath.trim().replace(/^["']|["']$/g, '');
       const resolved = path.resolve(path.normalize(cleaned));
+
+      if (isSystemProtectedPath(resolved)) {
+        return res.status(400).json({ error: 'Kļūda: Sistēmas mapes (piem., Windows) nav atļauts izmantot kā mediju mapi.' });
+      }
+
       currentProjectPath = resolved;
     }
 
@@ -804,26 +927,28 @@ app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
     return res.status(404).json({ error: 'Šai sesijai nav atrasti spēlētāju dati.' });
   }
 
-  const sortedList = getSortedLeaderboard(playersMap, false);
+  const sortedList = getSortedLeaderboard(playersMap, false, false);
 
   let csvContent = '\uFEFF';
   csvContent += `# Spēles atskaite • PIN: ${pin} • Vadītājs: ${hostName} • Datums: ${new Date().toLocaleDateString('lv-LV')}\n`;
   if (isTeamMode) {
-    csvContent += 'Vieta;Pults #;Vārds;Komanda;Kopējie Punkti;Kārtas Punkti;Apdomas Laiks (s);Milisekundes;Statuss\n';
+    csvContent += 'Vieta;Dinamika;Pults #;Vārds;Komanda;Kopējie Punkti;Kārtas Punkti;Pēdējais Jautājums;Apdomas Laiks (s);Milisekundes;Statuss\n';
   } else {
-    csvContent += 'Vieta;Pults #;Vārds;Kopējie Punkti;Kārtas Punkti;Apdomas Laiks (s);Milisekundes;Statuss\n';
+    csvContent += 'Vieta;Dinamika;Pults #;Vārds;Kopējie Punkti;Kārtas Punkti;Pēdējais Jautājums;Apdomas Laiks (s);Milisekundes;Statuss\n';
   }
 
-  sortedList.forEach((p, idx) => {
+  sortedList.forEach((p) => {
     const seconds = ((p.totalTimeMs || 0) / 1000).toFixed(2);
     const status = p.isDisabled ? 'Atslēgts' : p.isBot ? 'Bots' : 'Aktīvs';
-    const escapedName = `"${(p.name || '').replace(/"/g, '""')}"`;
-    const escapedTeam = `"${(p.teamName || '').replace(/"/g, '""')}"`;
+    const deltaStr = p.rankDelta && p.rankDelta > 0 ? `+${p.rankDelta}` : p.rankDelta && p.rankDelta < 0 ? `${p.rankDelta}` : '=';
+
+    const safeName = sanitizeCsvCell(p.name);
+    const safeTeam = sanitizeCsvCell(p.teamName);
 
     if (isTeamMode) {
-      csvContent += `${idx + 1};${p.deviceNumber || '-'};${escapedName};${escapedTeam};${p.score || 0};${p.roundScore || 0};${seconds};${p.totalTimeMs || 0};${status}\n`;
+      csvContent += `${p.rank || '-'};${deltaStr};${p.deviceNumber || '-'};${safeName};${safeTeam};${p.score || 0};${p.roundScore || 0};${p.lastQuestionScore || 0};${seconds};${p.totalTimeMs || 0};${status}\n`;
     } else {
-      csvContent += `${idx + 1};${p.deviceNumber || '-'};${escapedName};${p.score || 0};${p.roundScore || 0};${seconds};${p.totalTimeMs || 0};${status}\n`;
+      csvContent += `${p.rank || '-'};${deltaStr};${p.deviceNumber || '-'};${safeName};${p.score || 0};${p.roundScore || 0};${p.lastQuestionScore || 0};${seconds};${p.totalTimeMs || 0};${status}\n`;
     }
   });
 
@@ -857,7 +982,18 @@ io.on('connection', (socket: Socket) => {
     socket.emit('tunnel-ready', { url: publicTunnelUrl });
   }
 
-  // 🌟 DZĪVĀ TV EKRĀNA TĒMAS PĀRSLĒGŠANA
+  socket.on('host:toggle-blackout', (data: { pin: string; hostToken: string }) => {
+    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    const s = sessions.get(data.pin);
+    if (s) {
+      s.isBlackout = !s.isBlackout;
+      io.to(data.pin).emit('blackout-toggled', s.isBlackout);
+      io.to(`${data.pin}_host`).emit('blackout-toggled', s.isBlackout);
+      saveSnapshot(data.pin, true);
+      logEvent('INFO', `Skatuves Blackout režīms: ${s.isBlackout ? 'IESLĒGTS' : 'IZSLĒGTS'} (PIN ${data.pin})`);
+    }
+  });
+
   socket.on('host:set-theme', (data: { pin: string; hostToken: string; theme: string }) => {
     if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const s = sessions.get(data.pin);
@@ -870,7 +1006,6 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // 🌟 VADĪTĀJA PULTS PIESLĒGŠANĀS
   socket.on('host:join-remote', (data: { pin: string; hostToken: string; hostName?: string }) => {
     if (!isHostAuthorized(data.pin, data.hostToken)) {
       return socket.emit('error-message', 'Neautorizēta vadītāja piekļuve!');
@@ -894,6 +1029,7 @@ io.on('connection', (socket: Socket) => {
     socket.emit('host-state-update', {
       currentScene: s.currentScene,
       subState: s.subState,
+      isBlackout: !!s.isBlackout,
       currentSceneIdx: s.currentSceneIdx,
       totalScenes: s.scenes.length,
       nextSceneTitle: nextScene?.title || 'Spēles beigas',
@@ -937,6 +1073,7 @@ io.on('connection', (socket: Socket) => {
     s.buzzerRaceWinners = [];
     s.isPaused = false;
     s.isRevealed = false;
+    s.slideLoadedTime = Date.now();
     delete s.summaryStats;
 
     emitStateUpdate(data.pin, s.currentScene, 'READY');
@@ -957,10 +1094,23 @@ io.on('connection', (socket: Socket) => {
   socket.on('host:award-buzzer-points', (data: { pin: string; hostToken: string; playerId: string; points: number }) => {
     if (!isHostAuthorized(data.pin, data.hostToken)) return;
     const players = sessionScores.get(data.pin);
+    const s = sessions.get(data.pin);
     if (players && players.has(data.playerId)) {
+      const questionsScored = s?.questionsScored || 0;
+      if (questionsScored >= 1) {
+        const preLb = getSortedLeaderboard(players, false, false);
+        preLb.forEach((p, idx) => {
+          const org = players.get(p.id);
+          if (org) org.previousRank = idx + 1;
+        });
+      }
+
       const p = players.get(data.playerId)!;
+      p.lastQuestionScore = data.points;
       p.score = (p.score || 0) + data.points;
       p.roundScore = (p.roundScore || 0) + data.points;
+
+      if (s) s.questionsScored = (s.questionsScored || 0) + 1;
 
       io.to(data.pin).emit('play-sfx', { sfx: data.points > 0 ? 'correct' : 'wrong' });
       broadcastLeaderboardAndPersonalStats(data.pin, false);
@@ -1021,6 +1171,9 @@ io.on('connection', (socket: Socket) => {
       branding: data.projectData?.branding || {},
       connectionUrl: finalUrl,
       subState: 'IDLE',
+      isBlackout: false,
+      questionsScored: 0,
+      slideLoadedTime: Date.now(),
       votes: [],
       buzzerRaceWinners: [],
       currentScene: null,
@@ -1039,6 +1192,7 @@ io.on('connection', (socket: Socket) => {
     sessionHostTokens.set(pin, hostToken);
     if (!sessionScores.has(pin)) sessionScores.set(pin, new Map());
     if (!participants.has(pin)) participants.set(pin, new Set());
+    if (!sessionTeamPreviousRanks.has(pin)) sessionTeamPreviousRanks.set(pin, new Map());
 
     socket.join(pin);
     socket.join(`${pin}_host`);
@@ -1102,6 +1256,7 @@ io.on('connection', (socket: Socket) => {
       s.isRevealed = false;
       s.revealReadyToAdvance = false;
       s.subState = 'READY';
+      s.slideLoadedTime = Date.now();
 
       emitStateUpdate(data.pin, s.currentScene, 'READY');
       triggerVotesUpdatedThrottled(data.pin);
@@ -1120,6 +1275,7 @@ io.on('connection', (socket: Socket) => {
     sessionScores.delete(data.pin);
     participants.delete(data.pin);
     sessionHostTokens.delete(data.pin);
+    sessionTeamPreviousRanks.delete(data.pin);
     logEvent('INFO', `Sesija pabeigta un slēgta: PIN ${data.pin}`);
   });
 
@@ -1197,8 +1353,12 @@ io.on('connection', (socket: Socket) => {
           deviceNumber: players.size + 1,
           score: 0,
           roundScore: 0,
+          lastQuestionScore: 0,
           totalTimeMs: 0,
           roundTimeMs: 0,
+          rank: null,
+          previousRank: null,
+          rankDelta: 0,
           isDisabled: false,
           isBot: true,
           teamName: isTeamMode ? sampleTeams[i % sampleTeams.length] : '',
@@ -1272,11 +1432,21 @@ io.on('connection', (socket: Socket) => {
 
       if (playersMap) {
         playersMap.forEach((p) => {
-          if (p.roundScore) {
-            p.score = Math.max(0, p.score - p.roundScore);
-            p.roundScore = 0;
+          const pts = p.lastQuestionScore || 0;
+          if (pts > 0) {
+            p.score = Math.max(0, p.score - pts);
+            p.roundScore = Math.max(0, p.roundScore - pts);
+            p.lastQuestionScore = 0;
+          }
+          if (p.previousRank !== undefined && p.previousRank !== null) {
+            p.rank = p.previousRank;
+            p.rankDelta = 0;
           }
         });
+      }
+
+      if (s.questionsScored && s.questionsScored > 0) {
+        s.questionsScored--;
       }
 
       emitStateUpdate(data.pin, s.currentScene, 'SUMMARY', { summaryStats: s.summaryStats });
@@ -1313,6 +1483,7 @@ io.on('connection', (socket: Socket) => {
         s.currentPaging = 0;
         s.finalPodiumStage = 0;
         s.subState = 'READY';
+        s.slideLoadedTime = Date.now();
 
         emitStateUpdate(data.pin, s.currentScene, 'READY');
         logEvent('INFO', `Backtrack uz slaidu #${s.currentSceneIdx + 1} sesijā: PIN ${data.pin}`);
@@ -1321,10 +1492,10 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  // 🌟 ADVANCE AR DROŠĪBAS SLĒDZENI PRET NEJAUŠU SPAM-KLIKŠĶI
   socket.on('host:advance', (data: { pin: string; hostToken: string; force?: boolean } | string) => {
     const pin = typeof data === 'string' ? data : data?.pin;
     const token = typeof data === 'string' ? undefined : data?.hostToken;
-    const force = typeof data === 'object' ? !!data?.force : false;
     if (!isHostAuthorized(pin, token)) return;
 
     const s = sessions.get(pin);
@@ -1333,10 +1504,18 @@ io.on('connection', (socket: Socket) => {
 
     const now = Date.now();
     const lastAdvance = lastAdvanceTimestamps.get(pin) || 0;
-    if (!force && now - lastAdvance < 250) return;
+
+    // 🌟 Drošības slēdzene: noraidām zibenīgus dubultklikšķus zem 450ms
+    if (now - lastAdvance < 450) return;
     lastAdvanceTimestamps.set(pin, now);
 
-    if (s.subState === 'ACTIVE' && !force) return;
+    // 🌟 Drošības slēdzene: ja rit laiks (ACTIVE), NEĻAUJAM pārraut jautājumu pirmās 3 sekundes!
+    if (s.subState === 'ACTIVE') {
+      const activeElapsed = now - (s.questionStartTime || 0);
+      if (activeElapsed < 3000) {
+        return; // Nobloķēts, kamēr spēlētāji sāk atbildēt!
+      }
+    }
 
     clearSessionTimer(pin);
 
@@ -1344,7 +1523,7 @@ io.on('connection', (socket: Socket) => {
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
       const activePlayers = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
       const isTeamMode = !!s.branding?.teamModeEnabled;
-      const teamList = isTeamMode ? getSortedTeamLeaderboard(playersMap!, s?.branding?.teamScoringMode || 'AVG', false) : [];
+      const teamList = isTeamMode ? getSortedTeamLeaderboard(pin, playersMap!, s?.branding?.teamScoringMode || 'AVG', false, false) : [];
 
       if (!s.finalLeaderboardView) {
         s.finalLeaderboardView = isTeamMode && teamList.length > 0 ? 'TEAMS' : 'INDIVIDUAL';
@@ -1407,7 +1586,12 @@ io.on('connection', (socket: Socket) => {
       s.subState === 'REVEAL' ||
       (s.currentScene && (s.currentScene.type === 'BILLBOARD' || s.currentScene.type === 'LEADERBOARD' || s.currentScene.type === 'TIMER'))
     ) {
-      if (s.currentScene?.type === 'LEADERBOARD') resetRoundScores(pin);
+      // Slēdzene pret zibenīgu slaida pārlekšanu
+      if (now - (s.slideLoadedTime || 0) < 600) return;
+
+      if (s.currentScene?.type === 'LEADERBOARD') {
+        resetRoundScores(pin);
+      }
 
       s.currentSceneIdx++;
       if (s.currentSceneIdx >= s.scenes.length) {
@@ -1424,6 +1608,7 @@ io.on('connection', (socket: Socket) => {
       s.revealReadyToAdvance = false;
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
+      s.slideLoadedTime = Date.now();
       s.finalLeaderboardView = s.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL';
       delete s.summaryStats;
 
@@ -1481,7 +1666,7 @@ io.on('connection', (socket: Socket) => {
         broadcastLeaderboardAndPersonalStats(pin, isRound);
       }
       saveSnapshot(pin, true);
-    } 
+    }
     // 2. READY -> ACTIVE
     else if (s.subState === 'READY') {
       s.subState = 'ACTIVE';
@@ -1528,7 +1713,7 @@ io.on('connection', (socket: Socket) => {
         });
       }
       saveSnapshot(pin, true);
-    } 
+    }
     // 3. ACTIVE / PAUSED -> STATS
     else if (s.subState === 'ACTIVE' || s.subState === 'PAUSED') {
       s.subState = 'STATS';
@@ -1537,7 +1722,7 @@ io.on('connection', (socket: Socket) => {
       emitStateUpdate(pin, s.currentScene, 'STATS');
       io.to(pin).emit('video-command', 'pause');
       saveSnapshot(pin, true);
-    } 
+    }
     // 4. STATS -> SUMMARY
     else if (s.subState === 'STATS') {
       s.subState = 'SUMMARY';
@@ -1624,12 +1809,35 @@ io.on('connection', (socket: Socket) => {
 
       emitStateUpdate(pin, s.currentScene, 'SUMMARY', { summaryStats: s.summaryStats });
       saveSnapshot(pin, true);
-    } 
-    // 5. SUMMARY -> REVEAL
+    }
+    // 5. SUMMARY -> REVEAL (PUNKTU PIEŠĶIRŠANA AR MATEMĀTISKO PRECIZITĀTI)
     else if (s.subState === 'SUMMARY') {
       s.subState = 'REVEAL';
       s.isRevealed = true;
       s.revealReadyToAdvance = false;
+
+      const questionsScored = s.questionsScored || 0;
+
+      if (playersMap) {
+        if (questionsScored >= 1) {
+          const preLb = getSortedLeaderboard(playersMap, false, false);
+          preLb.forEach((p, idx) => {
+            const org = playersMap.get(p.id);
+            if (org) org.previousRank = idx + 1;
+          });
+
+          const preTeams = getSortedTeamLeaderboard(pin, playersMap, s?.branding?.teamScoringMode || 'AVG', false, false);
+          const teamPrevMap = new Map<string, number>();
+          preTeams.forEach((t, idx) => teamPrevMap.set(t.name, idx + 1));
+          sessionTeamPreviousRanks.set(pin, teamPrevMap);
+        } else {
+          playersMap.forEach((p) => {
+            p.previousRank = null;
+            p.rankDelta = 0;
+          });
+          sessionTeamPreviousRanks.delete(pin);
+        }
+      }
 
       const config = s.currentScene?.config || {};
       let correct = config.correctAnswers || [];
@@ -1653,12 +1861,12 @@ io.on('connection', (socket: Socket) => {
       const maxPoints = config.pointsMax ?? config.points ?? 10;
       const minPoints = config.pointsMin ?? (config.scoringMode === 'DECREASING' ? 1 : maxPoints);
       const isAnyOneMode = config.selectionMode === 'ANY_ONE';
+      const isMusicMode = config.playerUIMode === 'MUSIC_DUAL';
 
       const sortedVotes = [...s.votes].sort((a, b) => a.timeReceived - b.timeReceived);
       const votedPlayerIds = new Set(sortedVotes.map((v: any) => v.playerId));
       let correctCounter = 0;
 
-      // AFK DEAKTIVIZĀCIJA
       const maxMissed = s.branding?.maxMissedQuestions || 5;
       playersMap?.forEach((p) => {
         if (!p.isDisabled && !p.isBot) {
@@ -1668,14 +1876,15 @@ io.on('connection', (socket: Socket) => {
             p.missedQuestionsCount = (p.missedQuestionsCount || 0) + 1;
             if (p.missedQuestionsCount >= maxMissed) {
               p.isDisabled = true;
-              logEvent('WARN', `Spēlētājs ${p.name} (#${p.deviceNumber}) atslēgts AFK dēļ (${p.missedQuestionsCount} kavējumi)`);
+              logEvent('WARN', `Spēlētājs ${p.name} (#${p.deviceNumber}) atslēgts AFK dēļ`);
               io.to(pin).emit('player-disabled-afk', { playerId: p.id, name: p.name });
             }
           }
         }
       });
 
-      // PUNKTU APRĒĶINS
+      playersMap?.forEach((p) => { p.lastQuestionScore = 0; });
+
       sortedVotes.forEach((v: any) => {
         let earnedPercentage = 0;
 
@@ -1683,34 +1892,52 @@ io.on('connection', (socket: Socket) => {
           const userOrder = v.optionIds || [];
           const isExact = JSON.stringify(userOrder) === JSON.stringify(correct);
           earnedPercentage = isExact ? 100 : 0;
-        } else {
+        } else if (isMusicMode) {
+          let matched = 0;
           if (Array.isArray(v.optionIds)) {
             v.optionIds.forEach((opt: string) => {
-              if (correct.includes(opt)) {
-                const pct =
-                  correctnessMap[opt] !== undefined
-                    ? correctnessMap[opt]
-                    : isAnyOneMode
-                    ? 100
-                    : Math.round(100 / Math.max(1, correct.length));
-                earnedPercentage += pct;
-              }
+              if (correct.includes(opt)) matched++;
             });
           }
-          earnedPercentage = Math.min(100, earnedPercentage);
+          if (matched >= 2) earnedPercentage = 100;
+          else if (matched === 1) earnedPercentage = 50;
+          else earnedPercentage = 0;
+        } else {
+          let matchedCount = 0;
+          if (Array.isArray(v.optionIds)) {
+            v.optionIds.forEach((opt: string) => {
+              if (correct.includes(opt)) matchedCount++;
+            });
+          }
+
+          if (isAnyOneMode) {
+            earnedPercentage = matchedCount > 0 ? 100 : 0;
+          } else {
+            const required = correct.length || 1;
+            if (matchedCount === required && v.optionIds.length === required) {
+              earnedPercentage = 100;
+            } else if (matchedCount > 0 && v.optionIds.length <= required) {
+              earnedPercentage = Math.round((matchedCount / required) * 100);
+            } else {
+              earnedPercentage = 0;
+            }
+          }
         }
+
+        earnedPercentage = Math.min(100, earnedPercentage);
 
         if (playersMap) {
           const p = playersMap.get(v.playerId);
           if (p && !p.isDisabled) {
-            const timeTaken = v.timeSpentMs || 0;
-            p.totalTimeMs = (p.totalTimeMs || 0) + timeTaken;
-            p.roundTimeMs = (p.roundTimeMs || 0) + timeTaken;
+            const timeSpent = v.timeSpentMs || 0;
+            p.totalTimeMs = (p.totalTimeMs || 0) + timeSpent;
+            p.roundTimeMs = (p.roundTimeMs || 0) + timeSpent;
 
             if (earnedPercentage > 0) {
               let baseEarned = maxPoints;
+
               if (config.scoringMode === 'DECREASING') {
-                const timeLeft = Math.max(0, (s.currentScene.endTime || Date.now()) - v.timeReceived);
+                const timeLeft = Math.max(0, totalDuration - timeSpent);
                 baseEarned = Math.round(minPoints + (timeLeft / totalDuration) * (maxPoints - minPoints));
               }
 
@@ -1721,12 +1948,17 @@ io.on('connection', (socket: Socket) => {
               }
 
               const finalPts = Math.round((baseEarned * earnedPercentage) / 100);
+              p.lastQuestionScore = finalPts;
               p.score = (p.score || 0) + finalPts;
               p.roundScore = (p.roundScore || 0) + finalPts;
+            } else {
+              p.lastQuestionScore = 0;
             }
           }
         }
       });
+
+      s.questionsScored = (s.questionsScored || 0) + 1;
 
       emitStateUpdate(pin, s.currentScene, 'REVEAL', { isRevealed: true, summaryStats: s.summaryStats });
       io.to(pin).emit('results-revealed', { correctAnswers: correct, correctnessMap });
@@ -1754,6 +1986,7 @@ io.on('connection', (socket: Socket) => {
       s.revealReadyToAdvance = false;
       s.currentPaging = 0;
       s.finalPodiumStage = 0;
+      s.slideLoadedTime = Date.now();
       s.finalLeaderboardView = s.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL';
       delete s.summaryStats;
 
@@ -1762,8 +1995,34 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  // 🌟 PIEVIENOŠANĀS AR PRECIZU ISTABU SADALĪJUMU
-  socket.on('join-session', (data: { pin: string; name: string; playerId: string; teamName?: string; isCaptain?: boolean }) => {
+  socket.on('client:request-sync', (data: { pin: string; playerId: string; playerToken?: string }) => {
+    const s = sessions.get(data.pin);
+    const players = sessionScores.get(data.pin);
+    const player = players?.get(data.playerId);
+
+    if (s && player) {
+      const sanitizedScene = sanitizeSceneForPlayer(s.currentScene, s.subState);
+      const existingVote = s.votes?.find((v: any) => v.playerId === data.playerId);
+      const isInitialBaseline = (s.questionsScored || 0) <= 1;
+
+      socket.emit('client:sync-response', {
+        currentScene: sanitizedScene,
+        subState: s.subState,
+        isBlackout: !!s.isBlackout,
+        score: player.score || 0,
+        roundScore: player.roundScore || 0,
+        lastQuestionScore: player.lastQuestionScore || 0,
+        myRank: player.rank,
+        previousRank: player.previousRank,
+        rankDelta: isInitialBaseline ? 0 : (player.rankDelta ?? 0),
+        myChoice: existingVote ? (existingVote.optionIds?.join(', ') || null) : null,
+        myOptionIds: existingVote?.optionIds || [],
+        isInitialBaseline
+      });
+    }
+  });
+
+  socket.on('join-session', (data: { pin: string; name: string; playerId: string; playerToken?: string; teamName?: string; isCaptain?: boolean }) => {
     if (sessions.has(data.pin)) {
       const session = sessions.get(data.pin);
       const players = sessionScores.get(data.pin)!;
@@ -1805,10 +2064,8 @@ io.on('connection', (socket: Socket) => {
       socket.join(data.pin);
 
       if (data.name === 'EKRĀNS') {
-        // TV ekrāns pievienojas tikai ekrānu istabai
         socket.join(`${data.pin}_screens`);
       } else {
-        // Spēlētāju telefoni pievienojas spēlētāju istabai
         socket.join(`${data.pin}_players`);
 
         if (!participants.has(data.pin)) participants.set(data.pin, new Set());
@@ -1817,9 +2074,14 @@ io.on('connection', (socket: Socket) => {
         socketPlayerMap.set(socket.id, { pin: data.pin, playerId: data.playerId });
         playerIdToSocketMap.set(data.playerId, socket.id);
 
+        const sessionToken = (playerObj && playerObj.token)
+          ? playerObj.token
+          : (data.playerToken || crypto.randomBytes(16).toString('hex'));
+
         if (!playerObj) {
           playerObj = {
             id: data.playerId,
+            token: sessionToken,
             socketId: socket.id,
             name: data.name.trim(),
             teamName: sanitizedTeam,
@@ -1827,22 +2089,26 @@ io.on('connection', (socket: Socket) => {
             deviceNumber: players.size + 1,
             score: 0,
             roundScore: 0,
+            lastQuestionScore: 0,
             totalTimeMs: 0,
             roundTimeMs: 0,
+            rank: null,
+            previousRank: null,
+            rankDelta: 0,
             isDisabled: false,
-            isBot: false,
+            isBot: true,
             missedQuestionsCount: 0
           };
           players.set(data.playerId, playerObj);
         } else {
           playerObj.socketId = socket.id;
+          if (!playerObj.token) playerObj.token = sessionToken;
           if (data.name) playerObj.name = data.name.trim();
           playerObj.teamName = sanitizedTeam;
           if (isTeamMode && data.isCaptain !== undefined) playerObj.isCaptain = !!data.isCaptain;
         }
       }
 
-      // Pilnais saraksts tiek sūtīts TIKAI TV ekrānam un vadītājam
       io.to(`${data.pin}_screens`).emit('presence-update', {
         count: players.size,
         players: Array.from(players.values())
@@ -1851,34 +2117,39 @@ io.on('connection', (socket: Socket) => {
         count: players.size,
         players: Array.from(players.values())
       });
-
-      // Telefoniem sūtām uz _players istabu (lai neskartu TV ekrānu)
       io.to(`${data.pin}_players`).emit('presence-update', { count: players.size });
 
       const sanitizedScene = sanitizeSceneForPlayer(session?.currentScene, session?.subState);
 
-      const sortedLb = getSortedLeaderboard(players, false);
-      const sortedTeams = getSortedTeamLeaderboard(players, session?.branding?.teamScoringMode || 'AVG', false);
+      const isInitialBaseline = (session.questionsScored || 0) <= 1;
+      const sortedLb = getSortedLeaderboard(players, false, isInitialBaseline);
+      const sortedTeams = getSortedTeamLeaderboard(data.pin, players, session?.branding?.teamScoringMode || 'AVG', false, isInitialBaseline);
       const myRankIdx = sortedLb.findIndex((p) => p.id === data.playerId);
       const myTeamRankIdx = sanitizedTeam ? sortedTeams.findIndex((t) => t.name.toLowerCase() === sanitizedTeam.toLowerCase()) : -1;
 
       socket.emit('join-success', {
         pin: data.pin,
         playerId: data.playerId,
+        playerToken: playerObj?.token,
         deviceNumber: playerObj?.deviceNumber || 1,
         branding: session?.branding || {},
         connectionUrl: session?.connectionUrl || publicTunnelUrl || '',
         currentScene: sanitizedScene,
         subState: session?.subState,
+        isBlackout: !!session?.isBlackout,
         teamName: playerObj?.teamName || '',
         isCaptain: !!playerObj?.isCaptain,
         score: playerObj?.score || 0,
         roundScore: playerObj?.roundScore || 0,
+        lastQuestionScore: playerObj?.lastQuestionScore || 0,
         myRank: myRankIdx !== -1 ? myRankIdx + 1 : 1,
+        previousRank: null,
+        rankDelta: 0,
         totalPlayers: sortedLb.length,
         teamRank: myTeamRankIdx !== -1 ? myTeamRankIdx + 1 : null,
         totalTeams: sortedTeams.length,
-        teamScore: myTeamRankIdx !== -1 ? sortedTeams[myTeamRankIdx].score : null
+        teamScore: myTeamRankIdx !== -1 ? sortedTeams[myTeamRankIdx].score : null,
+        isInitialBaseline
       });
 
       broadcastLeaderboardAndPersonalStats(data.pin, false);
@@ -1888,12 +2159,19 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  socket.on('participant:submit-answer', (data: { pin: string; playerId: string; answers?: string[]; answer?: string }) => {
+  socket.on('participant:submit-answer', (data: { pin: string; playerId: string; playerToken?: string; answers?: string[]; answer?: string }) => {
     const session = sessions.get(data.pin);
     const players = sessionScores.get(data.pin);
     if (!session || !players || !players.has(data.playerId)) {
       return socket.emit('error-message', 'Neautorizēta atbildes iesniegšana!');
     }
+
+    const player = players.get(data.playerId)!;
+
+    if (player.token && data.playerToken && player.token !== data.playerToken) {
+      return socket.emit('error-message', 'Drošības kļūda: Nederīgs spēlētāja autorizācijas tokens!');
+    }
+
     const answerList = Array.isArray(data.answers) ? data.answers : data.answer ? [data.answer] : [];
     handleVote(data.pin, answerList, data.playerId);
   });
@@ -1902,7 +2180,11 @@ io.on('connection', (socket: Socket) => {
     const binding = socketPlayerMap.get(socket.id);
     if (binding) {
       socketPlayerMap.delete(socket.id);
+      if (playerIdToSocketMap.get(binding.playerId) === socket.id) {
+        playerIdToSocketMap.delete(binding.playerId);
+      }
     }
+
     participants.forEach((set, pin) => {
       if (set.has(socket.id)) {
         set.delete(socket.id);

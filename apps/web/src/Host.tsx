@@ -1,20 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { socket } from './socket';
 import { BACKEND_URL, getAdminHeaders, getAdminKey } from './config';
-
-const formatThinkingTime = (ms?: number): string => {
-  if (ms === undefined || ms === null) return '0.00s';
-  return (ms / 1000).toFixed(2) + 's';
-};
-
-const escapeHtml = (unsafe: string = ''): string => {
-  return String(unsafe)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-};
+import { getOfflineQrCodeUrl, formatThinkingTime, escapeHtml } from './utils/formatting';
 
 export default function Host() {
   const [pin, setPin] = useState<string | null>(localStorage.getItem('active_pin'));
@@ -34,8 +21,11 @@ export default function Host() {
   const [playersList, setPlayersList] = useState<any[]>([]);
   const [teamLeaderboard, setTeamLeaderboard] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'SCENES' | 'ANALYZER' | 'TEAMS'>('SCENES');
-  const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('ORDER');
+  const [sortMode, setSortMode] = useState<'ORDER' | 'SCORE'>('SCORE');
   const [buzzerRaceWinner, setBuzzerRaceWinner] = useState<any>(null);
+
+  // 🌟 Skatuves avārijas aizsegs (Blackout)
+  const [isBlackout, setIsBlackout] = useState<boolean>(false);
 
   // 📱 Vadītāja tālruņa savienojums & Lielais QR logs
   const [isRemoteConnected, setIsRemoteConnected] = useState<boolean>(false);
@@ -169,6 +159,7 @@ export default function Host() {
                   setHostToken(rec.hostToken);
                   setCurrentScene(rec.state?.currentScene);
                   setScenes(rec.state?.scenes || []);
+                  if (rec.state?.isBlackout !== undefined) setIsBlackout(rec.state.isBlackout);
                   if (rec.state?.branding) setBranding(rec.state.branding);
                   localStorage.setItem('active_pin', rec.pin);
                   if (rec.hostToken) localStorage.setItem('active_host_token', rec.hostToken);
@@ -217,6 +208,7 @@ export default function Host() {
     setPlayersList([]);
     setTeamLeaderboard([]);
     setBuzzerRaceWinner(null);
+    setIsBlackout(false);
     setIsRemoteConnected(false);
     setShowLargeRemoteQr(false);
     localStorage.removeItem('active_pin');
@@ -229,6 +221,12 @@ export default function Host() {
       socket.emit('host:pause-session', { pin, hostToken });
     } else if (currentScene?.subState === 'PAUSED') {
       socket.emit('host:resume-session', { pin, hostToken });
+    }
+  };
+
+  const toggleBlackout = () => {
+    if (pin && hostToken) {
+      socket.emit('host:toggle-blackout', { pin, hostToken });
     }
   };
 
@@ -360,7 +358,6 @@ export default function Host() {
     socket.emit('host:update-player', { pin, hostToken, playerId, ...updates });
   };
 
-  // 🌟 PĀRSLĒGT PREZENTĀCIJAS TĒMU TIEŠI NO VADĪTĀJA PULTS
   const handleLiveThemeChange = (newTheme: string) => {
     setBranding((prev: any) => ({ ...prev, presentationTheme: newTheme }));
     if (pin) {
@@ -377,6 +374,7 @@ export default function Host() {
       }
       setScenes(data.state?.scenes || []);
       setCurrentScene(data.state?.currentScene);
+      if (data.state?.isBlackout !== undefined) setIsBlackout(data.state.isBlackout);
       if (data.state?.branding) setBranding(data.state.branding);
       localStorage.setItem('active_pin', data.pin);
     };
@@ -384,10 +382,15 @@ export default function Host() {
     const handleStateUpdate = (s: any) => {
       setCurrentScene(s);
       setBuzzerRaceWinner(null);
+      if (s?.isBlackout !== undefined) setIsBlackout(s.isBlackout);
       if (s?.type === 'LEADERBOARD') {
         setLeaderboardPage(0);
         setPodiumStage(0);
       }
+    };
+
+    const handleBlackoutToggled = (active: boolean) => {
+      setIsBlackout(active);
     };
 
     const handlePresence = (data: any) => {
@@ -416,6 +419,7 @@ export default function Host() {
 
     socket.on('session-info', handleSessionInfo);
     socket.on('state-update', handleStateUpdate);
+    socket.on('blackout-toggled', handleBlackoutToggled);
     socket.on('presence-update', handlePresence);
     socket.on('leaderboard-update', handleLeaderboard);
     socket.on('team-leaderboard-update', handleTeamLeaderboard);
@@ -440,6 +444,9 @@ export default function Host() {
       } else if ((e.key === 'p' || e.key === 'P') && pin && hostToken) {
         e.preventDefault();
         handlePauseResume();
+      } else if ((e.key === 'b' || e.key === 'B') && pin && hostToken) {
+        e.preventDefault();
+        toggleBlackout();
       } else if ((e.key === 'c' || e.key === 'C') && pin) {
         e.preventDefault();
         toggleChart();
@@ -457,6 +464,7 @@ export default function Host() {
     return () => {
       socket.off('session-info', handleSessionInfo);
       socket.off('state-update', handleStateUpdate);
+      socket.off('blackout-toggled', handleBlackoutToggled);
       socket.off('presence-update', handlePresence);
       socket.off('leaderboard-update', handleLeaderboard);
       socket.off('team-leaderboard-update', handleTeamLeaderboard);
@@ -471,15 +479,13 @@ export default function Host() {
   const isFinalLb = currentScene?.type === 'LEADERBOARD' && currentScene?.config?.lbType === 'FINAL';
 
   const joinUrl = `${activeBaseUrl}/?pin=${pin}`;
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(joinUrl)}`;
+  const qrCodeUrl = getOfflineQrCodeUrl(joinUrl, 220);
 
   const hostRemoteUrl = pin && hostToken
     ? `${activeBaseUrl}/host-remote?pin=${pin}&token=${hostToken}`
     : '';
 
-  const hostRemoteQrUrl = hostRemoteUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${encodeURIComponent(hostRemoteUrl)}`
-    : '';
+  const hostRemoteQrUrl = hostRemoteUrl ? getOfflineQrCodeUrl(hostRemoteUrl, 350) : '';
 
   const sortedPlayers = [...playersList].sort((a, b) => {
     if (sortMode === 'SCORE') {
@@ -494,6 +500,25 @@ export default function Host() {
 
   const isCurrentActive = currentScene?.subState === 'ACTIVE';
   const isCurrentPaused = currentScene?.subState === 'PAUSED';
+
+  // 🌟 Mazā dinamikas emblēma vadītāja tabulai
+  const renderHostDeltaBadge = (delta?: number) => {
+    if (delta === undefined || delta === null || delta === 0) {
+      return <span style={{ color: '#666', fontSize: '0.75rem', fontWeight: 'bold' }}>—</span>;
+    }
+    if (delta > 0) {
+      return (
+        <span style={{ color: '#00ff66', background: 'rgba(0, 255, 102, 0.15)', padding: '1px 5px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: '900' }}>
+          ▲ +{delta}
+        </span>
+      );
+    }
+    return (
+      <span style={{ color: '#ff4d4d', background: 'rgba(255, 77, 77, 0.15)', padding: '1px 5px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: '900' }}>
+        ▼ {Math.abs(delta)}
+      </span>
+    );
+  };
 
   if (!pin) {
     return (
@@ -544,7 +569,7 @@ export default function Host() {
               <span style={{ color: '#00ff00', fontWeight: 'bold' }}>✓ Wi-Fi adrese: </span>
               <code>http://{localIp}:5173</code>
               <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '4px' }}>
-                Telefoniem jābūt tajā pašā Wi-Fi tīklā.
+                Telefoniem jābūt tajā pašā Wi-Fi tīklā. Strādā 100% bezsaistē!
               </div>
             </div>
           ) : (
@@ -635,7 +660,6 @@ export default function Host() {
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* 🌟 ĀTRĀ TV TĒMAS MAIŅA NO VADĪTĀJA PULTS */}
           <select
             value={branding?.presentationTheme || 'TV_SHOW'}
             onChange={(e) => handleLiveThemeChange(e.target.value)}
@@ -674,6 +698,20 @@ export default function Host() {
             </button>
           )}
 
+          <button
+            onClick={toggleBlackout}
+            style={{
+              ...btnPurple,
+              background: isBlackout ? '#dc3545' : '#333',
+              border: isBlackout ? '2px solid #fff' : '1px solid #666',
+              color: isBlackout ? '#fff' : '#ffc107',
+              fontWeight: 'bold'
+            }}
+            title="Aizsegt / Atvērt lielo ekrānu [B]"
+          >
+            {isBlackout ? '🔴 Aizsegts [B]' : '⬛ Aizsegs [B]'}
+          </button>
+
           {(isCurrentActive || isCurrentPaused || currentScene?.subState === 'STATS') && (
             <button onClick={handleRestartQuestion} style={btnGray} title="Sākt šo jautājumu no jauna bez punktiem">
               🔄 No jauna
@@ -690,7 +728,7 @@ export default function Host() {
 
           {isTeamMode && (
             <button onClick={toggleTeamView} style={{ ...btnPurple, background: '#17a2b8' }} title="Pārslēgt Komandu / Individuālo rangu ekrānā [T]">
-              👥/👤 Komandu skats [T]
+              👥/👤 Komandas [T]
             </button>
           )}
 
@@ -737,6 +775,27 @@ export default function Host() {
           </button>
         </div>
       </div>
+
+      {isBlackout && (
+        <div
+          onClick={toggleBlackout}
+          style={{
+            background: '#dc3545',
+            color: '#fff',
+            padding: '10px',
+            textAlign: 'center',
+            fontWeight: 'bold',
+            fontSize: '1.05rem',
+            borderRadius: '8px',
+            marginBottom: '15px',
+            cursor: 'pointer',
+            border: '2px solid #fff',
+            boxShadow: '0 0 20px rgba(220,53,69,0.8)'
+          }}
+        >
+          🚨 SKATUVES EKRĀNS IR AIZSEGTS (BLACKOUT AKTĪVS)! Klikšķini šeit vai spied [B], lai atvērtu.
+        </div>
+      )}
 
       {/* 🔊 SKAŅU DĒLIS */}
       <div style={soundboardContainer}>
@@ -808,7 +867,6 @@ export default function Host() {
         </div>
       )}
 
-      {/* 🌟 FINĀLA APBALVOŠANA (VIENSKAITLIS: VICEČEMPIONS / ABSOLŪTAIS ČEMPIONS) */}
       {isFinalLb && (
         <div style={{ background: '#1c3d1c', border: '2px solid #28a745', padding: '15px', borderRadius: '8px', textAlign: 'center', marginBottom: '20px' }}>
           <h3 style={{ margin: '0 0 8px 0', color: '#00ff00' }}>🥇 FINĀLA APBALVOŠANA NORIT</h3>
@@ -910,7 +968,7 @@ export default function Host() {
               <img
                 src={qrCodeUrl}
                 alt="Player QR"
-                style={{ width: '40px', height: '40px', borderRadius: '4px', cursor: 'pointer', border: '1px solid #fff' }}
+                style={{ width: '40px', height: '40px', borderRadius: '4px', cursor: 'pointer', border: '1px solid #fff', background: '#fff' }}
                 title="Atvērt spēles saiti"
                 onClick={() => window.open(joinUrl, '_blank')}
               />
@@ -954,16 +1012,17 @@ export default function Host() {
           </div>
         )}
 
+        {/* 🌟 DALĪBNIEKU PĀRVALDĪBA AR VIETU DINAMIKU */}
         {activeTab === 'ANALYZER' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <h4 style={{ margin: 0, color: '#00e5ff' }}>👥 DALĪBNIEKU PĀRVALDĪBA ({playersList.length})</h4>
               <div style={{ display: 'flex', gap: '6px' }}>
+                <button onClick={() => setSortMode('SCORE')} style={{ ...btnSmallSort, background: sortMode === 'SCORE' ? '#007bff' : '#333' }}>
+                  Pēc punktiem (Rangs)
+                </button>
                 <button onClick={() => setSortMode('ORDER')} style={{ ...btnSmallSort, background: sortMode === 'ORDER' ? '#007bff' : '#333' }}>
                   Pēc pults #
-                </button>
-                <button onClick={() => setSortMode('SCORE')} style={{ ...btnSmallSort, background: sortMode === 'SCORE' ? '#007bff' : '#333' }}>
-                  Pēc punktiem
                 </button>
               </div>
             </div>
@@ -971,17 +1030,26 @@ export default function Host() {
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
               <thead>
                 <tr style={{ borderBottom: '2px solid #444', color: '#aaa' }}>
+                  <th style={{ padding: '8px' }}>Rangs</th>
+                  <th style={{ padding: '8px' }}>Dinamika</th>
                   <th style={{ padding: '8px' }}>Pults</th>
                   <th style={{ padding: '8px' }}>Vārds</th>
                   {isTeamMode && <th style={{ padding: '8px' }}>Komanda</th>}
-                  <th style={{ padding: '8px' }}>Punkti</th>
+                  <th style={{ padding: '8px' }}>Kopā pt</th>
+                  <th style={{ padding: '8px' }}>Pēdējais pt</th>
                   <th style={{ padding: '8px' }}>Laiks</th>
                   <th style={{ padding: '8px', textAlign: 'center' }}>Darbība</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedPlayers.slice(0, 100).map((p) => (
+                {sortedPlayers.slice(0, 100).map((p, idx) => (
                   <tr key={p.id} style={{ borderBottom: '1px solid #2a2a2a', opacity: p.isDisabled ? 0.4 : 1 }}>
+                    <td style={{ padding: '8px', fontWeight: 'bold', color: p.rank && p.rank <= 3 ? 'gold' : '#fff' }}>
+                      #{sortMode === 'SCORE' ? idx + 1 : (p.rank || '-')}
+                    </td>
+                    <td style={{ padding: '8px' }}>
+                      {renderHostDeltaBadge(p.rankDelta)}
+                    </td>
                     <td style={{ padding: '8px', fontWeight: 'bold', color: '#ffc107' }}>#{p.deviceNumber || 1}</td>
                     <td style={{ padding: '8px' }}>
                       <input value={p.name} onChange={(e) => updatePlayer(p.id, { name: e.target.value })} style={tableInput} />
@@ -999,6 +1067,9 @@ export default function Host() {
                     )}
                     <td style={{ padding: '8px' }}>
                       <input type="number" value={p.score ?? 0} onChange={(e) => updatePlayer(p.id, { score: Number(e.target.value) })} style={{ ...tableInput, width: '60px', color: 'gold', fontWeight: 'bold' }} />
+                    </td>
+                    <td style={{ padding: '8px', color: p.lastQuestionScore > 0 ? '#00ff66' : '#888', fontWeight: 'bold' }}>
+                      {p.lastQuestionScore > 0 ? `+${p.lastQuestionScore}` : '0'}
                     </td>
                     <td style={{ padding: '8px', color: '#00e5ff' }}>{formatThinkingTime(p.totalTimeMs)}</td>
                     <td style={{ padding: '8px', textAlign: 'center' }}>
@@ -1030,6 +1101,7 @@ export default function Host() {
           </div>
         )}
 
+        {/* 🌟 KOMANDU KOPVĒRTĒJUMS AR DINAMIKU */}
         {isTeamMode && activeTab === 'TEAMS' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
             <h4 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>🏆 KOMANDU KOPVĒRTĒJUMS ({teamLeaderboard.length})</h4>
@@ -1040,6 +1112,7 @@ export default function Host() {
                 <thead>
                   <tr style={{ borderBottom: '2px solid #444', color: '#aaa' }}>
                     <th style={{ padding: '8px' }}>Vieta</th>
+                    <th style={{ padding: '8px' }}>Dinamika</th>
                     <th style={{ padding: '8px' }}>Komandas nosaukums</th>
                     <th style={{ padding: '8px' }}>Dalībnieki</th>
                     <th style={{ padding: '8px' }}>Vidējais / Kopējais rezultāts</th>
@@ -1049,6 +1122,7 @@ export default function Host() {
                   {teamLeaderboard.map((t, idx) => (
                     <tr key={t.name} style={{ borderBottom: '1px solid #2a2a2a' }}>
                       <td style={{ padding: '8px', fontWeight: 'bold', color: '#00ff00' }}>#{idx + 1}</td>
+                      <td style={{ padding: '8px' }}>{renderHostDeltaBadge(t.rankDelta)}</td>
                       <td style={{ padding: '8px', fontWeight: 'bold', color: '#fff', fontSize: '1rem' }}>{t.name}</td>
                       <td style={{ padding: '8px', color: '#aaa' }}>{t.memberCount} spēlētāji ({t.members?.join(', ')})</td>
                       <td style={{ padding: '8px', color: 'gold', fontWeight: 'bold', fontSize: '1.1rem' }}>{t.score} pt</td>
@@ -1061,7 +1135,6 @@ export default function Host() {
         )}
       </div>
 
-      {/* 🌟 PALIELINĀTĀ VADĪTĀJA QR KODA MODĀLAIS LOGS */}
       {showLargeRemoteQr && (
         <div
           style={modalOverlay}
@@ -1070,7 +1143,7 @@ export default function Host() {
           <div style={modalCard} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ color: '#00e5ff', margin: '0 0 10px 0' }}>📱 Vadītāja tālruņa pults</h2>
             <p style={{ color: '#ccc', fontSize: '0.9rem', marginBottom: '15px' }}>
-              Noskenē šo QR kodu ar tālruņa kameru, lai atvērtu vadītāja špikleri un pulti:
+              Noskenē šo QR kodu ar tālruņa kameru, lai atvērtu vadītāja špikleri un pulti (strādā 100% lokāli):
             </p>
 
             <div style={{ background: '#fff', padding: '12px', borderRadius: '16px', display: 'inline-block' }}>
