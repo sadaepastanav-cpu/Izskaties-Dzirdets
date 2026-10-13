@@ -85,7 +85,10 @@ export default function Player() {
 
   const [showCaptainQrModal, setShowCaptainQrModal] = useState(false);
 
-  // Pārbaudām, vai ierīce fiziski atbalsta Fullscreen API (Android atbalsta, iPhone Safari nē)
+  // 🌟 KONTAKTU ANKETAS STĀVOKLIS
+  const [contactsForm, setContactsForm] = useState<Record<string, string>>({});
+  const [isContactsSubmitted, setIsContactsSubmitted] = useState<boolean>(false);
+
   const isFullscreenSupported = typeof document !== 'undefined' && Boolean(
     document.fullscreenEnabled || (document as any).webkitFullscreenEnabled
   );
@@ -115,7 +118,7 @@ export default function Player() {
   const [podiumStage, setPodiumStage] = useState<number>(0);
   const [buzzerTestPresses, setBuzzerTestPresses] = useState(0);
 
-  // 🌟 Zibenīgās personīgās statistikas stāvoklis
+  // 🌟 Personīgās statistikas stāvoklis
   const [personalStats, setPersonalStats] = useState<{
     myRank: number | null;
     previousRank?: number | null;
@@ -197,7 +200,7 @@ export default function Player() {
     }
   };
 
-  // 🌟 1. NEIZSLĒDZAMĀ EKRĀNA DZINĒJS (iOS Safari & Android No-Sleep)
+  // 🌟 NEIZSLĒDZAMĀ EKRĀNA DZINĒJS
   useEffect(() => {
     let wakeLock: any = null;
     let isLocked = false;
@@ -232,7 +235,6 @@ export default function Player() {
     document.addEventListener('touchstart', handleUserInteraction, { passive: true });
     document.addEventListener('click', handleUserInteraction, { passive: true });
 
-    // iOS Safari mikrovideoplūsma fona aizmigšanas bloķēšanai
     try {
       const canvas = document.createElement('canvas');
       canvas.width = 2;
@@ -391,6 +393,18 @@ export default function Player() {
         setMyChoice(data.myChoice);
         localStorage.setItem('player_current_choice', data.myChoice);
       }
+      if (data?.topAnswer) {
+        setMusicTopChoice(data.topAnswer);
+        localStorage.setItem('player_music_top', data.topAnswer);
+      }
+      if (data?.bottomAnswer) {
+        setMusicBottomChoice(data.bottomAnswer);
+        localStorage.setItem('player_music_bottom', data.bottomAnswer);
+      }
+      if (data?.myContacts && Object.keys(data.myContacts).length > 0) {
+        setContactsForm(data.myContacts);
+        setIsContactsSubmitted(true);
+      }
       if (data?.myOptionIds && Array.isArray(data.myOptionIds)) {
         setSelectedMultipleOptions(data.myOptionIds);
       }
@@ -464,8 +478,7 @@ export default function Player() {
         setLeaderboardType(data.lbType.toUpperCase());
       }
 
-      // Haptika tikai tad, ja tas ir īsts kāpums (no 2. kārtas)
-      if (!data?.isInitialBaseline) {
+      if (!data?.isInitialBaseline && data?.lbType !== 'ROUND') {
         if (data?.rankDelta && data.rankDelta > 0) {
           triggerHaptic('success');
         } else if (data?.rankDelta && data.rankDelta < 0) {
@@ -532,6 +545,8 @@ export default function Player() {
       setOrderedItems([]);
       setBuzzerPressedOrder(null);
       setIsMyBuzzerTurn(false);
+      setContactsForm({});
+      setIsContactsSubmitted(false);
       setPin('');
       setPlayerToken('');
       setPersonalStats(null);
@@ -668,7 +683,7 @@ export default function Player() {
     );
   };
 
-  // Muzikālā spēle
+  // 🎵 Muzikālā spēle
   const handleMusicOptionClick = (option: string, letter: string, isTopCategory: boolean) => {
     if (!socket || subState !== 'ACTIVE' || isDisabledAfk) return;
     triggerHaptic('tap');
@@ -678,36 +693,44 @@ export default function Player() {
       if (isTopCategory) setStagedMusicTop(choiceValue);
       else setStagedMusicBottom(choiceValue);
     } else {
-      let newTop = musicTopChoice;
-      let newBottom = musicBottomChoice;
+      let updatedTop = musicTopChoice;
+      let updatedBottom = musicBottomChoice;
 
       if (isTopCategory) {
         if (musicTopChoice) return;
-        newTop = choiceValue;
+        updatedTop = choiceValue;
         setMusicTopChoice(choiceValue);
         localStorage.setItem('player_music_top', choiceValue);
+
+        socket.emit('participant:submit-answer', {
+          pin,
+          playerId,
+          playerToken,
+          category: 'TOP',
+          answers: [choiceValue],
+          answer: choiceValue
+        });
       } else {
         if (musicBottomChoice) return;
-        newBottom = choiceValue;
+        updatedBottom = choiceValue;
         setMusicBottomChoice(choiceValue);
         localStorage.setItem('player_music_bottom', choiceValue);
+
+        socket.emit('participant:submit-answer', {
+          pin,
+          playerId,
+          playerToken,
+          category: 'BOTTOM',
+          answers: [choiceValue],
+          answer: choiceValue
+        });
       }
 
-      const activeAnswers = [newTop, newBottom].filter(Boolean) as string[];
-      const combinedChoice = activeAnswers.join(' + ');
-
-      if (newTop && newBottom) {
-        setMyChoice(combinedChoice);
-        localStorage.setItem('player_current_choice', combinedChoice);
+      if (updatedTop && updatedBottom) {
+        const combined = `${updatedTop} + ${updatedBottom}`;
+        setMyChoice(combined);
+        localStorage.setItem('player_current_choice', combined);
       }
-
-      socket.emit('participant:submit-answer', {
-        pin,
-        playerId,
-        playerToken,
-        answers: activeAnswers,
-        answer: combinedChoice
-      });
     }
   };
 
@@ -852,6 +875,22 @@ export default function Player() {
     socket.emit('participant:test-buzzer', { pin, playerId });
   };
 
+  // 🌟 KONTAKTU IESNIEGŠANA
+  const handleContactsSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!socket || !pin) return;
+    triggerHaptic('success');
+
+    socket.emit('participant:submit-contacts', {
+      pin,
+      playerId,
+      playerToken,
+      contacts: contactsForm
+    });
+
+    setIsContactsSubmitted(true);
+  };
+
   const handleLeaveOrNewGame = () => {
     sessionStorage.removeItem('player_active_session');
     localStorage.removeItem('player_pin');
@@ -876,6 +915,8 @@ export default function Player() {
     setOrderedItems([]);
     setBuzzerPressedOrder(null);
     setIsMyBuzzerTurn(false);
+    setContactsForm({});
+    setIsContactsSubmitted(false);
     setPin('');
     setPlayerToken('');
     setPersonalStats(null);
@@ -917,6 +958,7 @@ export default function Player() {
   const isBuzzerRace = scene?.type === 'BUZZER_RACE';
   const isOrdering = scene?.type === 'ORDERING';
   const isMusicMode = playerUIMode === 'MUSIC_DUAL';
+  const isContactsScene = scene?.type === 'CONTACTS';
 
   const renderGameLogo = () => {
     if (!branding.appLogo || branding.gameLogoPosition === 'NONE') return null;
@@ -1009,7 +1051,6 @@ export default function Player() {
             </button>
           </form>
 
-          {/* 🌟 Ieteikums iPhone lietotājiem par pilnekrānu */}
           {isIosDevice && (
             <div style={{ marginTop: '12px', fontSize: '0.72rem', color: '#888', lineHeight: 1.3 }}>
               💡 iPhone pilnekrānam: Safari apakšā spied <strong>'Dalīties'</strong> (Share) ➔ <strong>'Pievienot sākuma ekrānam'</strong>
@@ -1051,7 +1092,6 @@ export default function Player() {
           </div>
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            {/* Pilnekrāna poga rādās tikai ierīcēs, kas to atbalsta (Android) */}
             {isFullscreenSupported && (
               <button onClick={toggleFullscreen} style={btnFullscreenBadge} title="Pilnekrāns">⛶</button>
             )}
@@ -1169,6 +1209,18 @@ export default function Player() {
     );
   }
 
+  // 🌟 Noklusētie kontaktu lauki, ja studijā nav definēti
+  const defaultContactFields = [
+    { id: 'fullname', label: 'Vārds, Uzvārds', placeholder: 'Jānis Bērziņš', required: true, type: 'text' },
+    { id: 'email', label: 'E-pasta adrese', placeholder: 'janis@piemers.lv', required: true, type: 'email' },
+    { id: 'phone', label: 'Tālruņa numurs', placeholder: '+371 20000000', required: false, type: 'tel' },
+    { id: 'company', label: 'Uzņēmums / Amats', placeholder: 'SIA Uzņēmums, Projektu vadītājs', required: false, type: 'text' }
+  ];
+
+  const activeContactFields = (scene?.config?.contactFields && scene.config.contactFields.length > 0)
+    ? scene.config.contactFields
+    : defaultContactFields;
+
   return (
     <div style={appBgStyle}>
       <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
@@ -1193,7 +1245,6 @@ export default function Player() {
             </button>
           )}
 
-          {/* Pilnekrāna poga rādās tikai ierīcēs, kas to atbalsta (Android) */}
           {isFullscreenSupported && (
             <button
               onClick={toggleFullscreen}
@@ -1296,6 +1347,68 @@ export default function Player() {
           </div>
         )}
 
+        {/* 🌟 JAUNS: KONTAKTU SLAIDA ANKETA TĀLRUNĪ */}
+        {isContactsScene && subState !== 'PAUSED' && (
+          <div style={{ ...infoCard, width: '92%', maxWidth: '380px', maxHeight: '82dvh', overflowY: 'auto', textAlign: 'left', border: '2px solid #00e5ff' }}>
+            <div style={{ textAlign: 'center', marginBottom: '8px' }}>
+              <div style={{ fontSize: '2.5rem', marginBottom: '4px' }}>📋</div>
+              <h2 style={{ color: '#00e5ff', margin: '0 0 4px 0', fontSize: '1.3rem' }}>
+                {scene?.config?.contactsTitle || 'DALĪBNIEKA ANKETA'}
+              </h2>
+              <p style={{ color: '#ccc', fontSize: '0.8rem', margin: 0, lineHeight: 1.3 }}>
+                {scene?.config?.contactsDescription || 'Lūdzu, ievadiet savus datus. Šī informācija netiks rādīta uz lielā ekrāna.'}
+              </p>
+            </div>
+
+            {isContactsSubmitted ? (
+              <div style={{ textAlign: 'center', padding: '15px 0' }}>
+                <div style={{ fontSize: '3rem', marginBottom: '8px' }}>✅</div>
+                <h3 style={{ color: '#00ff00', margin: '0 0 6px 0' }}>PALDIES!</h3>
+                <p style={{ color: '#fff', fontSize: '0.9rem', marginBottom: '15px' }}>
+                  Tava kontaktinformācija ir veiksmīgi reģistrēta!
+                </p>
+                <button
+                  onClick={() => setIsContactsSubmitted(false)}
+                  style={{ ...btnJoin, background: '#333', border: '1px solid #666', fontSize: '0.85rem', padding: '8px 16px' }}
+                >
+                  ✏️ Labot informāciju
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleContactsSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                {activeContactFields.map((f: any) => {
+                  const currentVal = contactsForm[f.id] !== undefined 
+                    ? contactsForm[f.id] 
+                    : (f.id === 'fullname' || f.id === 'name') ? name : '';
+
+                  return (
+                    <div key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <label style={{ fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold' }}>
+                        {f.label} {f.required && <span style={{ color: '#ff4d4d' }}>*</span>}
+                      </label>
+                      <input
+                        type={f.type || 'text'}
+                        required={Boolean(f.required)}
+                        placeholder={f.placeholder || ''}
+                        value={currentVal}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setContactsForm((prev) => ({ ...prev, [f.id]: val }));
+                        }}
+                        style={{ ...mobileInput, textAlign: 'left', fontSize: '0.9rem', padding: '8px 10px', background: '#000' }}
+                      />
+                    </div>
+                  );
+                })}
+
+                <button type="submit" style={{ ...btnJoin, marginTop: '8px', background: '#00e5ff', color: '#000', fontWeight: '900' }}>
+                  🚀 IESNIEGT KONTAKTUS
+                </button>
+              </form>
+            )}
+          </div>
+        )}
+
         {scene?.type === 'TIMER' && subState !== 'PAUSED' && (
           <div style={infoCard}>
             <div style={{ fontSize: '3.5rem', marginBottom: '8px' }}>⏱️</div>
@@ -1318,7 +1431,7 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🌟 LĪDERU TABULA: TIKAI ŠEIT RĀDĀS STATISTIKA, VIETAS UN DELTAS! */}
+        {/* LĪDERU TABULA */}
         {scene?.type === 'LEADERBOARD' && subState !== 'PAUSED' && (
           <div style={infoCard}>
             {isFinalLeaderboard && podiumStage < 3 ? (
@@ -1380,12 +1493,6 @@ export default function Player() {
                     {isRoundLb ? 'Kārtā nopelnīti:' : 'Kopā nopelnīti:'}{' '}
                     <strong style={{ color: 'gold' }}>{currentScoreToDisplay} pt</strong>
                   </div>
-
-                  {isRoundLb && (
-                    <div style={{ fontSize: '0.8rem', color: '#aaa' }}>
-                      (Kopvērtējumā kopā: <strong style={{ color: '#fff' }}>{personalStats?.score || 0} pt</strong>)
-                    </div>
-                  )}
 
                   <div style={{ fontSize: '0.85rem', color: '#00e5ff', marginTop: '4px' }}>
                     ⏱️ {isRoundLb ? 'Kārtas laiks:' : 'Kopējais laiks:'} {formatThinkingTime(currentTimeToDisplay)}
@@ -1526,7 +1633,7 @@ export default function Player() {
         )}
 
         {/* 🎵 2. MUZIKĀLĀ SPĒLE */}
-        {isMusicMode && !isBuzzerRace && !isOrdering && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
+        {isMusicMode && !isBuzzerRace && !isOrdering && !isContactsScene && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '4px 0', overflowY: 'auto' }}>
             {subState === 'READY' && (
               <div style={infoCard}>
@@ -1650,7 +1757,6 @@ export default function Player() {
                   {subState === 'REVEAL' ? 'PAREIZĀ ATBILDE ATKLĀTA!' : 'BALSOŠANA NOSLĒGUSIES!'}
                 </h2>
                 
-                {/* 🌟 PĒC JAUTĀJUMA: RĀDA TIKAI UN VIENĪGI ŠĪ JAUTĀJUMA PUKTUS! */}
                 {subState === 'REVEAL' && (
                   <div style={{ marginTop: '12px', background: 'rgba(0,0,0,0.6)', padding: '12px', borderRadius: '12px', border: '1px solid #333' }}>
                     <div style={{ fontSize: '1.35rem', color: lastQuestionScore > 0 ? '#00ff00' : '#ff4d4d', fontWeight: '900', margin: '4px 0' }}>
@@ -1667,7 +1773,7 @@ export default function Player() {
         )}
 
         {/* 🅰️ 3. STANDARTA JAUTĀJUMI */}
-        {!isMusicMode && !isBuzzerRace && !isOrdering && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
+        {!isMusicMode && !isBuzzerRace && !isOrdering && !isContactsScene && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' }}>
             {subState === 'READY' && (
               <div style={infoCard}>
@@ -1801,7 +1907,6 @@ export default function Player() {
                     : 'BALSOŠANA NOSLĒGUSIES!'}
                 </h2>
 
-                {/* 🌟 PĒC JAUTĀJUMA: RĀDA TIKAI ŠĪ JAUTĀJUMA PUNKTUS! NEKĀDAS STATISTIKAS! */}
                 {subState === 'REVEAL' ? (
                   <div style={{ marginTop: '12px', background: 'rgba(0,0,0,0.6)', padding: '14px', borderRadius: '12px', border: '1px solid #333' }}>
                     <div style={{ fontSize: '1.4rem', color: lastQuestionScore > 0 ? '#00ff00' : '#ff4d4d', fontWeight: '900', margin: '4px 0' }}>

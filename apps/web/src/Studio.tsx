@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BACKEND_URL, getAdminHeaders } from './config';
-import { Slide, CanvasElement, MobileBranding, DiplomaConfig } from './types';
+import { Slide, CanvasElement, MobileBranding, DiplomaConfig, ContactField } from './types';
 import { getStudioFontSize, getOptionFontSize, hexToRgba } from './utils/formatting';
 
 const MEDIA_BASE_URL = `${BACKEND_URL}/project-media`;
@@ -17,6 +17,13 @@ interface ImportedQuestionPreview {
   notes?: string;
   playerUIMode?: 'AUTO' | 'CLASSIC_GRID' | 'TEXT_CARDS' | 'MUSIC_DUAL';
 }
+
+const defaultContactFieldsList: ContactField[] = [
+  { id: 'fullname', label: 'Vārds, Uzvārds', placeholder: 'Jānis Bērziņš', required: true, type: 'text' },
+  { id: 'email', label: 'E-pasts', placeholder: 'janis@piemers.lv', required: true, type: 'email' },
+  { id: 'phone', label: 'Tālrunis', placeholder: '+371 20000000', required: false, type: 'tel' },
+  { id: 'company', label: 'Uzņēmums / Amats', placeholder: 'SIA Uzņēmums, Vadītājs', required: false, type: 'text' }
+];
 
 export default function Studio() {
   const [activeFolder, setActiveFolder] = useState<string>(
@@ -38,6 +45,12 @@ export default function Studio() {
   // 🏆 Diplomu dizaina priekšskatījuma logs
   const [showDiplomaModal, setShowDiplomaModal] = useState(false);
 
+  // 🌟 Jauna kontaktu lauka ievades stāvoklis
+  const [newFieldLabel, setNewFieldLabel] = useState('');
+  const [newFieldPlaceholder, setNewFieldPlaceholder] = useState('');
+  const [newFieldType, setNewFieldType] = useState<'text' | 'email' | 'tel'>('text');
+  const [newFieldRequired, setNewFieldRequired] = useState(false);
+
   // Akordeona sadaļas
   const [sections, setSections] = useState({
     branding: true,
@@ -46,6 +59,7 @@ export default function Studio() {
     info: true,
     options: true,
     timer: true,
+    contacts: true, // 🌟 JAUNS
     style: false
   });
 
@@ -127,6 +141,9 @@ export default function Studio() {
         timerPlacement: 'CENTER',
         timerLabel: 'Pārtraukums',
         timerDuration: 300,
+        contactFields: defaultContactFieldsList,
+        contactsTitle: 'DALĪBNIEKU ANKETA',
+        contactsDescription: 'Lūdzu, ievadiet savus datus. Šī informācija netiks rādīta uz lielā ekrāna.',
         layout: [
           {
             id: 'q-box',
@@ -598,7 +615,7 @@ export default function Studio() {
     setShowImportModal(false);
     setImportRawText('');
     setImportedQuestions([]);
-    alert(`🎉 Veiksmīgi importēti ${generatedSlides.length} jautājumi ar precīziem punktu režīmiem!`);
+    alert(`🎉 Veiksmīgi importēti ${generatedSlides.length} jautājumi!`);
   };
 
   useEffect(() => {
@@ -765,6 +782,9 @@ export default function Studio() {
         timerPlacement: 'CENTER',
         timerLabel: 'Pārtraukums',
         timerDuration: 300,
+        contactFields: defaultContactFieldsList,
+        contactsTitle: 'DALĪBNIEKU ANKETA',
+        contactsDescription: 'Lūdzu, ievadiet savus datus. Šī informācija netiks rādīta uz lielā ekrāna.',
         backgroundUrl: activeSlide?.config?.backgroundUrl,
         layout: [
           {
@@ -988,7 +1008,6 @@ export default function Studio() {
     }
   };
 
-  // 🌟 MEDIJA PIEVIENOŠANA — ar Cover piegulēšanu un eleganti noapaļotām malām pēc noklusējuma!
   const addMediaElement = (fileName: string) => {
     const isVideo = /\.(mp4|mov|webm)$/i.test(fileName);
     const isAudio = /\.(mp3|wav|ogg)$/i.test(fileName);
@@ -1010,8 +1029,8 @@ export default function Studio() {
       visibility: isCurrentBillboard ? 'ALWAYS' : 'DURING_QUESTION',
       blurMode: 'NONE',
       blurAmount: 12,
-      fitMode: 'COVER',      // 🌟 Elegants noklusējums: aizpilda rāmi bez tukšumiem
-      borderRadius: 16      // 🌟 Elegants noapaļojums jau startā!
+      fitMode: 'COVER',
+      borderRadius: 16
     };
 
     updateActiveSlide((s) => s.config.layout.push(newElement), true);
@@ -1075,6 +1094,34 @@ export default function Studio() {
     setMobileBranding({ ...mobileBranding, predefinedTeams: current.filter((t) => t !== teamToRemove) });
   };
 
+  // 🌟 KONTAKTU LAUKU VADĪBA
+  const handleAddContactField = () => {
+    if (!newFieldLabel.trim()) return;
+    const newField: ContactField = {
+      id: `field_${Date.now()}`,
+      label: newFieldLabel.trim(),
+      placeholder: newFieldPlaceholder.trim(),
+      type: newFieldType,
+      required: newFieldRequired
+    };
+
+    updateActiveSlide((s) => {
+      const current = s.config.contactFields || defaultContactFieldsList;
+      s.config.contactFields = [...current, newField];
+    }, true);
+
+    setNewFieldLabel('');
+    setNewFieldPlaceholder('');
+    setNewFieldRequired(false);
+  };
+
+  const handleRemoveContactField = (idToRemove: string) => {
+    updateActiveSlide((s) => {
+      const current = s.config.contactFields || defaultContactFieldsList;
+      s.config.contactFields = current.filter((f) => f.id !== idToRemove);
+    }, true);
+  };
+
   const moveOrderingItem = (index: number, direction: 'UP' | 'DOWN') => {
     const opts = [...(activeSlide.config.options || [])];
     const targetIdx = direction === 'UP' ? index - 1 : index + 1;
@@ -1132,7 +1179,6 @@ export default function Studio() {
     return '#181818';
   };
 
-  // 🌟 Piegulēšanas režīma CSS atgriešana
   const getObjectFitCss = (mode?: 'CONTAIN' | 'COVER' | 'FILL'): React.CSSProperties['objectFit'] => {
     if (mode === 'FILL') return 'fill';
     if (mode === 'CONTAIN') return 'contain';
@@ -1194,6 +1240,9 @@ export default function Studio() {
                       timerPlacement: 'CENTER',
                       timerLabel: 'Pārtraukums',
                       timerDuration: 300,
+                      contactFields: defaultContactFieldsList,
+                      contactsTitle: 'DALĪBNIEKU ANKETA',
+                      contactsDescription: 'Lūdzu, ievadiet savus datus. Šī informācija netiks rādīta uz lielā ekrāna.',
                       layout: []
                     }
                   }
@@ -1278,7 +1327,7 @@ export default function Studio() {
             Snap Grid
           </label>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem', color: '#00e5ff', cursor: 'pointer' }} title="Rādīt TopBar zonu uz kanvas, lai redzētu drošo laukumu">
+          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem', color: '#00e5ff', cursor: 'pointer' }} title="Rādīt TopBar zonu uz kanvas">
             <input type="checkbox" checked={showTopBarGuide} onChange={(e) => setShowTopBarGuide(e.target.checked)} />
             TopBar gids
           </label>
@@ -1359,6 +1408,7 @@ export default function Studio() {
                     <span style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>
                       {s.config?.autoStart && <span title="Automātiskais starts" style={{ color: '#00e5ff', marginRight: '4px' }}>⚡</span>}
                       {s.type === 'TIMER' && <span title="Taimeris / Pulkstenis" style={{ color: '#ffc107', marginRight: '4px' }}>⏱️</span>}
+                      {s.type === 'CONTACTS' && <span title="Dalībnieku anketa" style={{ color: '#00e5ff', marginRight: '4px' }}>📋</span>}
                       {s.config?.playerUIMode === 'MUSIC_DUAL' && <span title="Muzikālā spēle" style={{ color: '#ff007f', marginRight: '4px' }}>🎵</span>}
                       {s.type === 'BILLBOARD' && <span title="Informatīvais ekrāns" style={{ color: '#28a745', marginRight: '4px' }}>📢</span>}
                       ☰ {idx + 1}. {s.title}
@@ -1414,7 +1464,6 @@ export default function Studio() {
               }
             }}
           >
-            {/* 🌟 Vizuālais TopBar drošās zonas gids */}
             {showTopBarGuide && activeSlide?.type !== 'BILLBOARD' && activeSlide?.type !== 'LEADERBOARD' && (
               <div
                 style={{
@@ -1604,6 +1653,47 @@ export default function Studio() {
                 </div>
               );
             })}
+
+            {/* 🌟 JAUNS: KONTAKTU SLAIDA KANVAS PRIEKŠSKATĪJUMS */}
+            {activeSlide?.type === 'CONTACTS' && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: '12%',
+                  top: '18%',
+                  width: '76%',
+                  background: 'rgba(10, 15, 25, 0.94)',
+                  border: '2px solid #00e5ff',
+                  borderRadius: '16px',
+                  padding: '20px 25px',
+                  textAlign: 'center',
+                  boxShadow: '0 10px 40px rgba(0, 229, 255, 0.25)',
+                  zIndex: 15,
+                  boxSizing: 'border-box'
+                }}
+              >
+                <div style={{ fontSize: '2.5rem', marginBottom: '4px' }}>📋</div>
+                <div style={{ fontSize: '1.4rem', color: '#00e5ff', fontWeight: '900', letterSpacing: '1px' }}>
+                  {activeSlide.config.contactsTitle || 'DALĪBNIEKU ANKETA'}
+                </div>
+                <div style={{ fontSize: '0.85rem', color: '#ccc', marginTop: '4px', marginBottom: '14px' }}>
+                  {activeSlide.config.contactsDescription || 'Lūdzu, atveriet savu tālruni un aizpildiet dalībnieka anketu!'}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', textAlign: 'left' }}>
+                  {((activeSlide.config.contactFields && activeSlide.config.contactFields.length > 0)
+                    ? activeSlide.config.contactFields
+                    : defaultContactFieldsList).map((f) => (
+                    <div key={f.id} style={{ background: '#181818', border: '1px solid #333', padding: '6px 10px', borderRadius: '6px', fontSize: '0.8rem' }}>
+                      <span style={{ color: '#ffc107', fontWeight: 'bold' }}>{f.label}</span> {f.required && <span style={{ color: '#ff4d4d' }}>*</span>}
+                      <div style={{ color: '#777', fontSize: '0.72rem', marginTop: '2px' }}>
+                        Tips: {f.type || 'text'} {f.placeholder && `| Piemērs: "${f.placeholder}"`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* TAIMERA KANVAS SKATS */}
             {activeSlide?.type === 'TIMER' && (
@@ -1950,7 +2040,6 @@ export default function Studio() {
                 </button>
               </div>
 
-              {/* Teksta parametri */}
               {selectedElements.some((el) => el.type === 'QUESTION' || el.type === 'TEXT') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
                   <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
@@ -1983,7 +2072,6 @@ export default function Studio() {
                 </div>
               )}
 
-              {/* 🌟 MEDIJU PIEGULĒŠANA (FIT MODE) & MALU NOAPAĻOJUMS (BORDER RADIUS) */}
               {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '8px' }}>
                   <label style={labelStyle}>Mediju aizpildījums (Fit Mode):</label>
@@ -2001,7 +2089,7 @@ export default function Studio() {
                         background: (primarySelectedElement.fitMode || 'COVER') === 'COVER' ? '#007bff' : '#222',
                         border: (primarySelectedElement.fitMode || 'COVER') === 'COVER' ? '1.5px solid #00e5ff' : '1px solid #444'
                       }}
-                      title="Aizpildīt visu rāmi bez tukšumiem (nogriežot liekās malas)"
+                      title="Aizpildīt visu rāmi bez tukšumiem"
                     >
                       🖼️ Cover
                     </button>
@@ -2018,7 +2106,7 @@ export default function Studio() {
                         background: primarySelectedElement.fitMode === 'FILL' ? '#007bff' : '#222',
                         border: primarySelectedElement.fitMode === 'FILL' ? '1.5px solid #00e5ff' : '1px solid #444'
                       }}
-                      title="Iestiept precīzi pa Tavu vilkto rāmi (W x H)"
+                      title="Iestiept pa visu rāmi"
                     >
                       🔲 Iestiept
                     </button>
@@ -2035,13 +2123,12 @@ export default function Studio() {
                         background: primarySelectedElement.fitMode === 'CONTAIN' ? '#007bff' : '#222',
                         border: primarySelectedElement.fitMode === 'CONTAIN' ? '1.5px solid #00e5ff' : '1px solid #444'
                       }}
-                      title="Ietilpināt ar malām (oriģinālā proporcija)"
+                      title="Ietilpināt ar malām"
                     >
                       🔍 Ar malām
                     </button>
                   </div>
 
-                  {/* 🌟 Malu noapaļojuma regulēšana */}
                   <div style={{ marginTop: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
                       <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Malu noapaļojums:</span>
@@ -2083,7 +2170,6 @@ export default function Studio() {
                 </div>
               )}
 
-              {/* Kad rādīt / atskaņot */}
               {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO' || el.type === 'AUDIO') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
                   <label style={labelStyle}>Kad rādīt / atskaņot:</label>
@@ -2100,7 +2186,6 @@ export default function Studio() {
                 </div>
               )}
 
-              {/* Blur efekts */}
               {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
                   <label style={labelStyle}>Aizmiglojums (Blur):</label>
@@ -2132,7 +2217,6 @@ export default function Studio() {
                 </div>
               )}
 
-              {/* Video & Audio: Apgriešana, Skaļums */}
               {selectedElements.some((el) => el.type === 'VIDEO' || el.type === 'AUDIO') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px' }}>
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
@@ -2481,10 +2565,16 @@ export default function Studio() {
                           }
                         });
                       }
+                      if (newType === 'CONTACTS' && (!s.config.contactFields || s.config.contactFields.length === 0)) {
+                        s.config.contactFields = defaultContactFieldsList;
+                        s.config.contactsTitle = 'DALĪBNIEKU ANKETA';
+                        s.config.contactsDescription = 'Lūdzu, ievadiet savus datus. Šī informācija netiks rādīta uz lielā ekrāna.';
+                      }
                     }, true);
                   }}
                 >
                   <option value="QUESTION">Question (Jautājums)</option>
+                  <option value="CONTACTS">📋 Contacts (Dalībnieku anketa)</option>
                   <option value="BILLBOARD">📢 Billboard (Informatīvs ekrāns)</option>
                   <option value="TIMER">⏱️ Timer (Taimeris / Pulkstenis)</option>
                   <option value="BUZZER_RACE">Buzzer Race (Ātrā pults)</option>
@@ -2529,6 +2619,110 @@ export default function Studio() {
               </div>
             )}
           </div>
+
+          {/* 🌟 JAUNS: KONTAKTI ANKETAS LAUKU VADĪBA */}
+          {activeSlide.type === 'CONTACTS' && (
+            <div style={accordionCard}>
+              <div style={accordionHeader} onClick={() => toggleSection('contacts')}>
+                <span>📋 ANKETAS LAUKI & IESTATĪJUMI</span>
+                <span>{sections.contacts ? '▲' : '▼'}</span>
+              </div>
+
+              {sections.contacts && (
+                <div style={{ marginTop: '10px' }}>
+                  <label style={labelStyle}>Anketas virsraksts:</label>
+                  <input
+                    style={inputStyle}
+                    value={activeSlide.config.contactsTitle || 'DALĪBNIEKU ANKETA'}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.contactsTitle = e.target.value), true)}
+                  />
+
+                  <label style={labelStyle}>Aicinājuma teksts (Apraksts):</label>
+                  <textarea
+                    style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }}
+                    value={activeSlide.config.contactsDescription || ''}
+                    onChange={(e) => updateActiveSlide((s) => (s.config.contactsDescription = e.target.value), true)}
+                  />
+
+                  <div style={{ borderTop: '1px solid #333', marginTop: '10px', paddingTop: '8px' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold', marginBottom: '6px' }}>
+                      Pievienotie anketas lauki:
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxHeight: '180px', overflowY: 'auto' }}>
+                      {((activeSlide.config.contactFields && activeSlide.config.contactFields.length > 0)
+                        ? activeSlide.config.contactFields
+                        : defaultContactFieldsList).map((f) => (
+                        <div key={f.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1c1c1c', border: '1px solid #333', padding: '5px 8px', borderRadius: '5px' }}>
+                          <div style={{ flex: 1 }}>
+                            <span style={{ fontSize: '0.85rem', color: '#ffc107', fontWeight: 'bold' }}>{f.label}</span>
+                            {f.required && <span style={{ color: '#ff4d4d', marginLeft: '4px', fontWeight: 'bold' }}>* (Obligāts)</span>}
+                            <div style={{ fontSize: '0.72rem', color: '#777' }}>Tips: {f.type || 'text'}</div>
+                          </div>
+                          <button
+                            onClick={() => handleRemoveContactField(f.id)}
+                            style={{ background: 'transparent', border: 'none', color: '#ff4d4d', cursor: 'pointer', fontSize: '1rem', fontWeight: 'bold' }}
+                            title="Dzēst šo lauku"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Jauna lauka pievienošanas forma */}
+                  <div style={{ background: '#111', border: '1px dashed #555', padding: '10px', borderRadius: '8px', marginTop: '10px' }}>
+                    <div style={{ fontSize: '0.78rem', color: '#aaa', fontWeight: 'bold', marginBottom: '6px' }}>
+                      ➕ Pievienot jaunu lauku:
+                    </div>
+
+                    <input
+                      style={{ ...inputStyle, marginBottom: '6px', fontSize: '0.85rem' }}
+                      placeholder="Lauka nosaukums (piem., Amats)..."
+                      value={newFieldLabel}
+                      onChange={(e) => setNewFieldLabel(e.target.value)}
+                    />
+
+                    <input
+                      style={{ ...inputStyle, marginBottom: '6px', fontSize: '0.85rem' }}
+                      placeholder="Piemērs laukā (Placeholder)..."
+                      value={newFieldPlaceholder}
+                      onChange={(e) => setNewFieldPlaceholder(e.target.value)}
+                    />
+
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                      <select
+                        style={{ ...selectStyle, flex: 1, margin: 0, fontSize: '0.8rem' }}
+                        value={newFieldType}
+                        onChange={(e) => setNewFieldType(e.target.value as any)}
+                      >
+                        <option value="text">🔤 Teksts</option>
+                        <option value="email">📧 E-pasts</option>
+                        <option value="tel">📞 Tālrunis</option>
+                      </select>
+
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: '#ffc107', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={newFieldRequired}
+                          onChange={(e) => setNewFieldRequired(e.target.checked)}
+                        />
+                        Obligāts
+                      </label>
+                    </div>
+
+                    <button
+                      onClick={handleAddContactField}
+                      style={{ ...btnSmallAction, background: '#007bff', color: '#fff', fontWeight: 'bold', margin: 0 }}
+                    >
+                      ➕ Pievienot lauku anketai
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* TAIMERA IESTATĪJUMI */}
           {activeSlide.type === 'TIMER' && (
@@ -3464,3 +3658,4 @@ const diplomaModalCard: React.CSSProperties = {
   flexDirection: 'column',
   gap: '15px'
 };
+

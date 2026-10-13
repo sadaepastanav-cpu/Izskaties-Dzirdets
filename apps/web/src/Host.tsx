@@ -280,6 +280,7 @@ export default function Host() {
     }
   };
 
+  // 🌟 5. PUNKTS: DIPLOMU DRUKA AR AUTOMĀTISKU SPĒLES LOGO
   const handlePrintDiplomas = () => {
     const isTeam = !!branding?.teamModeEnabled;
     const sorted = isTeam
@@ -297,6 +298,15 @@ export default function Host() {
     const borderCss = dCfg.borderColor || '#ffc107';
     const winnerCss = dCfg.winnerColor || (isInkSaver ? '#007bff' : '#ffd700');
 
+    // Ja ir iestatīts logo, ģenerējam HTML attēlu
+    const logoUrl = branding?.appLogo
+      ? `${BACKEND_URL}/project-media/${encodeURIComponent(branding.appLogo).replace(/%2F/g, '/')}`
+      : null;
+
+    const logoHtml = logoUrl
+      ? `<div class="logo-container"><img src="${logoUrl}" alt="Logo" class="diploma-logo" /></div>`
+      : '';
+
     const printWin = window.open('', '_blank');
     if (!printWin) return;
 
@@ -306,17 +316,20 @@ export default function Host() {
           <title>Top 3 Diplomi - PIN ${escapeHtml(pin || '')}</title>
           <style>
             body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: ${bgCss}; color: ${textCss}; text-align: center; }
-            .diploma { page-break-after: always; height: 95vh; display: flex; flex-direction: column; justify-content: center; align-items: center; border: 15px solid ${borderCss}; margin: 20px; box-sizing: border-box; background: ${bgCss}; padding: 30px; }
+            .diploma { page-break-after: always; height: 95vh; display: flex; flex-direction: column; justify-content: center; align-items: center; border: 15px solid ${borderCss}; margin: 20px; box-sizing: border-box; background: ${bgCss}; padding: 30px; position: relative; }
+            .logo-container { margin-bottom: 15px; }
+            .diploma-logo { max-height: 110px; max-width: 320px; object-fit: contain; }
             h1 { font-size: 3.2rem; color: ${textCss}; margin: 0; text-transform: uppercase; letter-spacing: 2px; }
             h2 { font-size: 2rem; color: ${borderCss}; margin: 12px 0; }
-            .winner { font-size: 3.6rem; font-weight: 900; color: ${winnerCss}; margin: 25px 0; }
+            .winner { font-size: 3.6rem; font-weight: 900; color: ${winnerCss}; margin: 20px 0; }
             .score { font-size: 2rem; color: ${textCss}; }
-            .footer { margin-top: 50px; font-size: 1.1rem; color: ${isInkSaver ? '#666' : '#aaa'}; }
+            .footer { margin-top: 40px; font-size: 1.1rem; color: ${isInkSaver ? '#666' : '#aaa'}; }
           </style>
         </head>
         <body>
           ${top3.map((p, idx) => `
             <div class="diploma">
+              ${logoHtml}
               <h1>${escapeHtml(dCfg.customTitle || '🏆 DIPLOMS 🏆')}</h1>
               <h2>${escapeHtml(dCfg.customSubtitle || (idx === 0 ? 'Par iegūto 1. vietu (Absolūtais čempions)' : idx === 1 ? 'Par iegūto 2. vietu (Vicečempions)' : 'Par iegūto 3. vietu (Bronzas goda vieta)'))}</h2>
               <div class="winner">${escapeHtml(p.name)} ${isTeam ? `(${p.memberCount || ''} dalībnieki)` : (p.teamName ? `[${escapeHtml(p.teamName)}]` : '')}</div>
@@ -501,7 +514,6 @@ export default function Host() {
   const isCurrentActive = currentScene?.subState === 'ACTIVE';
   const isCurrentPaused = currentScene?.subState === 'PAUSED';
 
-  // 🌟 Mazā dinamikas emblēma vadītāja tabulai
   const renderHostDeltaBadge = (delta?: number) => {
     if (delta === undefined || delta === null || delta === 0) {
       return <span style={{ color: '#666', fontSize: '0.75rem', fontWeight: 'bold' }}>—</span>;
@@ -1012,7 +1024,7 @@ export default function Host() {
           </div>
         )}
 
-        {/* 🌟 DALĪBNIEKU PĀRVALDĪBA AR VIETU DINAMIKU */}
+        {/* DALĪBNIEKU PĀRVALDĪBA */}
         {activeTab === 'ANALYZER' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -1101,7 +1113,7 @@ export default function Host() {
           </div>
         )}
 
-        {/* 🌟 KOMANDU KOPVĒRTĒJUMS AR DINAMIKU */}
+        {/* KOMANDU KOPVĒRTĒJUMS */}
         {isTeamMode && activeTab === 'TEAMS' && (
           <div style={{ background: '#1c1c1c', borderRadius: '8px', padding: '15px', border: '1px solid #333' }}>
             <h4 style={{ margin: '0 0 12px 0', color: '#ffc107' }}>🏆 KOMANDU KOPVĒRTĒJUMS ({teamLeaderboard.length})</h4>

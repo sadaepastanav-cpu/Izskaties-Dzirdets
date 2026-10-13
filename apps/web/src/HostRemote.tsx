@@ -62,6 +62,9 @@ export default function HostRemote() {
   const [activeTab, setActiveTab] = useState<'REMOTE' | 'SLIDES'>('REMOTE');
   const [slideSearchQuery, setSlideSearchQuery] = useState('');
 
+  // 🌟 DROŠĪBAS APSTIPRINĀJUMS PIRMS PĀRLĒKŠANAS UZ CITU SLAIDU
+  const [pendingJumpScene, setPendingJumpScene] = useState<any | null>(null);
+
   // Līderu tabulas paginācijas stāvoklis
   const [lbPage, setLbPage] = useState<number>(0);
 
@@ -137,7 +140,6 @@ export default function HostRemote() {
     document.addEventListener('touchstart', handleUserInteraction, { passive: true });
     document.addEventListener('click', handleUserInteraction, { passive: true });
 
-    // iOS Safari mikrovideoplūsma fona aizmigšanas bloķēšanai
     try {
       const canvas = document.createElement('canvas');
       canvas.width = 2;
@@ -251,16 +253,15 @@ export default function HostRemote() {
     }
   };
 
-  // 🌟 PĀRSTRĀDĀTS ADVANCE: BEZ FORCE, AR 500MS KLIENTA SLĒDZENI
   const handleAdvance = () => {
     if (gameState?.subState === 'ACTIVE') return;
 
     const now = Date.now();
-    if (now - lastAdvanceTap.current < 500) return; // 🌟 Aizsardzība pret nejaušu dubultklikšķi!
+    if (now - lastAdvanceTap.current < 500) return;
     lastAdvanceTap.current = now;
 
     triggerHaptic('tap');
-    socket?.emit('host:advance', { pin, hostToken }); // Nav 'force: true', lai nepārrautu aktīvo jautājumu!
+    socket?.emit('host:advance', { pin, hostToken });
   };
 
   const handleBacktrack = () => {
@@ -312,7 +313,7 @@ export default function HostRemote() {
   };
 
   const handleJumpToScene = (sceneIndex: number) => {
-    triggerHaptic('tap');
+    triggerHaptic('warn');
     socket?.emit('host:jump-to-scene', { pin, hostToken, sceneIndex });
     setActiveTab('REMOTE');
   };
@@ -387,7 +388,6 @@ export default function HostRemote() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-          {/* Pilnekrāna poga tikai tad, ja ierīce to atbalsta */}
           {isFullscreenSupported && (
             <button onClick={toggleFullscreen} style={btnHeaderSquare} title="Ieslēgt / Izslēgt pilnekrānu">
               {isFullscreen ? '⛶' : '⛶'}
@@ -405,7 +405,7 @@ export default function HostRemote() {
         </div>
       </div>
 
-      {/* 🌟 BRĪDINĀJUMS, JA SKATUVES EKRĀNS IR AIZSEGTS */}
+      {/* BRĪDINĀJUMS, JA SKATUVES EKRĀNS IR AIZSEGTS */}
       {isBlackout && (
         <div
           onClick={handleToggleBlackout}
@@ -440,7 +440,10 @@ export default function HostRemote() {
               return (
                 <div
                   key={sc.id || sc.index}
-                  onClick={() => handleJumpToScene(sc.index)}
+                  onClick={() => {
+                    triggerHaptic('tap');
+                    setPendingJumpScene(sc);
+                  }}
                   style={{
                     padding: '10px 12px',
                     background: isCurrent ? 'rgba(40,167,69,0.3)' : '#1c1c1c',
@@ -462,7 +465,11 @@ export default function HostRemote() {
                       </div>
                     )}
                   </div>
-                  {isCurrent && <span style={{ color: '#00ff00', fontWeight: 'bold', fontSize: '0.8rem' }}>AKTUĀLS</span>}
+                  {isCurrent ? (
+                    <span style={{ color: '#00ff00', fontWeight: 'bold', fontSize: '0.8rem' }}>AKTUĀLS</span>
+                  ) : (
+                    <span style={{ color: '#00e5ff', fontSize: '0.75rem' }}>Apskatīt ➔</span>
+                  )}
                 </div>
               );
             })}
@@ -524,7 +531,7 @@ export default function HostRemote() {
             🔜 Nākamais: <strong style={{ color: '#aaa' }}>{gameState?.nextSceneTitle}</strong>
           </div>
 
-          {/* 🌟 LĪDERU TABULAS VADĪBA (Parādās tikai pie LEADERBOARD!) */}
+          {/* LĪDERU TABULAS VADĪBA */}
           {isLeaderboardScene && (
             <div style={{ background: '#1c1c1c', border: '1px solid #ffc107', borderRadius: '10px', padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <div style={{ fontSize: '0.75rem', color: '#ffc107', fontWeight: 'bold', textAlign: 'center' }}>
@@ -555,7 +562,7 @@ export default function HostRemote() {
         </div>
       )}
 
-      {/* 🌟 ERGONOMISKAIS SKATUVES VADĪBAS PULTS BLOKS VIRSS SPACE POGAS */}
+      {/* 🌟 VADĪBAS PULTS BLOKS VIRSS ADVANCE POGAS */}
       {activeTab === 'REMOTE' && (
         <div style={{ padding: '8px 12px', background: '#161616', borderTop: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
@@ -592,7 +599,7 @@ export default function HostRemote() {
         </div>
       )}
 
-      {/* 🚀 MILZĪGĀ SPACE / TĀLĀK POGA AR DROŠĪBAS SLĒDZENI */}
+      {/* 🚀 ADVANCE POGA */}
       <div style={{ padding: '10px 12px 14px 12px', background: '#181818', borderTop: '1px solid #333', flexShrink: 0 }}>
         <button
           onClick={handleAdvance}
@@ -623,6 +630,61 @@ export default function HostRemote() {
           )}
         </button>
       </div>
+
+      {/* 🌟 4. PUNKTS: DROŠĪBAS APSTIPRINĀJUMA LOGS PIRMS SLAIDA MAIŅAS */}
+      {pendingJumpScene && (
+        <div style={modalOverlayStyle} onClick={() => setPendingJumpScene(null)}>
+          <div style={confirmModalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: '2.5rem', marginBottom: '6px' }}>👁️</div>
+            <h3 style={{ color: '#ffc107', margin: '0 0 10px 0', fontSize: '1.2rem', textTransform: 'uppercase' }}>
+              Pārlēkt uz šo jautājumu?
+            </h3>
+
+            <div style={{ background: '#111', padding: '12px', borderRadius: '10px', textAlign: 'left', marginBottom: '14px', border: '1px solid #333' }}>
+              <div style={{ color: '#00e5ff', fontWeight: 'bold', fontSize: '0.95rem' }}>
+                #{pendingJumpScene.index + 1}. {pendingJumpScene.title} ({pendingJumpScene.type})
+              </div>
+
+              {pendingJumpScene.question && (
+                <div style={{ color: '#fff', fontSize: '0.9rem', marginTop: '6px', fontStyle: 'italic', lineHeight: 1.3 }}>
+                  "{pendingJumpScene.question}"
+                </div>
+              )}
+
+              {pendingJumpScene.notes && (
+                <div style={{ color: '#ffd700', fontSize: '0.8rem', marginTop: '8px', borderTop: '1px dashed #444', paddingTop: '6px' }}>
+                  📝 Piezīmes: {pendingJumpScene.notes}
+                </div>
+              )}
+            </div>
+
+            <p style={{ color: '#bbb', fontSize: '0.82rem', margin: '0 0 16px 0', lineHeight: 1.4 }}>
+              ⚠️ Pašreizējais slaids ekrānā tiks pārtraukts un balsis notīrītas.
+            </p>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => {
+                  triggerHaptic('tap');
+                  setPendingJumpScene(null);
+                }}
+                style={btnCancelModal}
+              >
+                ✕ Atcelt
+              </button>
+              <button
+                onClick={() => {
+                  handleJumpToScene(pendingJumpScene.index);
+                  setPendingJumpScene(null);
+                }}
+                style={btnConfirmModal}
+              >
+                🚀 Jā, pārlēkt!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -806,4 +868,55 @@ const badgeState: React.CSSProperties = {
   borderRadius: '4px',
   fontWeight: '900',
   fontSize: '0.75rem'
+};
+
+const modalOverlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: 0,
+  left: 0,
+  width: '100vw',
+  height: '100dvh',
+  background: 'rgba(0,0,0,0.85)',
+  backdropFilter: 'blur(8px)',
+  zIndex: 999999,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '20px',
+  boxSizing: 'border-box'
+};
+
+const confirmModalCard: React.CSSProperties = {
+  background: '#1c1c1c',
+  border: '2px solid #ffc107',
+  borderRadius: '16px',
+  padding: '20px 18px',
+  width: '100%',
+  maxWidth: '340px',
+  textAlign: 'center',
+  boxShadow: '0 10px 40px rgba(0,0,0,0.95)'
+};
+
+const btnCancelModal: React.CSSProperties = {
+  flex: 1,
+  padding: '12px',
+  background: '#333',
+  color: '#fff',
+  border: '1px solid #555',
+  borderRadius: '8px',
+  fontWeight: 'bold',
+  fontSize: '0.95rem',
+  cursor: 'pointer'
+};
+
+const btnConfirmModal: React.CSSProperties = {
+  flex: 1.3,
+  padding: '12px',
+  background: '#28a745',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '8px',
+  fontWeight: 'bold',
+  fontSize: '0.95rem',
+  cursor: 'pointer'
 };

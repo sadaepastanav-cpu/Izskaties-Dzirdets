@@ -24,10 +24,10 @@ export interface CanvasElement {
   zIndex?: number;
   z?: number;
 
-  // 🌟 Jauns: Mediju piegulēšanas režīms (Ietilpināt / Aizpildīt rāmi / Iestiept pa visu rāmi)
+  // 🌟 Mediju piegulēšanas režīms (Ietilpināt / Aizpildīt rāmi / Iestiept pa visu rāmi)
   fitMode?: 'CONTAIN' | 'COVER' | 'FILL';
 
-  // 🌟 Jauns: Malu noapaļojums pikseļos (regulējams no 0 līdz 50+)
+  // 🌟 Malu noapaļojums pikseļos (regulējams no 0 līdz 50+)
   borderRadius?: number;
 }
 
@@ -46,10 +46,19 @@ export interface DiplomaConfig {
   inkSaverMode?: boolean;
 }
 
+// 🌟 KONTAKTU LAUKA DEFINĪCIJA
+export interface ContactField {
+  id: string;
+  label: string;
+  placeholder?: string;
+  required?: boolean;
+  type?: 'text' | 'email' | 'tel';
+}
+
 export interface Slide {
   id: string;
   title: string;
-  type: 'QUESTION' | 'BILLBOARD' | 'LEADERBOARD' | 'MAJORITY' | 'ORDERING' | 'BUZZER_RACE' | 'TIMER';
+  type: 'QUESTION' | 'BILLBOARD' | 'LEADERBOARD' | 'MAJORITY' | 'ORDERING' | 'BUZZER_RACE' | 'TIMER' | 'CONTACTS';
   config: {
     duration: number;
     points: number;
@@ -92,6 +101,11 @@ export interface Slide {
     timerDuration?: number; // Sekundēs (piem., 300 = 5 minūtes)
     timerBgVideo?: string;
     timerBgVideoLoop?: boolean;
+
+    // 🌟 KONTAKTU SLAIDA IESTATĪJUMI
+    contactFields?: ContactField[];
+    contactsTitle?: string;
+    contactsDescription?: string;
   };
 }
 
@@ -132,7 +146,7 @@ export interface VoteAnswerDetail {
   category?: 'TOP' | 'BOTTOM' | 'SINGLE';
 }
 
-// 🌟 Spēlētāja stāvoklis ar vietu dinamiku un atmiņu
+// 🌟 Spēlētāja stāvoklis ar vietu dinamiku, atmiņu un kontaktiem
 export interface PlayerState {
   id: string;
   token?: string;
@@ -141,17 +155,18 @@ export interface PlayerState {
   deviceNumber?: number;
   score: number;
   roundScore: number;
-  lastQuestionScore: number; // Šajā pēdējā jautājumā iegūtie punkti
+  lastQuestionScore: number;
   totalTimeMs: number;
   roundTimeMs: number;
-  rank?: number | null; // Pašreizējā vieta kopvērtējumā
-  previousRank?: number | null; // Vieta pirms šī jautājuma
-  rankDelta?: number; // Kāpums (+), kritums (-), saglabāta (0)
+  rank?: number | null;
+  previousRank?: number | null;
+  rankDelta?: number;
   isDisabled?: boolean;
   isBot?: boolean;
   teamName?: string;
   isCaptain?: boolean;
   missedQuestionsCount: number;
+  contacts?: Record<string, string>; // 🌟 Saglabātie kontakti CSV eksportam
 }
 
 // 🌟 Komandas līderu tabulas elements ar dinamiku
@@ -203,4 +218,7 @@ export interface ClientSyncResponse {
   teamRankDelta?: number;
   myChoice: string | null;
   myOptionIds: string[];
+  topAnswer?: string | null;
+  bottomAnswer?: string | null;
+  myContacts?: Record<string, string>; // 🌟 Atjaunotie kontakti
 }
