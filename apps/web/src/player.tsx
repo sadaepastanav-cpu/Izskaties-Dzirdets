@@ -891,7 +891,11 @@ export default function Player() {
     setIsContactsSubmitted(true);
   };
 
+  // 🌟 DROŠA IZIEŠANA AR APSTIPRINĀJUMA JAUTĀJUMU
   const handleLeaveOrNewGame = () => {
+    const isConfirmed = window.confirm('⚠️ Vai tiešām vēlies pamest spēli?\nTev būs atkārtoti jāievada PIN kods un vārds, lai atgrieztos.');
+    if (!isConfirmed) return;
+
     sessionStorage.removeItem('player_active_session');
     localStorage.removeItem('player_pin');
     localStorage.removeItem('player_token');
@@ -960,14 +964,20 @@ export default function Player() {
   const isMusicMode = playerUIMode === 'MUSIC_DUAL';
   const isContactsScene = scene?.type === 'CONTACTS';
 
+  // 🌟 2. PUNKTS: VISMAZ 2X LIELĀKS LOGO EKRĀNĀ PIE JAUTĀJUMIEM (maxHeight: 88px)
   const renderGameLogo = () => {
     if (!branding.appLogo || branding.gameLogoPosition === 'NONE') return null;
     return (
-      <div style={{ textAlign: 'center', margin: '4px 0', flexShrink: 0 }}>
+      <div style={{ textAlign: 'center', margin: '8px 0', flexShrink: 0 }}>
         <img
           src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
           alt="Logo"
-          style={{ maxHeight: '42px', maxWidth: '65%', objectFit: 'contain' }}
+          style={{
+            maxHeight: '88px',
+            maxWidth: '85%',
+            objectFit: 'contain',
+            filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.6))'
+          }}
         />
       </div>
     );
@@ -1083,10 +1093,11 @@ export default function Player() {
       <div style={{ ...fullScreenMobile, backgroundColor: '#000', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
         <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
 
+        {/* 🌟 AUGŠĒJĀ JOSLA AR DROŠU POGU IZVIETOJUMU */}
         <div style={mobileHeader}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
-            <span style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#ffc107' }}>
+            <span style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#ffc107', maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {name} {isTeamMode && teamName && `[${teamName}]`}
             </span>
           </div>
@@ -1095,7 +1106,7 @@ export default function Player() {
             {isFullscreenSupported && (
               <button onClick={toggleFullscreen} style={btnFullscreenBadge} title="Pilnekrāns">⛶</button>
             )}
-            <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
+            <button onClick={handleLeaveOrNewGame} style={btnExitSafe} title="Pamest spēli">🚪 Iziet</button>
           </div>
         </div>
 
@@ -1134,7 +1145,7 @@ export default function Player() {
               <img
                 src={`${MEDIA_BASE_URL}/${branding.appLogo}`}
                 alt="Logo"
-                style={{ maxHeight: '80px', maxWidth: '80%', marginBottom: '10px', objectFit: 'contain' }}
+                style={{ maxHeight: '90px', maxWidth: '85%', marginBottom: '12px', objectFit: 'contain' }}
               />
             )}
             <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>🎯</div>
@@ -1209,12 +1220,12 @@ export default function Player() {
     );
   }
 
-  // 🌟 Noklusētie kontaktu lauki, ja studijā nav definēti
+  // Noklusētie kontaktu lauki, ja studijā nav definēti
   const defaultContactFields = [
     { id: 'fullname', label: 'Vārds, Uzvārds', placeholder: 'Jānis Bērziņš', required: true, type: 'text' },
     { id: 'email', label: 'E-pasta adrese', placeholder: 'janis@piemers.lv', required: true, type: 'email' },
     { id: 'phone', label: 'Tālruņa numurs', placeholder: '+371 20000000', required: false, type: 'tel' },
-    { id: 'company', label: 'Uzņēmums / Amats', placeholder: 'SIA Uzņēmums, Projektu vadītājs', required: false, type: 'text' }
+    { id: 'company', label: 'Uzņēmums / Amats', placeholder: 'SIA Uzņēmums, Vadītājs', required: false, type: 'text' }
   ];
 
   const activeContactFields = (scene?.config?.contactFields && scene.config.contactFields.length > 0)
@@ -1225,40 +1236,49 @@ export default function Player() {
     <div style={appBgStyle}>
       <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
 
+      {/* 🌟 1. PUNKTS: PĀRDOMĀTA, DROŠA AUGŠĒJĀ JOSLA (IZIET POGA SKAIDRI NODALĪTA AR APSTIPRINĀJUMU) */}
       <div style={mobileHeader}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
-          <span style={{ fontWeight: 'bold', fontSize: '0.9rem', maxWidth: '95px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontWeight: 'bold', fontSize: '0.9rem', maxWidth: '90px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {name}
           </span>
           {isTeamMode && teamName && <span style={{ fontSize: '0.75rem', color: '#00e5ff' }}>[{teamName}]</span>}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           {isTeamMode && isCaptain && (
             <button
               onClick={() => setShowCaptainQrModal(true)}
               style={btnCaptainBadge}
               title="Parādīt komandas QR kodu jaunam biedram"
             >
-              👑 + Biedrs (QR)
+              👑 + Biedrs
             </button>
           )}
+
+          <div style={{ background: '#000', border: '1px solid #00ff00', borderRadius: '6px', padding: '3px 6px', color: '#00ff00', fontWeight: 'bold', fontSize: '0.78rem' }}>
+            PIN: {pin}
+          </div>
 
           {isFullscreenSupported && (
             <button
               onClick={toggleFullscreen}
               style={btnFullscreenBadge}
-              title="Ieslēgt pilnekrānu"
+              title="Pilnekrāns"
             >
               {isFullscreen ? '⛶' : '⛶'}
             </button>
           )}
 
-          <div style={{ background: '#000', border: '1px solid #00ff00', borderRadius: '6px', padding: '3px 6px', color: '#00ff00', fontWeight: 'bold', fontSize: '0.8rem' }}>
-            PIN: {pin}
-          </div>
-          <button onClick={handleLeaveOrNewGame} style={btnExitSmall}>Iziet</button>
+          {/* Nodalīta, droša pamest poga ar apstiprinājumu */}
+          <button
+            onClick={handleLeaveOrNewGame}
+            style={btnExitSafe}
+            title="Pamest spēli (Ar apstiprinājumu)"
+          >
+            🚪 Iziet
+          </button>
         </div>
       </div>
 
@@ -1335,6 +1355,7 @@ export default function Player() {
       )}
 
       <div style={mobileBody}>
+        {/* 🌟 2. PUNKTS: VISMAZ 2X LIELĀKS LOGO AUGŠĀ */}
         {branding.gameLogoPosition === 'TOP' && renderGameLogo()}
 
         {subState === 'PAUSED' && (
@@ -1347,7 +1368,7 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🌟 JAUNS: KONTAKTU SLAIDA ANKETA TĀLRUNĪ */}
+        {/* KONTAKTU SLAIDA ANKETA */}
         {isContactsScene && subState !== 'PAUSED' && (
           <div style={{ ...infoCard, width: '92%', maxWidth: '380px', maxHeight: '82dvh', overflowY: 'auto', textAlign: 'left', border: '2px solid #00e5ff' }}>
             <div style={{ textAlign: 'center', marginBottom: '8px' }}>
@@ -1928,6 +1949,7 @@ export default function Player() {
           </div>
         )}
 
+        {/* 🌟 2. PUNKTS: VISMAZ 2X LIELĀKS LOGO APAKŠĀ */}
         {branding.gameLogoPosition === 'BOTTOM' && renderGameLogo()}
       </div>
     </div>
@@ -1962,7 +1984,7 @@ const mobileHeader: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  padding: '0 10px',
+  padding: '0 8px',
   flexShrink: 0
 };
 
@@ -1999,13 +2021,15 @@ const btnFullscreenBadge: React.CSSProperties = {
   touchAction: 'manipulation'
 };
 
-const btnExitSmall: React.CSSProperties = {
-  background: 'rgba(50, 50, 50, 0.8)',
-  border: '1px solid #555',
-  color: '#ccc',
-  padding: '3px 8px',
-  borderRadius: '4px',
+// 🌟 1. PUNKTS: PĀRDOMĀTA, DROŠA PAMEST POGA
+const btnExitSafe: React.CSSProperties = {
+  background: 'rgba(220, 53, 69, 0.2)',
+  border: '1px solid rgba(220, 53, 69, 0.5)',
+  color: '#ff6b6b',
+  padding: '3px 7px',
+  borderRadius: '6px',
   fontSize: '0.75rem',
+  fontWeight: 'bold',
   cursor: 'pointer',
   touchAction: 'manipulation'
 };

@@ -1516,7 +1516,6 @@ export default function Presentation() {
               <div style={{ textAlign: 'left', color: '#000' }}>
                 <div style={{ fontWeight: '900', fontSize: '1.4vw', textTransform: 'uppercase' }}>Skenē kamerā!</div>
                 <div style={{ fontSize: '1vw', color: '#333', marginTop: '4px' }}>Pieslēdzies spēlei</div>
-                <div style={{ fontSize: '0.85vw', color: '#007bff', fontWeight: 'bold', marginTop: '4px' }}>{baseHost}</div>
               </div>
             </div>
           </div>
