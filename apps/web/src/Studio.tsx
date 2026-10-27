@@ -25,6 +25,17 @@ const defaultContactFieldsList: ContactField[] = [
   { id: 'company', label: 'Uzņēmums / Amats', placeholder: 'SIA Uzņēmums, Vadītājs', required: false, type: 'text' }
 ];
 
+const DEFAULT_SECTION_ORDER = [
+  'info',
+  'options',
+  'style',
+  'media',
+  'branding',
+  'diploma',
+  'contacts',
+  'timer'
+];
+
 export default function Studio() {
   const [activeFolder, setActiveFolder] = useState<string>(
     localStorage.getItem('event_studio_folder') || ''
@@ -51,7 +62,7 @@ export default function Studio() {
   const [newFieldType, setNewFieldType] = useState<'text' | 'email' | 'tel'>('text');
   const [newFieldRequired, setNewFieldRequired] = useState(false);
 
-  // Akordeona sadaļas
+  // Akordeona sadaļu atvēršana / aizvēršana
   const [sections, setSections] = useState({
     branding: true,
     diploma: false,
@@ -59,21 +70,87 @@ export default function Studio() {
     info: true,
     options: true,
     timer: true,
-    contacts: true, // 🌟 JAUNS
-    style: false
+    contacts: true,
+    style: true
   });
+
+  // 🌟 PĀRVIETOJAMĀ SADAĻU SECĪBA
+  const [sectionOrder, setSectionOrder] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('event_studio_sidebar_order');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return [
+            ...parsed.filter((k) => DEFAULT_SECTION_ORDER.includes(k)),
+            ...DEFAULT_SECTION_ORDER.filter((k) => !parsed.includes(k))
+          ];
+        }
+      }
+    } catch {}
+    return DEFAULT_SECTION_ORDER;
+  });
+
+  const moveSection = (key: string, direction: 'UP' | 'DOWN', e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSectionOrder((prev) => {
+      const idx = prev.indexOf(key);
+      if (idx === -1) return prev;
+      const targetIdx = direction === 'UP' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
+      const copy = [...prev];
+      const [moved] = copy.splice(idx, 1);
+      copy.splice(targetIdx, 0, moved);
+      localStorage.setItem('event_studio_sidebar_order', JSON.stringify(copy));
+      return copy;
+    });
+  };
+
+  const handleSectionDragStart = (e: React.DragEvent, key: string) => {
+    e.dataTransfer.setData('text/section-key', key);
+  };
+
+  const handleSectionDrop = (e: React.DragEvent, targetKey: string) => {
+    e.preventDefault();
+    const draggedKey = e.dataTransfer.getData('text/section-key');
+    if (!draggedKey || draggedKey === targetKey) return;
+    setSectionOrder((prev) => {
+      const fromIdx = prev.indexOf(draggedKey);
+      const toIdx = prev.indexOf(targetKey);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      const copy = [...prev];
+      const [moved] = copy.splice(fromIdx, 1);
+      copy.splice(toIdx, 0, moved);
+      localStorage.setItem('event_studio_sidebar_order', JSON.stringify(copy));
+      return copy;
+    });
+  };
 
   const toggleSection = (key: keyof typeof sections) => {
     setSections((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const [mobileBranding, setMobileBranding] = useState<MobileBranding & { presentationTheme?: 'NEON' | 'TV_SHOW' | 'ARENA' | 'MINIMAL' }>({
+  // 🌟 BRANDING AR SĀKUMA EKRĀNA (LOBBY) FONU, TEKSTIEM UN INTENSITĀTI
+  const [mobileBranding, setMobileBranding] = useState<MobileBranding & {
+    presentationTheme?: 'NEON' | 'TV_SHOW' | 'ARENA' | 'MINIMAL';
+    lobbyBgImage?: string;
+    lobbyBgColor?: string;
+    lobbyTitleText?: string;
+    lobbySubtitleText?: string;
+    lobbyQrTitle?: string;
+    lobbyQrSubtitle?: string;
+    lobbyTitleColor?: string;
+    lobbySubtitleColor?: string;
+    lobbyBoxBgColor?: string;
+    lobbyBoxBgOpacity?: number;
+    lobbyBoxBorderColor?: string;
+  }>({
     appTitle: 'EVENT BUZZER',
     appLogo: '',
     appBgImage: '',
     welcomeImage: '',
     appBgColor: '#121212',
-    lobbyMode: 'CIRCLE',
+    lobbyMode: 'INTERACTIVE_DOTS',
     optionsRevealTiming: 'ON_ACTIVE',
     presentationTheme: 'TV_SHOW',
     timerMode: 'ALL_VOTED',
@@ -82,6 +159,17 @@ export default function Studio() {
     predefinedTeams: ['1. Galdiņš', '2. Galdiņš', '3. Galdiņš', 'VIP Komanda'],
     maxMissedQuestions: 5,
     gameLogoPosition: 'NONE',
+    lobbyBgImage: '',
+    lobbyBgColor: '#0a0a0a',
+    lobbyTitleText: '🎮 PIESLĒGUŠIES DALĪBNIEKI ({count}):',
+    lobbySubtitleText: 'Spiediet telefonā "Pārbaudīt pulti", lai bumbiņa pulsētu! 💥',
+    lobbyQrTitle: 'Skenē kamerā!',
+    lobbyQrSubtitle: 'Pieslēdzies spēlei',
+    lobbyTitleColor: '#ffc107',
+    lobbySubtitleColor: '#aaaaaa',
+    lobbyBoxBgColor: '#000000',
+    lobbyBoxBgOpacity: 85,
+    lobbyBoxBorderColor: '#00ff00',
     diplomaConfig: {
       theme: 'GOLD_DARK',
       bgColor: '#111111',
@@ -93,7 +181,12 @@ export default function Studio() {
       footerText: 'Event Studio',
       inkSaverMode: false,
       showLogo: true,
-      logoPosition: 'TOP'
+      logoPosition: 'TOP',
+      showTitle: true,
+      showSubtitle: true,
+      showWinner: true,
+      showScore: true,
+      showFooter: true
     }
   });
 
@@ -116,6 +209,7 @@ export default function Studio() {
         requiredCount: 1,
         submitMode: 'INSTANT',
         autoStart: false,
+        allowOptionTranslation: false,
         notes: 'Paskaidrojums vadītājam: Rīga dibināta 1201. gadā.',
         optionsCount: 4,
         options: ['Rīga', 'Liepāja', 'Daugavpils', 'Jelgava'],
@@ -158,6 +252,7 @@ export default function Studio() {
             color: '#ffffff',
             bgColor: '#000000',
             bgOpacity: 85,
+            borderRadius: 16,
             bold: true,
             visibility: 'ALWAYS'
           }
@@ -198,12 +293,23 @@ export default function Studio() {
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const previewMediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  const sidebarRightRef = useRef<HTMLDivElement | null>(null);
+
   const activeSlide = slides[activeSlideIdx] || slides[0];
+
+  useEffect(() => {
+    if (selectedElementIds.length > 0 && sidebarRightRef.current) {
+      sidebarRightRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [selectedElementIds]);
 
   const selectedElements = (activeSlide?.config?.layout || []).filter((el) =>
     selectedElementIds.includes(el.id)
   );
   const primarySelectedElement = selectedElements[selectedElements.length - 1] || null;
+
+  const selectedOptionId = selectedElementIds.find((id) => id.startsWith('opt-index-'));
+  const selectedOptionIdx = selectedOptionId !== undefined ? Number(selectedOptionId.replace('opt-index-', '')) : null;
 
   const pushToHistory = (newSlides: Slide[]) => {
     if (isHistoryAction.current) {
@@ -366,32 +472,17 @@ export default function Studio() {
       return { scoringMode: 'FIXED' as const, points: 10, pointsMax: 10, pointsMin: 1 };
     }
     const raw = String(val).trim().toLowerCase();
-
     const rangeMatch = raw.match(/(\d+)\s*[-–—/.]+\s*(\d+)/);
     if (rangeMatch) {
       const num1 = Number(rangeMatch[1]);
       const num2 = Number(rangeMatch[2]);
-      const max = Math.max(num1, num2);
-      const min = Math.min(num1, num2);
       return {
         scoringMode: 'DECREASING' as const,
-        points: max,
-        pointsMax: max,
-        pointsMin: min
+        points: Math.max(num1, num2),
+        pointsMax: Math.max(num1, num2),
+        pointsMin: Math.min(num1, num2)
       };
     }
-
-    if (raw.includes('dilst') || raw.includes('decr') || raw.includes('down')) {
-      const numMatch = raw.match(/\d+/);
-      const max = numMatch ? Number(numMatch[0]) : 10;
-      return {
-        scoringMode: 'DECREASING' as const,
-        points: max,
-        pointsMax: max,
-        pointsMin: 1
-      };
-    }
-
     const numMatch = raw.match(/\d+/);
     const pts = numMatch ? Number(numMatch[0]) : 10;
     return {
@@ -412,14 +503,11 @@ export default function Studio() {
 
       for (let i = 0; i < line.length; i++) {
         const char = line[i];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === delimiter && !inQuotes) {
+        if (char === '"') inQuotes = !inQuotes;
+        else if (char === delimiter && !inQuotes) {
           result.push(current.trim().replace(/^["']|["']$/g, ''));
           current = '';
-        } else {
-          current += char;
-        }
+        } else current += char;
       }
       result.push(current.trim().replace(/^["']|["']$/g, ''));
       return result;
@@ -439,62 +527,25 @@ export default function Studio() {
       firstRowStr.includes('jautājums') ||
       firstRowStr.includes('question') ||
       firstRowStr.includes('variants') ||
-      firstRowStr.includes('option') ||
-      firstRowStr.includes('pareizā') ||
-      firstRowStr.includes('correct');
+      firstRowStr.includes('pareizā');
 
     const dataRows = hasHeader ? rows.slice(1) : rows;
     const parsed: ImportedQuestionPreview[] = [];
 
     dataRows.forEach((cols) => {
       if (cols.length < 2 || !cols[0] || cols[0].trim() === '') return;
-
       const title = cols[0].trim();
-      let rawOptions: string[] = [];
-      let correctIndicator = '';
-      let duration = 30;
-      let pointsInfo = { scoringMode: 'FIXED' as const, points: 10, pointsMax: 10, pointsMin: 1 };
-      let notes = '';
-
-      if (cols.length >= 8) {
-        rawOptions = [cols[1], cols[2], cols[3], cols[4]].filter(Boolean);
-        correctIndicator = cols[5] ? cols[5].trim() : 'A';
-        if (cols[6] && !isNaN(Number(cols[6]))) duration = Number(cols[6]);
-        if (cols[7]) pointsInfo = parsePointsString(cols[7]);
-        if (cols[8]) notes = cols[8].trim();
-      } else if (cols.length === 7) {
-        rawOptions = [cols[1], cols[2], cols[3], cols[4]].filter(Boolean);
-        correctIndicator = cols[5] ? cols[5].trim() : 'A';
-        const col6 = cols[6].trim();
-        if (col6.includes('-') || col6.includes('–') || col6.includes('dil') || col6.includes('/')) {
-          pointsInfo = parsePointsString(col6);
-        } else {
-          const num = Number(col6);
-          if (!isNaN(num)) {
-            if (num > 60) pointsInfo = parsePointsString(col6);
-            else duration = num;
-          }
-        }
-      } else if (cols.length === 6) {
-        rawOptions = [cols[1], cols[2], cols[3], cols[4]].filter(Boolean);
-        correctIndicator = cols[5] ? cols[5].trim() : 'A';
-      } else if (cols.length >= 3) {
-        rawOptions = cols.slice(1, cols.length - 1).filter(Boolean);
-        correctIndicator = cols[cols.length - 1] ? cols[cols.length - 1].trim() : 'A';
-      } else {
-        rawOptions = [cols[1], 'B', 'C', 'D'].filter(Boolean);
-        correctIndicator = 'A';
-      }
+      let rawOptions: string[] = [cols[1], cols[2], cols[3], cols[4]].filter(Boolean);
+      let correctIndicator = cols[5] ? cols[5].trim() : 'A';
+      let duration = cols[6] && !isNaN(Number(cols[6])) ? Number(cols[6]) : 30;
+      let pointsInfo = cols[7] ? parsePointsString(cols[7]) : { scoringMode: 'FIXED' as const, points: 10, pointsMax: 10, pointsMin: 1 };
+      let notes = cols[8] ? cols[8].trim() : '';
 
       let correctAnswers: string[] = [];
       const letterMatch = correctIndicator.toUpperCase().match(/^[A-F]$/);
       if (letterMatch) {
         const letterIdx = letterMatch[0].charCodeAt(0) - 65;
-        if (rawOptions[letterIdx]) {
-          correctAnswers = [rawOptions[letterIdx]];
-        } else {
-          correctAnswers = [letterMatch[0]];
-        }
+        correctAnswers = rawOptions[letterIdx] ? [rawOptions[letterIdx]] : [letterMatch[0]];
       } else {
         correctAnswers = [correctIndicator];
       }
@@ -518,13 +569,10 @@ export default function Studio() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
-      if (content) {
-        processImportText(content);
-      }
+      if (content) processImportText(content);
     };
     reader.readAsText(file, 'utf-8');
   };
@@ -534,9 +582,7 @@ export default function Studio() {
 
     const generatedSlides: Slide[] = importedQuestions.map((q, idx) => {
       const correctnessMap: Record<string, number> = {};
-      q.correctAnswers.forEach((ans) => {
-        correctnessMap[ans] = 100;
-      });
+      q.correctAnswers.forEach((ans) => { correctnessMap[ans] = 100; });
 
       return {
         id: `slide-${Date.now()}-${idx}`,
@@ -553,6 +599,7 @@ export default function Studio() {
           requiredCount: q.correctAnswers.length || 1,
           submitMode: 'INSTANT',
           autoStart: false,
+          allowOptionTranslation: false,
           notes: q.notes || '',
           optionsCount: q.options.length,
           options: q.options,
@@ -578,6 +625,9 @@ export default function Studio() {
           timerPlacement: 'CENTER',
           timerLabel: 'Pārtraukums',
           timerDuration: 300,
+          contactFields: defaultContactFieldsList,
+          contactsTitle: 'DALĪBNIEKU ANKETA',
+          contactsDescription: 'Lūdzu, ievadiet savus datus. Šī informācija netiks rādīta uz lielā ekrāna.',
           backgroundUrl: activeSlide?.config?.backgroundUrl,
           layout: [
             {
@@ -593,6 +643,7 @@ export default function Studio() {
               color: '#ffffff',
               bgColor: '#000000',
               bgOpacity: 85,
+              borderRadius: 16,
               bold: true,
               visibility: 'ALWAYS'
             }
@@ -601,13 +652,7 @@ export default function Studio() {
       };
     });
 
-    let newSlideList: Slide[] = [];
-    if (importMode === 'REPLACE') {
-      newSlideList = generatedSlides;
-    } else {
-      newSlideList = [...slides, ...generatedSlides];
-    }
-
+    const newSlideList = importMode === 'REPLACE' ? generatedSlides : [...slides, ...generatedSlides];
     setSlides(newSlideList);
     pushToHistory(newSlideList);
     setActiveSlideIdx(importMode === 'REPLACE' ? 0 : slides.length);
@@ -629,6 +674,39 @@ export default function Studio() {
       }
 
       if (isTyping) return;
+
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && selectedElementIds.length > 0) {
+        e.preventDefault();
+        const step = e.shiftKey ? 2 : 0.5;
+        let dx = 0;
+        let dy = 0;
+        if (e.key === 'ArrowUp') dy = -step;
+        if (e.key === 'ArrowDown') dy = step;
+        if (e.key === 'ArrowLeft') dx = -step;
+        if (e.key === 'ArrowRight') dx = step;
+
+        updateActiveSlide((s) => {
+          if (!s.config.optionsPositions) s.config.optionsPositions = {};
+          selectedElementIds.forEach((id) => {
+            if (id.startsWith('opt-index-')) {
+              const optIdx = Number(id.replace('opt-index-', ''));
+              const cur = s.config.optionsPositions[optIdx] || { x: 10, y: 58, w: 38, h: 10 };
+              s.config.optionsPositions[optIdx] = {
+                ...cur,
+                x: Math.max(0, Math.min(95, Number((cur.x + dx).toFixed(2)))),
+                y: Math.max(0, Math.min(95, Number((cur.y + dy).toFixed(2))))
+              };
+            } else {
+              const el = s.config.layout.find((x) => x.id === id);
+              if (el) {
+                el.x = Math.max(0, Math.min(95, Number((el.x + dx).toFixed(2))));
+                el.y = Math.max(0, Math.min(95, Number((el.y + dy).toFixed(2))));
+              }
+            }
+          });
+        }, true);
+        return;
+      }
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
         e.preventDefault();
@@ -654,12 +732,6 @@ export default function Studio() {
             const cloned = JSON.parse(JSON.stringify(s));
             cloned.id = `slide-${Date.now()}-${i}`;
             cloned.title = `${cloned.title} (Kopija)`;
-            if (cloned.config?.layout) {
-              cloned.config.layout = cloned.config.layout.map((el: any, elI: number) => ({
-                ...el,
-                id: `el-${Date.now()}-${i}-${elI}`
-              }));
-            }
             return cloned;
           });
 
@@ -667,9 +739,7 @@ export default function Studio() {
           updated.splice(insertIdx, 0, ...newPasted);
           setSlides(updated);
           pushToHistory(updated);
-
-          const newIndices = newPasted.map((_, i) => insertIdx + i);
-          setSelectedSlideIndices(newIndices);
+          setSelectedSlideIndices(newPasted.map((_, i) => insertIdx + i));
           setActiveSlideIdx(insertIdx);
         }
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
@@ -707,10 +777,7 @@ export default function Studio() {
     try {
       const res = await fetch(`${BACKEND_URL}/api/set-path`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAdminHeaders()
-        },
+        headers: { 'Content-Type': 'application/json', ...getAdminHeaders() },
         body: JSON.stringify({ path: folderToSet || activeFolder })
       });
       const data = await res.json();
@@ -720,9 +787,7 @@ export default function Studio() {
         if (Array.isArray(data.projects)) setAvailableProjects(data.projects);
         if (Array.isArray(data.media)) setMediaList(data.media);
       }
-    } catch {
-      console.error('Neizdevās sinhronizēt mapi');
-    }
+    } catch {}
   };
 
   useEffect(() => {
@@ -757,6 +822,7 @@ export default function Studio() {
         requiredCount: 1,
         submitMode: 'INSTANT',
         autoStart: false,
+        allowOptionTranslation: false,
         notes: '',
         optionsCount: 4,
         options: ['Variants A', 'Variants B', 'Variants C', 'Variants D'],
@@ -800,6 +866,7 @@ export default function Studio() {
             color: '#ffffff',
             bgColor: '#000000',
             bgOpacity: 85,
+            borderRadius: 16,
             bold: true,
             visibility: 'ALWAYS'
           }
@@ -839,26 +906,35 @@ export default function Studio() {
     setSelectedSlideIndices([newIdx]);
   };
 
-  const startDragOrResize = (
+  const handleElementMouseDown = (
     e: React.MouseEvent,
     mode: 'MOVE' | 'RESIZE_RIGHT' | 'RESIZE_LEFT',
-    primaryId: string
+    id: string
   ) => {
-    if (editingElementId === primaryId) return;
+    if (editingElementId === id) return;
     e.stopPropagation();
-    e.preventDefault();
 
-    let currentSelection = [...selectedElementIds];
-    if (!currentSelection.includes(primaryId)) {
-      currentSelection = e.ctrlKey || e.metaKey ? [...currentSelection, primaryId] : [primaryId];
-      setSelectedElementIds(currentSelection);
+    let newSelection = [...selectedElementIds];
+    if (e.ctrlKey || e.metaKey) {
+      if (newSelection.includes(id)) {
+        newSelection = newSelection.filter((item) => item !== id);
+      } else {
+        newSelection.push(id);
+      }
+    } else {
+      if (!newSelection.includes(id)) {
+        newSelection = [id];
+      }
     }
+    setSelectedElementIds(newSelection);
+
+    if (!newSelection.includes(id)) return;
 
     const snapshot: { id: string; target: 'LAYOUT' | 'OPTION'; origX: number; origY: number; origW: number; origH: number }[] = [];
 
-    currentSelection.forEach((id) => {
-      if (id.startsWith('opt-index-')) {
-        const idx = Number(id.replace('opt-index-', ''));
+    newSelection.forEach((selectedId) => {
+      if (selectedId.startsWith('opt-index-')) {
+        const idx = Number(selectedId.replace('opt-index-', ''));
         const totalOpt = activeSlide.config.options?.length || 4;
         const pos = activeSlide.config.optionsPositions?.[idx] || {
           x: 10 + (idx % 2) * 42,
@@ -866,16 +942,16 @@ export default function Studio() {
           w: 38,
           h: totalOpt > 4 ? 9 : 10
         };
-        snapshot.push({ id, target: 'OPTION', origX: pos.x, origY: pos.y, origW: pos.w, origH: pos.h });
+        snapshot.push({ id: selectedId, target: 'OPTION', origX: pos.x, origY: pos.y, origW: pos.w, origH: pos.h });
       } else {
-        const el = activeSlide.config.layout.find((x) => x.id === id);
+        const el = activeSlide.config.layout.find((x) => x.id === selectedId);
         if (el) snapshot.push({ id: el.id, target: 'LAYOUT', origX: el.x, origY: el.y, origW: el.w, origH: el.h });
       }
     });
 
     setDragState({
       mode,
-      primaryId,
+      primaryId: id,
       startX: e.clientX,
       startY: e.clientY,
       elementsSnapshot: snapshot
@@ -971,9 +1047,7 @@ export default function Studio() {
   };
 
   const handleMouseUp = () => {
-    if (dragState) {
-      pushToHistory(slidesRef.current);
-    }
+    if (dragState) pushToHistory(slidesRef.current);
 
     if (marqueeBox && canvasRef.current) {
       const rect = canvasRef.current.getBoundingClientRect();
@@ -983,7 +1057,6 @@ export default function Studio() {
       const y2 = Math.max(marqueeBox.startY, marqueeBox.currentY) - rect.top;
 
       const newlySelected: string[] = [];
-
       activeSlide.config.layout.forEach((el) => {
         const elPxX = (el.x / 100) * rect.width;
         const elPxY = (el.y / 100) * rect.height;
@@ -1003,8 +1076,7 @@ export default function Studio() {
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      uploadAndAddMedia(file);
+      uploadAndAddMedia(e.dataTransfer.files[0]);
     }
   };
 
@@ -1037,28 +1109,6 @@ export default function Studio() {
     setSelectedElementIds([newElement.id]);
   };
 
-  const playPreviewFragment = (el: CanvasElement) => {
-    if (!previewMediaRef.current) return;
-    const media = previewMediaRef.current;
-    media.volume = (el.volume !== undefined ? el.volume : 100) / 100;
-    media.currentTime = el.trimStart || 0;
-    media.play().catch(() => {});
-
-    media.ontimeupdate = () => {
-      if (el.trimEnd && media.currentTime >= el.trimEnd) {
-        media.pause();
-        media.ontimeupdate = null;
-      }
-    };
-  };
-
-  const stopPreviewFragment = () => {
-    if (previewMediaRef.current) {
-      previewMediaRef.current.pause();
-      previewMediaRef.current.ontimeupdate = null;
-    }
-  };
-
   const handleOpenProject = async (name: string) => {
     if (!name) return;
     try {
@@ -1080,21 +1130,6 @@ export default function Studio() {
     }
   };
 
-  const handleAddTeam = () => {
-    if (!newTeamInput.trim()) return;
-    const current = mobileBranding.predefinedTeams || [];
-    if (!current.includes(newTeamInput.trim())) {
-      setMobileBranding({ ...mobileBranding, predefinedTeams: [...current, newTeamInput.trim()] });
-    }
-    setNewTeamInput('');
-  };
-
-  const handleRemoveTeam = (teamToRemove: string) => {
-    const current = mobileBranding.predefinedTeams || [];
-    setMobileBranding({ ...mobileBranding, predefinedTeams: current.filter((t) => t !== teamToRemove) });
-  };
-
-  // 🌟 KONTAKTU LAUKU VADĪBA
   const handleAddContactField = () => {
     if (!newFieldLabel.trim()) return;
     const newField: ContactField = {
@@ -1167,15 +1202,9 @@ export default function Studio() {
       return `url(${MEDIA_BASE_URL}/${activeSlide.config.backgroundUrl})`;
     }
     const theme = (mobileBranding as any).presentationTheme || 'TV_SHOW';
-    if (theme === 'TV_SHOW') {
-      return 'radial-gradient(ellipse at 50% 30%, #0d1b33 0%, #030712 100%)';
-    }
-    if (theme === 'ARENA') {
-      return 'linear-gradient(135deg, #120207 0%, #050505 60%, #150009 100%)';
-    }
-    if (theme === 'MINIMAL') {
-      return 'linear-gradient(180deg, #18181b 0%, #09090b 100%)';
-    }
+    if (theme === 'TV_SHOW') return 'radial-gradient(ellipse at 50% 30%, #0d1b33 0%, #030712 100%)';
+    if (theme === 'ARENA') return 'linear-gradient(135deg, #120207 0%, #050505 60%, #150009 100%)';
+    if (theme === 'MINIMAL') return 'linear-gradient(180deg, #18181b 0%, #09090b 100%)';
     return '#181818';
   };
 
@@ -1187,7 +1216,7 @@ export default function Studio() {
 
   return (
     <div style={studioLayout} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
-      {/* 1. RIBBON JOSLA */}
+      {/* 1. AUGŠĒJĀ RIBBON JOSLA */}
       <div style={ribbonStyle}>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <span style={{ fontWeight: 'bold', color: '#ffc107', fontSize: '1.1rem' }}>EVENT STUDIO</span>
@@ -1221,6 +1250,7 @@ export default function Studio() {
                       requiredCount: 1,
                       submitMode: 'INSTANT',
                       autoStart: false,
+                      allowOptionTranslation: false,
                       optionsLayout: 'INDIVIDUAL',
                       optionsPositions: {},
                       optionsColor: '#ffffff',
@@ -1311,9 +1341,9 @@ export default function Studio() {
                 color: '#ffffff',
                 bgColor: '#000000',
                 bgOpacity: 85,
+                borderRadius: 12,
                 bold: true,
-                visibility: 'ALWAYS',
-                borderRadius: 8
+                visibility: 'ALWAYS'
               };
               updateActiveSlide((s) => s.config.layout.push(newText), true);
               setSelectedElementIds([newText.id]);
@@ -1354,7 +1384,7 @@ export default function Studio() {
         </button>
       </div>
 
-      {/* 3. GALVENĀ ZONA */}
+      {/* 3. GALVENĀ DARBA ZONA */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* KREISĀ PUSE: Slaidi */}
         <div style={sidebarLeft}>
@@ -1464,6 +1494,7 @@ export default function Studio() {
               }
             }}
           >
+            {/* 🌟 15.55% precīzi atbilst prezentācijas 84px augšējai joslai 16:9 proporcijā */}
             {showTopBarGuide && activeSlide?.type !== 'BILLBOARD' && activeSlide?.type !== 'LEADERBOARD' && (
               <div
                 style={{
@@ -1471,15 +1502,15 @@ export default function Studio() {
                   top: 0,
                   left: 0,
                   width: '100%',
-                  height: '14.8%',
+                  height: '15.55%',
                   background: 'rgba(0, 123, 255, 0.08)',
-                  borderBottom: '1px dashed rgba(0, 229, 255, 0.4)',
+                  borderBottom: '1.5px dashed rgba(0, 229, 255, 0.45)',
                   pointerEvents: 'none',
                   zIndex: 90,
                   display: 'flex',
                   alignItems: 'center',
                   paddingLeft: '15px',
-                  color: 'rgba(0, 229, 255, 0.7)',
+                  color: 'rgba(0, 229, 255, 0.75)',
                   fontSize: '0.75rem',
                   fontWeight: 'bold',
                   letterSpacing: '1px'
@@ -1515,19 +1546,16 @@ export default function Studio() {
               const isMediaBox = el.type === 'IMAGE' || el.type === 'VIDEO';
 
               const objFit = getObjectFitCss(el.fitMode);
-              const bRadius = `${el.borderRadius !== undefined ? el.borderRadius : (isMediaBox ? 16 : 8)}px`;
+              const bRadius = `${el.borderRadius !== undefined ? el.borderRadius : (isMediaBox ? 16 : 12)}px`;
 
               return (
                 <div
                   key={el.id}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedElementIds(e.ctrlKey || e.metaKey ? [...selectedElementIds, el.id] : [el.id]);
-                  }}
+                  onClick={(e) => e.stopPropagation()}
                   onMouseDown={(e) => {
                     const target = e.target as HTMLElement;
                     if (target.dataset.role === 'resize-handle') return;
-                    startDragOrResize(e, 'MOVE', el.id);
+                    handleElementMouseDown(e, 'MOVE', el.id);
                   }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
@@ -1540,15 +1568,16 @@ export default function Studio() {
                     width: `${el.w}%`,
                     height: isMediaBox ? `${el.h}%` : 'auto',
                     minHeight: `${el.h}%`,
-                    border: isSelected ? '2px dashed #00ff00' : 'none',
+                    border: isSelected ? '2.5px dashed #00ff00' : 'none',
+                    boxShadow: isSelected ? '0 0 15px rgba(0,255,0,0.5)' : 'none',
                     cursor: isEditing ? 'text' : 'move',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     background: el.type === 'QUESTION' || el.type === 'TEXT' ? bgRgba : 'transparent',
-                    backdropFilter: el.type === 'QUESTION' || el.type === 'TEXT' ? 'blur(6px)' : 'none',
+                    backdropFilter: el.type === 'QUESTION' || el.type === 'TEXT' ? 'blur(8px)' : 'none',
                     borderRadius: bRadius,
-                    padding: el.type === 'QUESTION' ? '10px 15px' : el.type === 'TEXT' ? '6px 10px' : '0',
+                    padding: el.type === 'QUESTION' ? '12px 18px' : el.type === 'TEXT' ? '8px 12px' : '0',
                     boxSizing: 'border-box',
                     zIndex: isSelected ? 25 : 5,
                     fontFamily: el.fontFamily || 'Segoe UI',
@@ -1644,17 +1673,17 @@ export default function Studio() {
                       onMouseDown={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
-                        startDragOrResize(e, 'RESIZE_RIGHT', el.id);
+                        handleElementMouseDown(e, 'RESIZE_RIGHT', el.id);
                       }}
                       style={resizeHandleRight}
-                      title="Pavelc stūri, lai mainītu izmēru"
+                      title="Mainīt izmēru (Turi Shift, lai saglabātu proporcijas)"
                     />
                   )}
                 </div>
               );
             })}
 
-            {/* 🌟 JAUNS: KONTAKTU SLAIDA KANVAS PRIEKŠSKATĪJUMS */}
+            {/* KONTAKTI ANKETA */}
             {activeSlide?.type === 'CONTACTS' && (
               <div
                 style={{
@@ -1695,7 +1724,7 @@ export default function Studio() {
               </div>
             )}
 
-            {/* TAIMERA KANVAS SKATS */}
+            {/* TAIMERIS */}
             {activeSlide?.type === 'TIMER' && (
               <div
                 style={{
@@ -1727,7 +1756,7 @@ export default function Studio() {
               </div>
             )}
 
-            {/* ĀTRĀS PULTS KANVAS SKATS */}
+            {/* ĀTRĀ PULTS */}
             {activeSlide?.type === 'BUZZER_RACE' && (
               <div style={{ position: 'absolute', bottom: '30px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', pointerEvents: 'none' }}>
                 <div style={{ width: '110px', height: '110px', borderRadius: '50%', background: 'radial-gradient(circle at 35% 35%, #ff4d4d, #cc0000, #800000)', border: '4px solid #fff', boxShadow: '0 0 25px rgba(255, 0, 0, 0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '1.2rem', fontWeight: '900' }}>
@@ -1739,7 +1768,7 @@ export default function Studio() {
               </div>
             )}
 
-            {/* SECĪBAS KĀRTOŠANAS KANVAS SKATS */}
+            {/* SECĪBAS KĀRTOŠANA */}
             {activeSlide?.type === 'ORDERING' && (
               <div style={{ position: 'absolute', bottom: '20px', width: '85%', left: '7.5%', display: 'flex', flexDirection: 'column', gap: '6px', zIndex: 10 }}>
                 {(activeSlide.config.options || []).map((item, idx) => (
@@ -1762,7 +1791,7 @@ export default function Studio() {
               </div>
             )}
 
-            {/* ATBILŽU POGAS */}
+            {/* ATBILŽU POGAS — 🌟 100% SAKRĪT AR PREZENTĀCIJAS VIZUĀLO STILU */}
             {(activeSlide?.type === 'QUESTION' || activeSlide?.type === 'MAJORITY' || (activeSlide?.type === 'BUZZER_RACE' && activeSlide?.config?.buzzerRaceType === 'WITH_OPTIONS')) &&
               activeSlide?.config?.options?.map((opt, i) => {
                 const isIndividual = (activeSlide.config.optionsLayout || 'INDIVIDUAL') === 'INDIVIDUAL';
@@ -1814,17 +1843,21 @@ export default function Studio() {
                 const isMusicTop = isMusicMode && i < 3;
                 const isMusicBottom = isMusicMode && i >= 3;
 
+                // 🌟 Studijas atbilžu fona krāsa tagad sakrīt ar prezentācijas sapludināšanas efektu:
+                const cardBg = isZeroOpacity || isOnlyLetter
+                  ? 'transparent'
+                  : isCorrect
+                  ? `linear-gradient(135deg, ${hexToRgba(optCorrectColor, 65)}, ${hexToRgba(optBg, Math.min(100, optOpacity + 10))})`
+                  : hexToRgba(optBg, optOpacity);
+
                 return (
                   <div
                     key={`opt-box-${i}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedElementIds(e.ctrlKey || e.metaKey ? [...selectedElementIds, optionId] : [optionId]);
-                    }}
+                    onClick={(e) => e.stopPropagation()}
                     onMouseDown={(e) => {
                       const target = e.target as HTMLElement;
                       if (target.dataset.role === 'resize-handle' || target.tagName === 'INPUT') return;
-                      if (isIndividual) startDragOrResize(e, 'MOVE', optionId);
+                      if (isIndividual) handleElementMouseDown(e, 'MOVE', optionId);
                     }}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
@@ -1836,10 +1869,22 @@ export default function Studio() {
                       top: `${pos.y}%`,
                       width: isOnlyLetter && !isEditing ? 'auto' : `${pos.w}%`,
                       height: `${pos.h}%`,
-                      background: isZeroOpacity || isOnlyLetter ? 'transparent' : hexToRgba(optBg, optOpacity),
+                      background: cardBg,
                       backdropFilter: isZeroOpacity || isOnlyLetter ? 'none' : 'blur(6px)',
-                      boxShadow: isZeroOpacity || isOnlyLetter ? 'none' : '0 4px 15px rgba(0,0,0,0.5)',
-                      border: isSelected ? '2px dashed #ffc107' : isMusicTop ? '2px solid #00e5ff' : isMusicBottom ? '2px solid #ff007f' : 'none',
+                      boxShadow: isZeroOpacity || isOnlyLetter
+                        ? 'none'
+                        : isCorrect
+                        ? `0 0 15px ${optCorrectColor}, 0 4px 15px rgba(0,0,0,0.5)`
+                        : '0 4px 15px rgba(0,0,0,0.5)',
+                      border: isSelected
+                        ? '2.5px dashed #ffc107'
+                        : isCorrect
+                        ? `2.5px solid ${optCorrectColor}`
+                        : isMusicTop
+                        ? '2px solid #00e5ff'
+                        : isMusicBottom
+                        ? '2px solid #ff007f'
+                        : '1px solid rgba(255,255,255,0.15)',
                       borderRadius: isOnlyLetter && !isEditing ? '50%' : '10px',
                       display: 'flex',
                       alignItems: 'center',
@@ -1847,7 +1892,7 @@ export default function Studio() {
                       padding: isOnlyLetter && !isEditing ? '0' : isZeroOpacity ? '0 6px' : '0 12px',
                       boxSizing: 'border-box',
                       cursor: isIndividual ? 'move' : 'default',
-                      zIndex: 10,
+                      zIndex: isSelected ? 20 : 10,
                       overflow: 'visible'
                     }}
                   >
@@ -1857,7 +1902,7 @@ export default function Studio() {
                         onMouseDown={(e) => {
                           e.stopPropagation();
                           e.preventDefault();
-                          startDragOrResize(e, 'RESIZE_LEFT', optionId);
+                          handleElementMouseDown(e, 'RESIZE_LEFT', optionId);
                         }}
                         style={resizeHandleLeft}
                         title="Mainīt izmēru no kreisās puses"
@@ -1912,7 +1957,7 @@ export default function Studio() {
                           style={{
                             flex: 1,
                             fontSize: getOptionFontSize(opt),
-                            color: optColor,
+                            color: isCorrect ? '#ffffff' : optColor,
                             fontWeight: 'bold',
                             whiteSpace: 'normal',
                             lineHeight: 1.2,
@@ -2001,7 +2046,7 @@ export default function Studio() {
                         onMouseDown={(e) => {
                           e.stopPropagation();
                           e.preventDefault();
-                          startDragOrResize(e, 'RESIZE_RIGHT', optionId);
+                          handleElementMouseDown(e, 'RESIZE_RIGHT', optionId);
                         }}
                         style={resizeHandleRight}
                         title="Mainīt izmēru no labās puses"
@@ -2013,13 +2058,14 @@ export default function Studio() {
           </div>
         </div>
 
-        {/* LABĀ PUSE: Inspektors un iestatījumi */}
-        <div style={sidebarRight}>
+        {/* 🌟 2. DAĻAS SĀKUMS: LABĀ PUSE, MODĀLIE LOGI & STILI */}
+        <div ref={sidebarRightRef} style={sidebarRight}>
+          {/* 🌟 1. ATLASĪTO KANVAS ELEMENTU KOPĪGAIS INSPEKTORS */}
           {selectedElements.length > 0 && primarySelectedElement && (
             <div style={selectedBoxTop}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'center' }}>
                 <span style={{ fontWeight: 'bold', color: '#00ff00', fontSize: '0.85rem' }}>
-                  {hasMultipleSelection ? `👥 ATLASĪTI: ${selectedElements.length} ELEMENTI` : `IZVĒLĒTS: ${primarySelectedElement.type}`}
+                  {hasMultipleSelection ? `👥 ATLASĪTI: ${selectedElements.length} ELEMENTI` : `🔍 IZVĒLĒTS: ${primarySelectedElement.type}`}
                 </span>
                 <div style={{ display: 'flex', gap: '4px' }}>
                   <button onClick={handleDuplicateSelectedElements} style={{ background: '#007bff', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', padding: '3px 6px', fontSize: '0.75rem', fontWeight: 'bold' }}>
@@ -2040,11 +2086,12 @@ export default function Studio() {
                 </button>
               </div>
 
+              {/* TEKSTA & JAUTĀJUMA KRĀSAS, FONTI, FONA INTENSITĀTE UN NOAPAĻOJUMS */}
               {selectedElements.some((el) => el.type === 'QUESTION' || el.type === 'TEXT') && (
-                <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
-                  <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+                <div style={{ borderTop: '1px solid #444', paddingTop: '8px', marginBottom: '6px' }}>
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                     <select
-                      style={{ ...selectStyle, flex: 1.4 }}
+                      style={{ ...selectStyle, flex: 1.4, margin: 0 }}
                       value={primarySelectedElement.fontFamily || 'Segoe UI'}
                       onChange={(e) => updateSelectedElements((el) => { el.fontFamily = e.target.value; })}
                     >
@@ -2069,9 +2116,75 @@ export default function Studio() {
                       title="Fonta izmērs"
                     />
                   </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '0.78rem', color: '#aaa' }}>Teksts:</span>
+                      <input
+                        type="color"
+                        value={primarySelectedElement.color || '#ffffff'}
+                        onChange={(e) => updateSelectedElements((el) => { el.color = e.target.value; })}
+                        style={colorPicker}
+                        title="Mainīt teksta krāsu"
+                      />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '0.78rem', color: '#aaa' }}>Fons:</span>
+                      <input
+                        type="color"
+                        value={primarySelectedElement.bgColor || '#000000'}
+                        onChange={(e) => updateSelectedElements((el) => { el.bgColor = e.target.value; })}
+                        style={colorPicker}
+                        title="Mainīt fona krāsu"
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Loga fona intensitāte:</span>
+                      <span style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>
+                        {primarySelectedElement.bgOpacity ?? 85}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={primarySelectedElement.bgOpacity ?? 85}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        updateSelectedElements((el) => { el.bgOpacity = val; });
+                      }}
+                      style={{ width: '100%', accentColor: '#00ff00', cursor: 'pointer' }}
+                    />
+                  </div>
+
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Malu noapaļojums:</span>
+                      <span style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold' }}>
+                        {primarySelectedElement.borderRadius ?? 16}px
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="40"
+                      step="2"
+                      value={primarySelectedElement.borderRadius ?? 16}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        updateSelectedElements((el) => { el.borderRadius = val; });
+                      }}
+                      style={{ width: '100%', accentColor: '#00e5ff', cursor: 'pointer' }}
+                    />
+                  </div>
                 </div>
               )}
 
+              {/* Mediju aizpildījums & noapaļojums */}
               {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO') && (
                 <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '8px' }}>
                   <label style={labelStyle}>Mediju aizpildījums (Fit Mode):</label>
@@ -2089,7 +2202,6 @@ export default function Studio() {
                         background: (primarySelectedElement.fitMode || 'COVER') === 'COVER' ? '#007bff' : '#222',
                         border: (primarySelectedElement.fitMode || 'COVER') === 'COVER' ? '1.5px solid #00e5ff' : '1px solid #444'
                       }}
-                      title="Aizpildīt visu rāmi bez tukšumiem"
                     >
                       🖼️ Cover
                     </button>
@@ -2106,7 +2218,6 @@ export default function Studio() {
                         background: primarySelectedElement.fitMode === 'FILL' ? '#007bff' : '#222',
                         border: primarySelectedElement.fitMode === 'FILL' ? '1.5px solid #00e5ff' : '1px solid #444'
                       }}
-                      title="Iestiept pa visu rāmi"
                     >
                       🔲 Iestiept
                     </button>
@@ -2123,7 +2234,6 @@ export default function Studio() {
                         background: primarySelectedElement.fitMode === 'CONTAIN' ? '#007bff' : '#222',
                         border: primarySelectedElement.fitMode === 'CONTAIN' ? '1.5px solid #00e5ff' : '1px solid #444'
                       }}
-                      title="Ietilpināt ar malām"
                     >
                       🔍 Ar malām
                     </button>
@@ -2149,978 +2259,50 @@ export default function Studio() {
                         }}
                         style={{ flex: 1, accentColor: '#00e5ff', cursor: 'pointer' }}
                       />
-                      <button
-                        type="button"
-                        onClick={() => updateSelectedElements((el) => { el.borderRadius = 0; })}
-                        style={{ padding: '2px 5px', background: '#333', color: '#ccc', border: '1px solid #555', borderRadius: '3px', fontSize: '0.7rem', cursor: 'pointer' }}
-                        title="Asas malas (0px)"
-                      >
-                        0
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => updateSelectedElements((el) => { el.borderRadius = 16; })}
-                        style={{ padding: '2px 5px', background: '#333', color: '#ffc107', border: '1px solid #555', borderRadius: '3px', fontSize: '0.7rem', cursor: 'pointer' }}
-                        title="Elegants noapaļojums (16px)"
-                      >
-                        16
-                      </button>
                     </div>
-                  </div>
-                </div>
-              )}
-
-              {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO' || el.type === 'AUDIO') && (
-                <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
-                  <label style={labelStyle}>Kad rādīt / atskaņot:</label>
-                  <select
-                    style={{ ...selectStyle, borderColor: '#00e5ff' }}
-                    value={primarySelectedElement.visibility || (activeSlide.type === 'BILLBOARD' ? 'ALWAYS' : 'DURING_QUESTION')}
-                    onChange={(e) => updateSelectedElements((el) => { el.visibility = e.target.value as any; })}
-                  >
-                    <option value="ALWAYS">👁️ Vienmēr (visā slaida laikā)</option>
-                    <option value="DURING_QUESTION">⏳ Tikai jautājuma laikā</option>
-                    <option value="UNTIL_REVEAL">🔍 Līdz pareizās atbildes atklāšanai</option>
-                    <option value="AFTER_REVEAL">🎉 Tikai pēc atbildes atklāšanas</option>
-                  </select>
-                </div>
-              )}
-
-              {selectedElements.some((el) => el.type === 'IMAGE' || el.type === 'VIDEO') && (
-                <div style={{ borderTop: '1px solid #444', paddingTop: '6px', marginBottom: '6px' }}>
-                  <label style={labelStyle}>Aizmiglojums (Blur):</label>
-                  <select
-                    style={{ ...selectStyle, borderColor: '#00e5ff' }}
-                    value={primarySelectedElement.blurMode || 'NONE'}
-                    onChange={(e) => updateSelectedElements((el) => { el.blurMode = e.target.value as any; })}
-                  >
-                    <option value="NONE">❌ Bez Blur (Normāls)</option>
-                    <option value="STATIC">🔒 Fiksēts Blur</option>
-                    <option value="PROGRESSIVE">✨ Dinamiskais Blur (Kļūst ass)</option>
-                  </select>
-
-                  {(primarySelectedElement.blurMode === 'STATIC' || primarySelectedElement.blurMode === 'PROGRESSIVE') && (
-                    <div style={{ marginTop: '4px' }}>
-                      <input
-                        type="range"
-                        min="2"
-                        max="40"
-                        value={primarySelectedElement.blurAmount || 12}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          updateSelectedElements((el) => { el.blurAmount = val; });
-                        }}
-                        style={{ width: '100%', accentColor: '#00e5ff' }}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {selectedElements.some((el) => el.type === 'VIDEO' || el.type === 'AUDIO') && (
-                <div style={{ borderTop: '1px solid #444', paddingTop: '6px' }}>
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={labelStyle}>Sākums (sek):</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={primarySelectedElement.trimStart ?? 0}
-                        onChange={(e) => {
-                          const val = Math.max(0, parseFloat(e.target.value) || 0);
-                          updateSelectedElements((el) => { el.trimStart = val; });
-                        }}
-                        style={inputStyle}
-                      />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label style={labelStyle}>Beigas (sek):</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={primarySelectedElement.trimEnd ?? 30}
-                        onChange={(e) => {
-                          const val = Math.max(0, parseFloat(e.target.value) || 0);
-                          updateSelectedElements((el) => { el.trimEnd = val; });
-                        }}
-                        style={inputStyle}
-                      />
-                    </div>
-                  </div>
-
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: '#ccc', margin: '6px 0', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={!!primarySelectedElement.loop}
-                      onChange={(e) => updateSelectedElements((el) => { el.loop = e.target.checked; })}
-                    />
-                    🔁 Atkārtot bezgalīgi (Loop cilpa)
-                  </label>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#aaa', marginBottom: '2px', marginTop: '6px' }}>
-                    <span>Skaļums:</span>
-                    <span style={{ color: '#00ff00', fontWeight: 'bold' }}>{primarySelectedElement.volume ?? 100}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
-                    value={primarySelectedElement.volume ?? 100}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      updateSelectedElements((el) => { el.volume = val; });
-                      if (previewMediaRef.current) previewMediaRef.current.volume = val / 100;
-                    }}
-                    style={{ width: '100%', accentColor: '#00ff00' }}
-                  />
-
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                    <button
-                      style={{ ...btnSmallAction, flex: 1, background: '#28a745', margin: 0 }}
-                      onClick={() => playPreviewFragment(primarySelectedElement)}
-                    >
-                      ▶️ Pārbaudīt
-                    </button>
-                    <button
-                      style={{ ...btnSmallAction, flex: 1, background: '#dc3545', margin: 0 }}
-                      onClick={stopPreviewFragment}
-                    >
-                      ⏹️ Apturēt
-                    </button>
                   </div>
                 </div>
               )}
             </div>
           )}
 
-          {/* SPĒLES & SKATUVES IESTATĪJUMI */}
-          <div style={accordionCard}>
-            <div style={accordionHeader} onClick={() => toggleSection('branding')}>
-              <span>📱 SPĒLES & SKATUVES IESTATĪJUMI</span>
-              <span>{sections.branding ? '▲' : '▼'}</span>
-            </div>
-
-            {sections.branding && (
-              <div style={{ marginTop: '10px' }}>
-                <div style={{ background: '#1c2833', border: '1px solid #ffd700', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
-                  <label style={{ ...labelStyle, color: '#ffd700', fontWeight: 'bold', marginTop: 0 }}>
-                    👑 Prezentācijas TV ekrāna stils / tēma:
-                  </label>
-                  <select
-                    style={{ ...selectStyle, borderColor: '#ffd700', color: '#ffd700', marginTop: '4px', marginBottom: '4px', fontWeight: 'bold', background: '#1c1b10' }}
-                    value={(mobileBranding as any).presentationTheme || 'TV_SHOW'}
-                    onChange={(e) => setMobileBranding({ ...mobileBranding, presentationTheme: e.target.value as any })}
-                  >
-                    <option value="TV_SHOW">🏆 TV Prime-Time Show</option>
-                    <option value="ARENA">⚡ Arena & Esports</option>
-                    <option value="MINIMAL">🍏 Modern Studio Minimal</option>
-                    <option value="NEON">🟢 Cyber Neon Arcade</option>
-                  </select>
-                </div>
-
-                <label style={labelStyle}>Lietotnes nosaukums telefonā:</label>
-                <input
-                  style={inputStyle}
-                  value={mobileBranding.appTitle || 'EVENT BUZZER'}
-                  onChange={(e) => setMobileBranding({ ...mobileBranding, appTitle: e.target.value })}
-                />
-
-                <label style={labelStyle}>Sākuma Logo (PNG/SVG):</label>
-                <select
-                  style={selectStyle}
-                  value={mobileBranding.appLogo || ''}
-                  onChange={(e) => setMobileBranding({ ...mobileBranding, appLogo: e.target.value })}
-                >
-                  <option value="">(Noklusējuma ikona 🎮)</option>
-                  {mediaList.filter((f) => /\.(png|webp|svg)$/i.test(f)).map((f) => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
-
-                <label style={labelStyle}>Logo pozīcija spēles laikā:</label>
-                <select
-                  style={{ ...selectStyle, borderColor: '#00e5ff' }}
-                  value={mobileBranding.gameLogoPosition || 'NONE'}
-                  onChange={(e) => setMobileBranding({ ...mobileBranding, gameLogoPosition: e.target.value as any })}
-                >
-                  <option value="NONE">❌ Nerādīt spēles laikā (Tikai Lobby)</option>
-                  <option value="TOP">⬆️ Rādīt augšā virs pultīm</option>
-                  <option value="BOTTOM">⬇️ Rādīt apakšā zem pultīm</option>
-                </select>
-
-                <label style={labelStyle}>Spēlētāja fona attēls (9:16):</label>
-                <select
-                  style={selectStyle}
-                  value={mobileBranding.appBgImage || ''}
-                  onChange={(e) => setMobileBranding({ ...mobileBranding, appBgImage: e.target.value })}
-                >
-                  <option value="">(Tumšs fons)</option>
-                  {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
-                  <span style={{ fontSize: '0.8rem', color: '#aaa' }}>Mobilā fona krāsa:</span>
-                  <input
-                    type="color"
-                    value={mobileBranding.appBgColor || '#121212'}
-                    onChange={(e) => setMobileBranding({ ...mobileBranding, appBgColor: e.target.value })}
-                    style={colorPicker}
-                  />
-                </div>
-
-                <label style={labelStyle}>Sākuma reģistrācijas ekrāns:</label>
-                <select
-                  style={{ ...selectStyle, borderColor: '#00e5ff' }}
-                  value={mobileBranding.lobbyMode || 'CIRCLE'}
-                  onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyMode: e.target.value as any })}
-                >
-                  <option value="CIRCLE">Klasiskais (Lielais PIN & Aplis)</option>
-                  <option value="INTERACTIVE_DOTS">Interaktīvais (Bumbiņas ar Pults testu)</option>
-                </select>
-
-                <div style={{ marginTop: '10px', background: '#15222e', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', color: '#00e5ff', fontSize: '0.85rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={!!mobileBranding.teamModeEnabled}
-                      onChange={(e) => setMobileBranding({ ...mobileBranding, teamModeEnabled: e.target.checked })}
-                    />
-                    👥 Ieslēgt Komandu režīmu
-                  </label>
-
-                  {mobileBranding.teamModeEnabled && (
-                    <div style={{ marginTop: '8px' }}>
-                      <label style={labelStyle}>Komandu punktu aprēķins:</label>
-                      <select
-                        style={selectStyle}
-                        value={mobileBranding.teamScoringMode || 'AVG'}
-                        onChange={(e) => setMobileBranding({ ...mobileBranding, teamScoringMode: e.target.value as any })}
-                      >
-                        <option value="AVG">Vidējais punktu skaits</option>
-                        <option value="SUM">Kopējā punktu summa</option>
-                      </select>
-
-                      <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
-                        <input
-                          style={{ ...inputStyle, flex: 1 }}
-                          placeholder="Pievienot komandu..."
-                          value={newTeamInput}
-                          onChange={(e) => setNewTeamInput(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleAddTeam()}
-                        />
-                        <button onClick={handleAddTeam} style={{ ...btnSmallAction, width: 'auto', background: '#007bff', margin: 0 }}>
-                          ➕
-                        </button>
-                      </div>
-
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: '70px', overflowY: 'auto' }}>
-                        {(mobileBranding.predefinedTeams || []).map((team) => (
-                          <span
-                            key={team}
-                            style={{ background: '#003366', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}
-                          >
-                            {team}
-                            <button onClick={() => handleRemoveTeam(team)} style={{ background: 'transparent', border: 'none', color: '#ff4d4d', cursor: 'pointer', padding: 0, fontWeight: 'bold' }}>×</button>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* DIPLOMU DIZAINS */}
-          <div style={accordionCard}>
-            <div style={accordionHeader} onClick={() => toggleSection('diploma')}>
-              <span>🏆 DIPLOMU DIZAINS & NOFORMĒJUMS</span>
-              <span>{sections.diploma ? '▲' : '▼'}</span>
-            </div>
-
-            {sections.diploma && (
-              <div style={{ marginTop: '10px' }}>
-                <button
-                  onClick={() => setShowDiplomaModal(true)}
-                  style={{ ...btnSmallAction, background: '#d63384', color: '#fff', fontWeight: 'bold', marginBottom: '10px' }}
-                >
-                  👁️ Atvērt diplomu priekšskatījumu
-                </button>
-
-                <label style={labelStyle}>Drukas tēma:</label>
-                <select
-                  style={selectStyle}
-                  value={diplomaCfg.theme || 'GOLD_DARK'}
-                  onChange={(e) => setMobileBranding({
-                    ...mobileBranding,
-                    diplomaConfig: { ...diplomaCfg, theme: e.target.value as any }
-                  })}
-                >
-                  <option value="GOLD_DARK">🌙 Zelta & Tumšs (Grezns)</option>
-                  <option value="GOLD_WHITE_PRINT">🖨️ Balts & Tinti taupošs (Printerim)</option>
-                </select>
-
-                <label style={labelStyle}>Diplomu virsraksts:</label>
-                <input
-                  style={inputStyle}
-                  value={diplomaCfg.customTitle || '🏆 DIPLOMS 🏆'}
-                  onChange={(e) => setMobileBranding({
-                    ...mobileBranding,
-                    diplomaConfig: { ...diplomaCfg, customTitle: e.target.value }
-                  })}
-                />
-
-                <label style={labelStyle}>Apakšvirsraksts:</label>
-                <input
-                  style={inputStyle}
-                  value={diplomaCfg.customSubtitle || 'Par iegūto vietu spēlē'}
-                  onChange={(e) => setMobileBranding({
-                    ...mobileBranding,
-                    diplomaConfig: { ...diplomaCfg, customSubtitle: e.target.value }
-                  })}
-                />
-
-                <label style={labelStyle}>Kājenes teksts:</label>
-                <input
-                  style={inputStyle}
-                  value={diplomaCfg.footerText || 'Event Studio'}
-                  onChange={(e) => setMobileBranding({
-                    ...mobileBranding,
-                    diplomaConfig: { ...diplomaCfg, footerText: e.target.value }
-                  })}
-                />
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
-                  <span style={{ fontSize: '0.8rem', color: '#aaa' }}>Rāmja krāsa:</span>
-                  <input
-                    type="color"
-                    value={diplomaCfg.borderColor || '#ffc107'}
-                    onChange={(e) => setMobileBranding({
-                      ...mobileBranding,
-                      diplomaConfig: { ...diplomaCfg, borderColor: e.target.value }
-                    })}
-                    style={colorPicker}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* MEDIJU MAPE */}
-          <div style={accordionCard}>
-            <div style={accordionHeader} onClick={() => toggleSection('media')}>
-              <span>📁 MEDIJU MAPE ({filteredMediaList.length})</span>
-              <span>{sections.media ? '▲' : '▼'}</span>
-            </div>
-
-            {sections.media && (
-              <div style={{ marginTop: '10px' }}>
-                <input
-                  style={{ ...inputStyle, marginBottom: '8px', fontSize: '0.85rem', borderColor: '#00e5ff' }}
-                  placeholder="🔍 Meklēt mediju..."
-                  value={mediaSearchQuery}
-                  onChange={(e) => setMediaSearchQuery(e.target.value)}
-                />
-                <div style={{ maxHeight: '140px', overflowY: 'auto' }}>
-                  {filteredMediaList.length === 0 ? (
-                    <div style={{ fontSize: '0.75rem', color: '#888', fontStyle: 'italic', padding: '4px' }}>Nav atbilstošu failu</div>
-                  ) : (
-                    filteredMediaList.map((m) => (
-                      <div key={m} style={mediaItem} onClick={() => addMediaElement(m)} title="Klikšķini, lai pievienotu slaidam">
-                        📄 {m}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* SLAIDA TIPS & PIEZĪMES */}
-          <div style={accordionCard}>
-            <div style={accordionHeader} onClick={() => toggleSection('info')}>
-              <span>📋 SLAIDA TIPS & PIEZĪMES</span>
-              <span>{sections.info ? '▲' : '▼'}</span>
-            </div>
-
-            {sections.info && (
-              <div style={{ marginTop: '10px' }}>
-                <label style={labelStyle}>Slaida tips:</label>
-                <select
-                  style={selectStyle}
-                  value={activeSlide.type}
-                  onChange={(e) => {
-                    const newType = e.target.value as any;
-                    updateActiveSlide((s) => {
-                      s.type = newType;
-                      if (newType === 'BILLBOARD') {
-                        s.config.layout.forEach((el) => {
-                          if (el.type === 'IMAGE' || el.type === 'VIDEO' || el.type === 'AUDIO') {
-                            el.visibility = 'ALWAYS';
-                          }
-                        });
-                      }
-                      if (newType === 'CONTACTS' && (!s.config.contactFields || s.config.contactFields.length === 0)) {
-                        s.config.contactFields = defaultContactFieldsList;
-                        s.config.contactsTitle = 'DALĪBNIEKU ANKETA';
-                        s.config.contactsDescription = 'Lūdzu, ievadiet savus datus. Šī informācija netiks rādīta uz lielā ekrāna.';
-                      }
-                    }, true);
-                  }}
-                >
-                  <option value="QUESTION">Question (Jautājums)</option>
-                  <option value="CONTACTS">📋 Contacts (Dalībnieku anketa)</option>
-                  <option value="BILLBOARD">📢 Billboard (Informatīvs ekrāns)</option>
-                  <option value="TIMER">⏱️ Timer (Taimeris / Pulkstenis)</option>
-                  <option value="BUZZER_RACE">Buzzer Race (Ātrā pults)</option>
-                  <option value="ORDERING">Ordering (Secības kārtošana)</option>
-                  <option value="MAJORITY">Majority Rules (Vairākums)</option>
-                  <option value="LEADERBOARD">Leaderboard (Līderu tabula)</option>
-                </select>
-
-                {activeSlide.type === 'LEADERBOARD' && (
-                  <div style={{ background: '#1c2833', border: '1px solid #ffc107', borderRadius: '6px', padding: '8px', margin: '8px 0' }}>
-                    <label style={{ ...labelStyle, color: '#ffc107', fontWeight: 'bold' }}>Līderu tabulas veids:</label>
-                    <select
-                      style={{ ...selectStyle, borderColor: '#ffc107', marginTop: '4px' }}
-                      value={activeSlide.config.lbType || 'TOTAL'}
-                      onChange={(e) => updateActiveSlide((s) => (s.config.lbType = e.target.value as any), true)}
-                    >
-                      <option value="TOTAL">⭐ Kopvērtējums (Visi punkti kopā)</option>
-                      <option value="ROUND">🏆 Kārtas rezultāti (Tikai šīs kārtas punkti)</option>
-                      <option value="FINAL">🥇 Fināla apbalvošana (Podijs Top 3 + Saraksts)</option>
-                    </select>
-                  </div>
-                )}
-
-                <div style={{ background: '#1c2833', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', margin: '8px 0' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', color: '#00e5ff', fontSize: '0.85rem', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={!!activeSlide.config.autoStart}
-                      onChange={(e) => updateActiveSlide((s) => (s.config.autoStart = e.target.checked), true)}
-                    />
-                    ⚡ Automātiskais starts (Auto-Start)
-                  </label>
-                </div>
-
-                <label style={labelStyle}>📝 Piezīmes vadītājam (Host Notes):</label>
-                <textarea
-                  style={{ ...inputStyle, minHeight: '50px', resize: 'vertical', fontSize: '0.85rem' }}
-                  value={activeSlide.config.notes || ''}
-                  onChange={(e) => updateActiveSlide((s) => (s.config.notes = e.target.value), true)}
-                  placeholder="Ieraksti skaidrojumu vadītājam..."
-                />
-              </div>
-            )}
-          </div>
-
-          {/* 🌟 JAUNS: KONTAKTI ANKETAS LAUKU VADĪBA */}
-          {activeSlide.type === 'CONTACTS' && (
-            <div style={accordionCard}>
-              <div style={accordionHeader} onClick={() => toggleSection('contacts')}>
-                <span>📋 ANKETAS LAUKI & IESTATĪJUMI</span>
-                <span>{sections.contacts ? '▲' : '▼'}</span>
+          {/* 🌟 2. ATLASĪTĀ ATBILDES VARIANTA ĀTRAIS INSPEKTORS (AR ĀTRAJĀM KRĀSU POGĀM) */}
+          {selectedOptionIdx !== null && activeSlide?.config?.options?.[selectedOptionIdx] !== undefined && (
+            <div style={{ ...selectedBoxTop, border: '2px solid #ffc107', background: '#1c1c14' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontWeight: 'bold', color: '#ffc107', fontSize: '0.85rem' }}>
+                  🎯 ATLASĪTS VARIANTS: {String.fromCharCode(65 + selectedOptionIdx)}
+                </span>
+                <button onClick={() => setSelectedElementIds([])} style={{ background: 'transparent', border: 'none', color: '#888', cursor: 'pointer', fontWeight: 'bold' }}>✕</button>
               </div>
 
-              {sections.contacts && (
-                <div style={{ marginTop: '10px' }}>
-                  <label style={labelStyle}>Anketas virsraksts:</label>
-                  <input
-                    style={inputStyle}
-                    value={activeSlide.config.contactsTitle || 'DALĪBNIEKU ANKETA'}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.contactsTitle = e.target.value), true)}
-                  />
+              <label style={labelStyle}>Varianta teksts:</label>
+              <input
+                style={{ ...inputStyle, marginBottom: '8px', color: '#ffc107', fontWeight: 'bold' }}
+                value={activeSlide.config.options[selectedOptionIdx] || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  updateActiveSlide((s) => {
+                    const oldVal = s.config.options[selectedOptionIdx];
+                    const letter = String.fromCharCode(65 + selectedOptionIdx);
+                    const oldKey = (oldVal && oldVal.trim() !== '') ? oldVal : letter;
+                    s.config.options[selectedOptionIdx] = val;
+                    const newKey = (val && val.trim() !== '') ? val : letter;
 
-                  <label style={labelStyle}>Aicinājuma teksts (Apraksts):</label>
-                  <textarea
-                    style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }}
-                    value={activeSlide.config.contactsDescription || ''}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.contactsDescription = e.target.value), true)}
-                  />
+                    s.config.correctAnswers = s.config.correctAnswers.map((a) => (a === oldKey || a === oldVal ? newKey : a));
+                    if (s.config.answerCorrectness && s.config.answerCorrectness[oldKey]) {
+                      s.config.answerCorrectness[newKey] = s.config.answerCorrectness[oldKey];
+                      if (oldKey !== newKey) delete s.config.answerCorrectness[oldKey];
+                    }
+                  }, true);
+                }}
+              />
 
-                  <div style={{ borderTop: '1px solid #333', marginTop: '10px', paddingTop: '8px' }}>
-                    <div style={{ fontSize: '0.8rem', color: '#00e5ff', fontWeight: 'bold', marginBottom: '6px' }}>
-                      Pievienotie anketas lauki:
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxHeight: '180px', overflowY: 'auto' }}>
-                      {((activeSlide.config.contactFields && activeSlide.config.contactFields.length > 0)
-                        ? activeSlide.config.contactFields
-                        : defaultContactFieldsList).map((f) => (
-                        <div key={f.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1c1c1c', border: '1px solid #333', padding: '5px 8px', borderRadius: '5px' }}>
-                          <div style={{ flex: 1 }}>
-                            <span style={{ fontSize: '0.85rem', color: '#ffc107', fontWeight: 'bold' }}>{f.label}</span>
-                            {f.required && <span style={{ color: '#ff4d4d', marginLeft: '4px', fontWeight: 'bold' }}>* (Obligāts)</span>}
-                            <div style={{ fontSize: '0.72rem', color: '#777' }}>Tips: {f.type || 'text'}</div>
-                          </div>
-                          <button
-                            onClick={() => handleRemoveContactField(f.id)}
-                            style={{ background: 'transparent', border: 'none', color: '#ff4d4d', cursor: 'pointer', fontSize: '1rem', fontWeight: 'bold' }}
-                            title="Dzēst šo lauku"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Jauna lauka pievienošanas forma */}
-                  <div style={{ background: '#111', border: '1px dashed #555', padding: '10px', borderRadius: '8px', marginTop: '10px' }}>
-                    <div style={{ fontSize: '0.78rem', color: '#aaa', fontWeight: 'bold', marginBottom: '6px' }}>
-                      ➕ Pievienot jaunu lauku:
-                    </div>
-
-                    <input
-                      style={{ ...inputStyle, marginBottom: '6px', fontSize: '0.85rem' }}
-                      placeholder="Lauka nosaukums (piem., Amats)..."
-                      value={newFieldLabel}
-                      onChange={(e) => setNewFieldLabel(e.target.value)}
-                    />
-
-                    <input
-                      style={{ ...inputStyle, marginBottom: '6px', fontSize: '0.85rem' }}
-                      placeholder="Piemērs laukā (Placeholder)..."
-                      value={newFieldPlaceholder}
-                      onChange={(e) => setNewFieldPlaceholder(e.target.value)}
-                    />
-
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
-                      <select
-                        style={{ ...selectStyle, flex: 1, margin: 0, fontSize: '0.8rem' }}
-                        value={newFieldType}
-                        onChange={(e) => setNewFieldType(e.target.value as any)}
-                      >
-                        <option value="text">🔤 Teksts</option>
-                        <option value="email">📧 E-pasts</option>
-                        <option value="tel">📞 Tālrunis</option>
-                      </select>
-
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: '#ffc107', cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={newFieldRequired}
-                          onChange={(e) => setNewFieldRequired(e.target.checked)}
-                        />
-                        Obligāts
-                      </label>
-                    </div>
-
-                    <button
-                      onClick={handleAddContactField}
-                      style={{ ...btnSmallAction, background: '#007bff', color: '#fff', fontWeight: 'bold', margin: 0 }}
-                    >
-                      ➕ Pievienot lauku anketai
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAIMERA IESTATĪJUMI */}
-          {activeSlide.type === 'TIMER' && (
-            <div style={accordionCard}>
-              <div style={accordionHeader} onClick={() => toggleSection('timer')}>
-                <span>⏱️ TAIMERA / PULKSTEŅA IESTATĪJUMI</span>
-                <span>{sections.timer ? '▲' : '▼'}</span>
-              </div>
-
-              {sections.timer && (
-                <div style={{ marginTop: '10px' }}>
-                  <label style={labelStyle}>Taimera režīms:</label>
-                  <select
-                    style={selectStyle}
-                    value={activeSlide.config.timerType || 'COUNTDOWN'}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.timerType = e.target.value as any), true)}
-                  >
-                    <option value="COUNTDOWN">⏳ Atpakaļskaitīšanas taimeris (Pārtraukums)</option>
-                    <option value="CLOCK">🕒 Reālā laika pulkstenis (HH:MM:SS)</option>
-                  </select>
-
-                  <label style={labelStyle}>Izvietojums ekrānā:</label>
-                  <select
-                    style={selectStyle}
-                    value={activeSlide.config.timerPlacement || 'CENTER'}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.timerPlacement = e.target.value as any), true)}
-                  >
-                    <option value="CENTER">🎯 Liels tieši pa centru</option>
-                    <option value="TOP_RIGHT">↗️ Mazāks augšā labajā stūrī</option>
-                  </select>
-
-                  <label style={labelStyle}>Virsraksts / Norāde virs laika:</label>
-                  <input
-                    style={inputStyle}
-                    value={activeSlide.config.timerLabel || ''}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.timerLabel = e.target.value), true)}
-                    placeholder="Piemēram: Pārtraukums līdz 15:30"
-                  />
-
-                  {activeSlide.config.timerType !== 'CLOCK' && (
-                    <>
-                      <label style={labelStyle}>Ilgums sekundēs (piem., 300 = 5 min):</label>
-                      <input
-                        type="number"
-                        style={inputStyle}
-                        value={activeSlide.config.timerDuration ?? 300}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.timerDuration = Number(e.target.value)), true)}
-                      />
-                    </>
-                  )}
-
-                  <label style={labelStyle}>Cilpas video fons (Video loop):</label>
-                  <select
-                    style={selectStyle}
-                    value={activeSlide.config.timerBgVideo || ''}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.timerBgVideo = e.target.value), true)}
-                  >
-                    <option value="">(Bez video fona)</option>
-                    {mediaList.filter((f) => /\.(mp4|mov|webm)$/i.test(f)).map((f) => (
-                      <option key={f} value={f}>{f}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* VARIANTI & SPĒLES LOĢIKA */}
-          {(activeSlide.type === 'QUESTION' || activeSlide.type === 'MAJORITY' || activeSlide.type === 'ORDERING' || activeSlide.type === 'BUZZER_RACE') && (
-            <div style={accordionCard}>
-              <div style={accordionHeader} onClick={() => toggleSection('options')}>
-                <span>🎯 VARIANTI & SPĒLES LOĢIKA</span>
-                <span>{sections.options ? '▲' : '▼'}</span>
-              </div>
-
-              {sections.options && (
-                <div style={{ marginTop: '10px' }}>
-                  {activeSlide.type === 'QUESTION' && (
-                    <div style={{ background: '#17222d', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
-                      <label style={{ ...labelStyle, color: '#00e5ff', fontWeight: 'bold' }}>📱 Pults izskats telefonā (Šim slaidam):</label>
-                      <select
-                        style={{ ...selectStyle, borderColor: '#00e5ff', marginTop: '4px' }}
-                        value={activeSlide.config.playerUIMode || 'AUTO'}
-                        onChange={(e) => {
-                          const val = e.target.value as any;
-                          updateActiveSlide((s) => {
-                            s.config.playerUIMode = val;
-                            if (val === 'MUSIC_DUAL') {
-                              s.config.optionsCount = 6;
-                              const cur = s.config.options || [];
-                              const updated = [...cur];
-                              while (updated.length < 6) updated.push(`Variants ${String.fromCharCode(65 + updated.length)}`);
-                              s.config.options = updated.slice(0, 6);
-                              s.config.requiredCount = 2;
-                            }
-                          }, true);
-                        }}
-                      >
-                        <option value="AUTO">✨ Auto (Pēc teksta satura)</option>
-                        <option value="CLASSIC_GRID">🔲 Fiksētas 2 rindas (A-C / D-F)</option>
-                        <option value="TEXT_CARDS">📝 Kartītes ar tekstu</option>
-                        <option value="MUSIC_DUAL">🎵 Muzikālā spēle (Izpildītājs + Dziesma)</option>
-                      </select>
-
-                      {activeSlide.config.playerUIMode === 'MUSIC_DUAL' && (
-                        <div style={{ marginTop: '6px', borderTop: '1px dashed #00e5ff', paddingTop: '6px' }}>
-                          <label style={labelStyle}>Augšējā rinda (A, B, C):</label>
-                          <input
-                            style={inputStyle}
-                            value={activeSlide.config.musicCategoryTop || '🎤 Izpildītājs'}
-                            onChange={(e) => updateActiveSlide((s) => (s.config.musicCategoryTop = e.target.value), true)}
-                            placeholder="Piemēram: Izpildītājs"
-                          />
-
-                          <label style={{ ...labelStyle, marginTop: '6px' }}>Apakšējā rinda (D, E, F):</label>
-                          <input
-                            style={inputStyle}
-                            value={activeSlide.config.musicCategoryBottom || '🎵 Dziesmas nosaukums'}
-                            onChange={(e) => updateActiveSlide((s) => (s.config.musicCategoryBottom = e.target.value), true)}
-                            placeholder="Piemēram: Dziesmas nosaukums"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* ĀTRĀ PULTS */}
-                  {activeSlide.type === 'BUZZER_RACE' && (
-                    <div style={{ background: '#261c02', border: '1px solid #ffc107', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
-                      <label style={{ ...labelStyle, color: '#ffc107', fontWeight: 'bold' }}>Ātrās pults atbildēšanas veids:</label>
-                      <select
-                        style={{ ...selectStyle, borderColor: '#ffc107', marginTop: '4px' }}
-                        value={activeSlide.config.buzzerRaceType || 'WITH_OPTIONS'}
-                        onChange={(e) => updateActiveSlide((s) => { s.config.buzzerRaceType = e.target.value as any; }, true)}
-                      >
-                        <option value="WITH_OPTIONS">🅰️ Ar variantiem (Pirmais atbild telefonā)</option>
-                        <option value="ORAL">🗣️ Mutisks (Pirmais runā ar balsi)</option>
-                      </select>
-
-                      <label style={labelStyle}>Vērtēšanas režīms:</label>
-                      <select
-                        style={selectStyle}
-                        value={activeSlide.config.buzzerEvaluationMode || 'AUTO'}
-                        onChange={(e) => updateActiveSlide((s) => { s.config.buzzerEvaluationMode = e.target.value as any; }, true)}
-                      >
-                        <option value="AUTO">🤖 Automātisks (Pārbauda sistēma ar Space)</option>
-                        <option value="MANUAL">👨‍💼 Manuāls (Vadītājs vērtē Pareizi/Nepareizi)</option>
-                      </select>
-
-                      <label style={labelStyle}>Cik ātrākos fiksēt rindā:</label>
-                      <select
-                        style={selectStyle}
-                        value={activeSlide.config.buzzerMaxQueue || 5}
-                        onChange={(e) => updateActiveSlide((s) => { s.config.buzzerMaxQueue = Number(e.target.value); }, true)}
-                      >
-                        <option value="1">Tikai #1</option>
-                        <option value="3">Top 3 rindā</option>
-                        <option value="5">Top 5 rindā</option>
-                        <option value="999">Visus, kas nospiež</option>
-                      </select>
-                    </div>
-                  )}
-
-                  {/* SECĪBAS KĀRTOŠANA */}
-                  {activeSlide.type === 'ORDERING' && (
-                    <div style={{ background: '#15222e', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
-                      <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#00e5ff', marginBottom: '6px' }}>
-                        PAREIZĀ SECĪBA (NO AUGŠAS UZ LEJU):
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        {(activeSlide.config.options || []).map((opt, idx) => (
-                          <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#0a1520', padding: '3px 6px', borderRadius: '4px' }}>
-                            <span style={{ color: '#00e5ff', fontWeight: 'bold', fontSize: '0.8rem' }}>#{idx + 1}</span>
-                            <input
-                              style={{ ...inputStyle, padding: '2px 4px', fontSize: '0.8rem' }}
-                              value={opt}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                updateActiveSlide((s) => {
-                                  s.config.options[idx] = val;
-                                  s.config.correctOrder = [...s.config.options];
-                                }, true);
-                              }}
-                            />
-                            <button onClick={() => moveOrderingItem(idx, 'UP')} disabled={idx === 0} style={iconBtnSmall}>▲</button>
-                            <button onClick={() => moveOrderingItem(idx, 'DOWN')} disabled={idx === (activeSlide.config.options || []).length - 1} style={iconBtnSmall}>▼</button>
-                            <button onClick={() => removeOrderingItem(idx)} style={{ ...iconBtnSmall, color: '#ff4d4d' }}>×</button>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '4px', marginTop: '8px' }}>
-                        <input
-                          style={{ ...inputStyle, flex: 1, fontSize: '0.8rem' }}
-                          placeholder="Jauns elements..."
-                          value={newOrderingItemInput}
-                          onChange={(e) => setNewOrderingItemInput(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && addOrderingItem()}
-                        />
-                        <button onClick={addOrderingItem} style={{ ...btnSmallAction, width: 'auto', background: '#007bff', margin: 0 }}>
-                          ➕
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {(activeSlide.type === 'QUESTION' || activeSlide.type === 'MAJORITY' || (activeSlide.type === 'BUZZER_RACE' && activeSlide.config?.buzzerRaceType === 'WITH_OPTIONS')) && (
-                    <>
-                      <label style={labelStyle}>Iesniegšanas veids telefonā:</label>
-                      <select
-                        style={selectStyle}
-                        value={activeSlide.config.submitMode || 'INSTANT'}
-                        onChange={(e) => updateActiveSlide((s) => (s.config.submitMode = e.target.value as any), true)}
-                      >
-                        <option value="INSTANT">⚡ Tūlītējs</option>
-                        <option value="CONFIRM">🔒 Ar apstiprinājumu</option>
-                      </select>
-
-                      <label style={labelStyle}>Atbilšu skaits (2-6):</label>
-                      <div style={{ display: 'flex', gap: '4px', margin: '6px 0' }}>
-                        {[2, 3, 4, 5, 6].map((num) => (
-                          <button
-                            key={num}
-                            style={{ ...btnNumber, background: activeSlide.config.optionsCount === num ? '#007bff' : '#333' }}
-                            onClick={() => {
-                              updateActiveSlide((s) => {
-                                s.config.optionsCount = num;
-                                const cur = s.config.options || [];
-                                const updated: string[] = [];
-                                for (let i = 0; i < num; i++) updated.push(cur[i] !== undefined ? cur[i] : `Variants ${String.fromCharCode(65 + i)}`);
-                                s.config.options = updated;
-                              }, true);
-                            }}
-                          >
-                            {num}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '8px', margin: '6px 0' }}>
-                        <div style={{ flex: 1 }}>
-                          <label style={labelStyle}>Izvēles režīms:</label>
-                          <select
-                            style={selectStyle}
-                            value={activeSlide.config.selectionMode || 'ALL'}
-                            onChange={(e) => updateActiveSlide((s) => (s.config.selectionMode = e.target.value as any), true)}
-                          >
-                            <option value="ALL">☑️ Visas pareizās</option>
-                            <option value="ANY_ONE">☝️ Jebkura viena pareizā</option>
-                          </select>
-                        </div>
-                        {activeSlide.config.selectionMode === 'ALL' && (
-                          <div style={{ width: '90px' }}>
-                            <label style={labelStyle}>Jāizvēlas:</label>
-                            <input
-                              type="number"
-                              min="1"
-                              max={activeSlide.config.optionsCount || 4}
-                              value={activeSlide.config.requiredCount || activeSlide.config.correctAnswers.length || 1}
-                              onChange={(e) => {
-                                const val = Math.max(1, Number(e.target.value));
-                                updateActiveSlide((s) => (s.config.requiredCount = val), true);
-                              }}
-                              style={inputStyle}
-                            />
-                          </div>
-                        )}
-                      </div>
-
-                      <label style={labelStyle}>Izkārtojums (Layout):</label>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px', marginTop: '4px' }}>
-                        <button
-                          type="button"
-                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'INDIVIDUAL'), true)}
-                          style={{
-                            padding: '6px 2px',
-                            color: '#fff',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold',
-                            cursor: 'pointer',
-                            borderRadius: '4px',
-                            background: (activeSlide.config.optionsLayout || 'INDIVIDUAL') === 'INDIVIDUAL' ? '#007bff' : '#222',
-                            border: (activeSlide.config.optionsLayout || 'INDIVIDUAL') === 'INDIVIDUAL' ? '2px solid #00e5ff' : '1px solid #444'
-                          }}
-                        >
-                          ✋ Manuāls
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'RIGHT_COLUMN'), true)}
-                          style={{
-                            padding: '6px 2px',
-                            color: '#fff',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold',
-                            cursor: 'pointer',
-                            borderRadius: '4px',
-                            background: activeSlide.config.optionsLayout === 'RIGHT_COLUMN' ? '#007bff' : '#222',
-                            border: activeSlide.config.optionsLayout === 'RIGHT_COLUMN' ? '2px solid #00e5ff' : '1px solid #444'
-                          }}
-                        >
-                          📑 Labajā pusē
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => updateActiveSlide((s) => (s.config.optionsLayout = 'GRID'), true)}
-                          style={{
-                            padding: '6px 2px',
-                            color: '#fff',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold',
-                            cursor: 'pointer',
-                            borderRadius: '4px',
-                            background: activeSlide.config.optionsLayout === 'GRID' ? '#007bff' : '#222',
-                            border: activeSlide.config.optionsLayout === 'GRID' ? '2px solid #00e5ff' : '1px solid #444'
-                          }}
-                        >
-                          ⏹️ Horizontāli
-                        </button>
-                      </div>
-                    </>
-                  )}
-
-                  <label style={labelStyle}>Punktu režīms:</label>
-                  <select
-                    style={selectStyle}
-                    value={activeSlide.config.scoringMode || 'FIXED'}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.scoringMode = e.target.value as any), true)}
-                  >
-                    <option value="FIXED">Fiksēti punkti</option>
-                    <option value="DECREASING">Dilstoši punkti</option>
-                  </select>
-
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={labelStyle}>Max punkti:</label>
-                      <input
-                        type="number"
-                        style={inputStyle}
-                        value={activeSlide.config.pointsMax ?? activeSlide.config.points}
-                        onChange={(e) =>
-                          updateActiveSlide((s) => {
-                            const val = Number(e.target.value);
-                            s.config.points = val;
-                            s.config.pointsMax = val;
-                          }, true)
-                        }
-                      />
-                    </div>
-                    {activeSlide.config.scoringMode === 'DECREASING' && (
-                      <div style={{ flex: 1 }}>
-                        <label style={labelStyle}>Min punkti:</label>
-                        <input
-                          type="number"
-                          style={inputStyle}
-                          value={activeSlide.config.pointsMin ?? 1}
-                          onChange={(e) => updateActiveSlide((s) => (s.config.pointsMin = Number(e.target.value)), true)}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* DIZAINS, KRĀSAS & FONTI */}
-          <div style={accordionCard}>
-            <div style={accordionHeader} onClick={() => toggleSection('style')}>
-              <span>🎨 DIZAINS, KRĀSAS & FONTI</span>
-              <span>{sections.style ? '▲' : '▼'}</span>
-            </div>
-
-            {sections.style && (
-              <div style={{ marginTop: '10px' }}>
-                <label style={labelStyle}>Slaida fona attēls:</label>
-                <select
-                  style={selectStyle}
-                  value={activeSlide.config.backgroundUrl || ''}
-                  onChange={(e) => updateActiveSlide((s) => (s.config.backgroundUrl = e.target.value), true)}
-                >
-                  <option value="">(Tēmas fons)</option>
-                  {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '8px 0' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Teksts:</span>
-                    <input
-                      type="color"
-                      value={activeSlide.config.optionsColor || '#ffffff'}
-                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsColor = e.target.value), true)}
-                      style={colorPicker}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {/* Ātrās atbilžu lodziņu krāsas tieši no varianta inspektora */}
+              <div style={{ borderTop: '1px solid #333', paddingTop: '6px', marginTop: '6px' }}>
+                <span style={{ fontSize: '0.72rem', color: '#888', display: 'block', marginBottom: '4px' }}>Ātrā atbilžu stila maiņa:</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Fons:</span>
                     <input
                       type="color"
@@ -3129,7 +2311,16 @@ export default function Studio() {
                       style={colorPicker}
                     />
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Teksts:</span>
+                    <input
+                      type="color"
+                      value={activeSlide.config.optionsColor || '#ffffff'}
+                      onChange={(e) => updateActiveSlide((s) => (s.config.optionsColor = e.target.value), true)}
+                      style={colorPicker}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <span style={{ fontSize: '0.75rem', color: '#00ff00', fontWeight: 'bold' }}>Pareizā:</span>
                     <input
                       type="color"
@@ -3139,49 +2330,711 @@ export default function Studio() {
                     />
                   </div>
                 </div>
-
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                    <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Loga fona intensitāte:</span>
-                    <span style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>
-                      {activeSlide.config.optionsBgOpacity ?? 85}%
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
-                    value={activeSlide.config.optionsBgOpacity ?? 85}
-                    onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgOpacity = Number(e.target.value)), true)}
-                    style={{ width: '100%', accentColor: '#00ff00', cursor: 'pointer' }}
-                  />
-                </div>
               </div>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* 🌟 3. PĀRVIETOJAMIE SADAĻU LOGI */}
+          {sectionOrder.map((secKey) => {
+            // INFO
+            if (secKey === 'info') {
+              return (
+                <div key="info" draggable onDragStart={(e) => handleSectionDragStart(e, 'info')} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleSectionDrop(e, 'info')} style={accordionCard}>
+                  <div style={accordionHeader} onClick={() => toggleSection('info')}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={dragHandleGrip} title="Pārvelc, lai mainītu secību">⋮⋮</span>
+                      📋 SLAIDA TIPS & PIEZĪMES
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <button onClick={(e) => moveSection('info', 'UP', e)} style={btnReorderSmall}>▲</button>
+                      <button onClick={(e) => moveSection('info', 'DOWN', e)} style={btnReorderSmall}>▼</button>
+                      <span>{sections.info ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {sections.info && (
+                    <div style={{ marginTop: '10px' }}>
+                      <label style={labelStyle}>Slaida tips:</label>
+                      <select style={selectStyle} value={activeSlide.type} onChange={(e) => updateActiveSlide((s) => { s.type = e.target.value as any; }, true)}>
+                        <option value="QUESTION">Question (Jautājums)</option>
+                        <option value="CONTACTS">📋 Contacts (Anketa)</option>
+                        <option value="BILLBOARD">📢 Billboard (Informatīvs ekrāns)</option>
+                        <option value="TIMER">⏱️ Timer (Taimeris)</option>
+                        <option value="BUZZER_RACE">⚡ Buzzer Race (Ātrā pults)</option>
+                        <option value="ORDERING">🔢 Ordering (Secība)</option>
+                        <option value="LEADERBOARD">🏆 Leaderboard (Līderu tabula)</option>
+                      </select>
+
+                      <div style={{ background: '#1c2833', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', margin: '8px 0' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', color: '#00e5ff', fontSize: '0.85rem', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={!!activeSlide.config.autoStart} onChange={(e) => updateActiveSlide((s) => (s.config.autoStart = e.target.checked), true)} />
+                          ⚡ Automātiskais starts (Auto-Start)
+                        </label>
+                      </div>
+
+                      <label style={labelStyle}>📝 Vadītāja piezīmes:</label>
+                      <textarea style={{ ...inputStyle, minHeight: '50px' }} value={activeSlide.config.notes || ''} onChange={(e) => updateActiveSlide((s) => { s.config.notes = e.target.value; }, true)} />
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // VARIANTI UN SPĒLES LOĢIKA
+            if (secKey === 'options' && (activeSlide.type === 'QUESTION' || activeSlide.type === 'MAJORITY' || activeSlide.type === 'ORDERING' || activeSlide.type === 'BUZZER_RACE')) {
+              return (
+                <div key="options" draggable onDragStart={(e) => handleSectionDragStart(e, 'options')} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleSectionDrop(e, 'options')} style={accordionCard}>
+                  <div style={accordionHeader} onClick={() => toggleSection('options')}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={dragHandleGrip} title="Pārvelc, lai mainītu secību">⋮⋮</span>
+                      🎯 VARIANTI & SPĒLES LOĢIKA
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <button onClick={(e) => moveSection('options', 'UP', e)} style={btnReorderSmall}>▲</button>
+                      <button onClick={(e) => moveSection('options', 'DOWN', e)} style={btnReorderSmall}>▼</button>
+                      <span>{sections.options ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {sections.options && (
+                    <div style={{ marginTop: '10px' }}>
+                      {/* ĀTRĀS PULTS REŽĪMS */}
+                      {activeSlide.type === 'BUZZER_RACE' && (
+                        <div style={{ background: '#251010', border: '1px solid #ff4d4d', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
+                          <label style={{ ...labelStyle, color: '#ff4d4d', fontWeight: 'bold' }}>⚡ Ātrās pults tips:</label>
+                          <select
+                            style={{ ...selectStyle, borderColor: '#ff4d4d', marginTop: '4px' }}
+                            value={activeSlide.config.buzzerRaceType || 'WITH_OPTIONS'}
+                            onChange={(e) => updateActiveSlide((s) => (s.config.buzzerRaceType = e.target.value as any), true)}
+                          >
+                            <option value="WITH_OPTIONS">🎯 Pirmais atbild ar variantiem</option>
+                            <option value="ORAL">🗣️ Mutiska atbilde vadītājam</option>
+                          </select>
+                        </div>
+                      )}
+
+                      {/* SECĪBAS KĀRTOŠANAS SARAKSTS */}
+                      {activeSlide.type === 'ORDERING' && (
+                        <div style={{ background: '#122026', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
+                          <label style={{ ...labelStyle, color: '#00e5ff', fontWeight: 'bold' }}>🔢 Pareizā secība (no augšas uz leju):</label>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', margin: '6px 0', maxHeight: '160px', overflowY: 'auto' }}>
+                            {(activeSlide.config.options || []).map((item, idx) => (
+                              <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#1c1c1c', padding: '4px 8px', borderRadius: '4px', border: '1px solid #333' }}>
+                                <span style={{ color: '#00e5ff', fontWeight: 'bold', fontSize: '0.85rem' }}>#{idx + 1}</span>
+                                <span style={{ flex: 1, fontSize: '0.8rem', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item}</span>
+                                <button onClick={() => moveOrderingItem(idx, 'UP')} disabled={idx === 0} style={btnReorderSmall}>▲</button>
+                                <button onClick={() => moveOrderingItem(idx, 'DOWN')} disabled={idx === (activeSlide.config.options || []).length - 1} style={btnReorderSmall}>▼</button>
+                                <button onClick={() => removeOrderingItem(idx)} style={{ ...btnReorderSmall, color: '#ff4d4d' }}>×</button>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                            <input
+                              style={{ ...inputStyle, flex: 1 }}
+                              placeholder="Jauns secības elements..."
+                              value={newOrderingItemInput}
+                              onChange={(e) => setNewOrderingItemInput(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && addOrderingItem()}
+                            />
+                            <button onClick={addOrderingItem} style={{ ...btnAction, padding: '4px 10px', background: '#007bff' }}>➕</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* TĀLRUŅA PULTS IZSKATS */}
+                      {activeSlide.type === 'QUESTION' && (
+                        <div style={{ background: '#17222d', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
+                          <label style={{ ...labelStyle, color: '#00e5ff', fontWeight: 'bold' }}>📱 Pults izskats telefonā:</label>
+                          <select
+                            style={{ ...selectStyle, borderColor: '#00e5ff', marginTop: '4px' }}
+                            value={activeSlide.config.playerUIMode || 'AUTO'}
+                            onChange={(e) => {
+                              const val = e.target.value as any;
+                              updateActiveSlide((s) => {
+                                s.config.playerUIMode = val;
+                                if (val === 'MUSIC_DUAL') {
+                                  s.config.optionsCount = 6;
+                                  const cur = s.config.options || [];
+                                  const updated = [...cur];
+                                  while (updated.length < 6) updated.push(`Variants ${String.fromCharCode(65 + updated.length)}`);
+                                  s.config.options = updated.slice(0, 6);
+                                  s.config.requiredCount = 2;
+                                }
+                              }, true);
+                            }}
+                          >
+                            <option value="AUTO">✨ Auto (Pēc satura)</option>
+                            <option value="CLASSIC_GRID">🔲 Fiksētas 2 rindas (A-C / D-F)</option>
+                            <option value="TEXT_CARDS">📝 Kartītes ar tekstu</option>
+                            <option value="MUSIC_DUAL">🎵 Muzikālā spēle (Izpildītājs + Dziesma)</option>
+                          </select>
+
+                          {activeSlide.config.playerUIMode === 'MUSIC_DUAL' && (
+                            <div style={{ marginTop: '6px', borderTop: '1px solid #333', paddingTop: '6px' }}>
+                              <label style={labelStyle}>Augšējā kategorija (A, B, C):</label>
+                              <input
+                                style={{ ...inputStyle, marginBottom: '4px' }}
+                                value={activeSlide.config.musicCategoryTop || '🎤 Izpildītājs'}
+                                onChange={(e) => updateActiveSlide((s) => (s.config.musicCategoryTop = e.target.value), true)}
+                              />
+                              <label style={labelStyle}>Apakšējā kategorija (D, E, F):</label>
+                              <input
+                                style={inputStyle}
+                                value={activeSlide.config.musicCategoryBottom || '🎵 Dziesmas nosaukums'}
+                                onChange={(e) => updateActiveSlide((s) => (s.config.musicCategoryBottom = e.target.value), true)}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div style={{ background: '#1c2833', border: '1px solid #00e5ff', borderRadius: '6px', padding: '8px', marginBottom: '10px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#00e5ff', fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={!!activeSlide.config.allowOptionTranslation} onChange={(e) => updateActiveSlide((s) => (s.config.allowOptionTranslation = e.target.checked), true)} />
+                          🌐 Ļaut tulkot atbilžu variantus tālrunī
+                        </label>
+                      </div>
+
+                      <label style={labelStyle}>Punktu režīms:</label>
+                      <select style={selectStyle} value={activeSlide.config.scoringMode || 'FIXED'} onChange={(e) => updateActiveSlide((s) => (s.config.scoringMode = e.target.value as any), true)}>
+                        <option value="FIXED">Fiksēti punkti</option>
+                        <option value="DECREASING">Dilstoši punkti</option>
+                      </select>
+
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={labelStyle}>Max punkti:</label>
+                          <input type="number" style={inputStyle} value={activeSlide.config.pointsMax ?? activeSlide.config.points} onChange={(e) => updateActiveSlide((s) => { const val = Number(e.target.value); s.config.points = val; s.config.pointsMax = val; }, true)} />
+                        </div>
+                        {activeSlide.config.scoringMode === 'DECREASING' && (
+                          <div style={{ flex: 1 }}>
+                            <label style={labelStyle}>Min punkti:</label>
+                            <input type="number" style={inputStyle} value={activeSlide.config.pointsMin ?? 1} onChange={(e) => updateActiveSlide((s) => (s.config.pointsMin = Number(e.target.value)), true)} />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // STILS UN KRĀSAS
+            if (secKey === 'style') {
+              return (
+                <div key="style" draggable onDragStart={(e) => handleSectionDragStart(e, 'style')} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleSectionDrop(e, 'style')} style={accordionCard}>
+                  <div style={accordionHeader} onClick={() => toggleSection('style')}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={dragHandleGrip} title="Pārvelc, lai mainītu secību">⋮⋮</span>
+                      🎨 DIZAINS, KRĀSAS & FONTI
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <button onClick={(e) => moveSection('style', 'UP', e)} style={btnReorderSmall}>▲</button>
+                      <button onClick={(e) => moveSection('style', 'DOWN', e)} style={btnReorderSmall}>▼</button>
+                      <span>{sections.style ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {sections.style && (
+                    <div style={{ marginTop: '10px' }}>
+                      <label style={labelStyle}>Slaida fona attēls:</label>
+                      <select style={selectStyle} value={activeSlide.config.backgroundUrl || ''} onChange={(e) => updateActiveSlide((s) => (s.config.backgroundUrl = e.target.value), true)}>
+                        <option value="">(Tēmas fons)</option>
+                        {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '8px 0' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Teksts:</span>
+                          <input type="color" value={activeSlide.config.optionsColor || '#ffffff'} onChange={(e) => updateActiveSlide((s) => (s.config.optionsColor = e.target.value), true)} style={colorPicker} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Fons:</span>
+                          <input type="color" value={activeSlide.config.optionsBgColor || '#000000'} onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgColor = e.target.value), true)} style={colorPicker} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#00ff00', fontWeight: 'bold' }}>Pareizā:</span>
+                          <input type="color" value={activeSlide.config.optionsCorrectColor || '#00ff00'} onChange={(e) => updateActiveSlide((s) => (s.config.optionsCorrectColor = e.target.value), true)} style={colorPicker} />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Loga fona intensitāte:</span>
+                          <span style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>{activeSlide.config.optionsBgOpacity ?? 85}%</span>
+                        </div>
+                        <input type="range" min="0" max="100" step="5" value={activeSlide.config.optionsBgOpacity ?? 85} onChange={(e) => updateActiveSlide((s) => (s.config.optionsBgOpacity = Number(e.target.value)), true)} style={{ width: '100%', accentColor: '#00ff00', cursor: 'pointer' }} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // MEDIJI
+            if (secKey === 'media') {
+              return (
+                <div key="media" draggable onDragStart={(e) => handleSectionDragStart(e, 'media')} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleSectionDrop(e, 'media')} style={accordionCard}>
+                  <div style={accordionHeader} onClick={() => toggleSection('media')}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={dragHandleGrip} title="Pārvelc, lai mainītu secību">⋮⋮</span>
+                      📁 MEDIJU MAPE ({filteredMediaList.length})
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <button onClick={(e) => moveSection('media', 'UP', e)} style={btnReorderSmall}>▲</button>
+                      <button onClick={(e) => moveSection('media', 'DOWN', e)} style={btnReorderSmall}>▼</button>
+                      <span>{sections.media ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {sections.media && (
+                    <div style={{ marginTop: '10px' }}>
+                      <input style={{ ...inputStyle, marginBottom: '8px', fontSize: '0.85rem', borderColor: '#00e5ff' }} placeholder="🔍 Meklēt mediju..." value={mediaSearchQuery} onChange={(e) => setMediaSearchQuery(e.target.value)} />
+                      <div style={{ maxHeight: '140px', overflowY: 'auto' }}>
+                        {filteredMediaList.length === 0 ? (
+                          <div style={{ fontSize: '0.75rem', color: '#888', fontStyle: 'italic', padding: '4px' }}>Nav atbilstošu failu</div>
+                        ) : (
+                          filteredMediaList.map((m) => (
+                            <div key={m} style={mediaItem} onClick={() => addMediaElement(m)} title="Klikšķini, lai pievienotu slaidam">📄 {m}</div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // BRANDING
+            if (secKey === 'branding') {
+              return (
+                <div key="branding" draggable onDragStart={(e) => handleSectionDragStart(e, 'branding')} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleSectionDrop(e, 'branding')} style={accordionCard}>
+                  <div style={accordionHeader} onClick={() => toggleSection('branding')}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={dragHandleGrip} title="Pārvelc, lai mainītu secību">⋮⋮</span>
+                      📱 SPĒLES & LOBBY IESTATĪJUMI
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <button onClick={(e) => moveSection('branding', 'UP', e)} style={btnReorderSmall}>▲</button>
+                      <button onClick={(e) => moveSection('branding', 'DOWN', e)} style={btnReorderSmall}>▼</button>
+                      <span>{sections.branding ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {sections.branding && (
+                    <div style={{ marginTop: '10px' }}>
+                      <label style={{ ...labelStyle, color: '#00e5ff', fontWeight: 'bold' }}>🎮 Sākuma ekrāna (Lobby) stils:</label>
+                      <select style={{ ...selectStyle, borderColor: '#00e5ff', fontWeight: 'bold', background: '#0a1d2e' }} value={mobileBranding.lobbyMode || 'INTERACTIVE_DOTS'} onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyMode: e.target.value as any })}>
+                        <option value="INTERACTIVE_DOTS">💥 Interaktīvās bumbiņas ar pults testu (Noklusējums)</option>
+                        <option value="CIRCLE">⭕ Klasiskais (Lielais PIN & Dalībnieku aplis)</option>
+                      </select>
+
+                      <div style={{ background: '#112233', border: '1.5px solid #00e5ff', borderRadius: '8px', padding: '10px', margin: '10px 0' }}>
+                        <div style={{ fontSize: '0.85rem', color: '#00e5ff', fontWeight: 'bold', marginBottom: '8px' }}>
+                          🖼️ SĀKUMA EKRĀNA (LOBBY) DIZAINS:
+                        </div>
+
+                        <label style={labelStyle}>Sākuma ekrāna fona attēls:</label>
+                        <select
+                          style={selectStyle}
+                          value={mobileBranding.lobbyBgImage || ''}
+                          onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyBgImage: e.target.value })}
+                        >
+                          <option value="">(Bez attēla - izmantot krāsu)</option>
+                          {mediaList.filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).map((f) => (
+                            <option key={f} value={f}>{f}</option>
+                          ))}
+                        </select>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '0.8rem', color: '#aaa' }}>Lobby fona pamatkrāsa:</span>
+                          <input
+                            type="color"
+                            value={mobileBranding.lobbyBgColor || '#0a0a0a'}
+                            onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyBgColor: e.target.value })}
+                            style={colorPicker}
+                          />
+                        </div>
+
+                        <label style={labelStyle}>Galvenais virsraksts (ar dalībnieku skaitu):</label>
+                        <input
+                          style={inputStyle}
+                          value={mobileBranding.lobbyTitleText || ''}
+                          placeholder="🎮 PIESLĒGUŠIES DALĪBNIEKI ({count}):"
+                          onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyTitleText: e.target.value })}
+                        />
+                        <span style={{ fontSize: '0.7rem', color: '#888', display: 'block', marginTop: '2px', marginBottom: '6px' }}>
+                          💡 <code>{'{count}'}</code> tiks automātiski aizvietots ar spēlētāju skaitu.
+                        </span>
+
+                        <label style={labelStyle}>Apakšvirsraksts / aicinājums testēt:</label>
+                        <input
+                          style={inputStyle}
+                          value={mobileBranding.lobbySubtitleText || ''}
+                          placeholder='Spiediet telefonā "Pārbaudīt pulti", lai bumbiņa pulsētu! 💥'
+                          onChange={(e) => setMobileBranding({ ...mobileBranding, lobbySubtitleText: e.target.value })}
+                        />
+
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                          <div style={{ flex: 1 }}>
+                            <label style={labelStyle}>QR virsraksts:</label>
+                            <input
+                              style={inputStyle}
+                              value={mobileBranding.lobbyQrTitle || ''}
+                              placeholder="Skenē kamerā!"
+                              onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyQrTitle: e.target.value })}
+                            />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <label style={labelStyle}>QR apakšteksts:</label>
+                            <input
+                              style={inputStyle}
+                              value={mobileBranding.lobbyQrSubtitle || ''}
+                              placeholder="Pieslēdzies spēlei"
+                              onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyQrSubtitle: e.target.value })}
+                            />
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Virsraksta krāsa:</span>
+                            <input
+                              type="color"
+                              value={mobileBranding.lobbyTitleColor || '#ffc107'}
+                              onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyTitleColor: e.target.value })}
+                              style={colorPicker}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Apakšteksta krāsa:</span>
+                            <input
+                              type="color"
+                              value={mobileBranding.lobbySubtitleColor || '#aaaaaa'}
+                              onChange={(e) => setMobileBranding({ ...mobileBranding, lobbySubtitleColor: e.target.value })}
+                              style={colorPicker}
+                            />
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Lodziņu fons:</span>
+                            <input
+                              type="color"
+                              value={mobileBranding.lobbyBoxBgColor || '#000000'}
+                              onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyBoxBgColor: e.target.value })}
+                              style={colorPicker}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Lodziņu rāmis:</span>
+                            <input
+                              type="color"
+                              value={mobileBranding.lobbyBoxBorderColor || '#00ff00'}
+                              onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyBoxBorderColor: e.target.value })}
+                              style={colorPicker}
+                            />
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Lodziņu fona intensitāte:</span>
+                            <span style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>
+                              {mobileBranding.lobbyBoxBgOpacity ?? 85}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={mobileBranding.lobbyBoxBgOpacity ?? 85}
+                            onChange={(e) => setMobileBranding({ ...mobileBranding, lobbyBoxBgOpacity: Number(e.target.value) })}
+                            style={{ width: '100%', accentColor: '#00ff00', cursor: 'pointer' }}
+                          />
+                        </div>
+                      </div>
+
+                      <label style={labelStyle}>👑 TV ekrāna tēma:</label>
+                      <select style={selectStyle} value={mobileBranding.presentationTheme || 'TV_SHOW'} onChange={(e) => setMobileBranding({ ...mobileBranding, presentationTheme: e.target.value as any })}>
+                        <option value="TV_SHOW">🏆 TV Prime-Time Show</option>
+                        <option value="ARENA">⚡ Arena & Esports</option>
+                        <option value="MINIMAL">🍏 Modern Minimal</option>
+                        <option value="NEON">🟢 Cyber Neon</option>
+                      </select>
+
+                      <label style={labelStyle}>Lietotnes nosaukums telefonā:</label>
+                      <input style={inputStyle} value={mobileBranding.appTitle || 'EVENT BUZZER'} onChange={(e) => setMobileBranding({ ...mobileBranding, appTitle: e.target.value })} />
+
+                      <label style={labelStyle}>Sākuma Logo (PNG/SVG):</label>
+                      <select style={selectStyle} value={mobileBranding.appLogo || ''} onChange={(e) => setMobileBranding({ ...mobileBranding, appLogo: e.target.value })}>
+                        <option value="">(Noklusējuma ikona 🎮)</option>
+                        {mediaList.filter((f) => /\.(png|webp|svg)$/i.test(f)).map((f) => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // DIPLOMI
+            if (secKey === 'diploma') {
+              return (
+                <div key="diploma" draggable onDragStart={(e) => handleSectionDragStart(e, 'diploma')} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleSectionDrop(e, 'diploma')} style={accordionCard}>
+                  <div style={accordionHeader} onClick={() => toggleSection('diploma')}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={dragHandleGrip} title="Pārvelc, lai mainītu secību">⋮⋮</span>
+                      🏆 DIPLOMU DIZAINS UN TEKSTI
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <button onClick={(e) => moveSection('diploma', 'UP', e)} style={btnReorderSmall}>▲</button>
+                      <button onClick={(e) => moveSection('diploma', 'DOWN', e)} style={btnReorderSmall}>▼</button>
+                      <span>{sections.diploma ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {sections.diploma && (
+                    <div style={{ marginTop: '10px' }}>
+                      <button onClick={() => setShowDiplomaModal(true)} style={{ ...btnSmallAction, background: '#d63384', color: '#fff', fontWeight: 'bold', marginBottom: '10px' }}>
+                        👁️ Atvērt diplomu priekšskatījumu & laukus
+                      </button>
+
+                      <label style={labelStyle}>Drukas tēma:</label>
+                      <select style={selectStyle} value={diplomaCfg.theme || 'GOLD_DARK'} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, theme: e.target.value as any } })}>
+                        <option value="GOLD_DARK">🌙 Zelta & Tumšs</option>
+                        <option value="GOLD_WHITE_PRINT">🖨️ Balts & Tinti taupošs</option>
+                      </select>
+
+                      <label style={labelStyle}>Diplomu galvenais virsraksts:</label>
+                      <input style={inputStyle} value={diplomaCfg.customTitle || ''} placeholder="🏆 DIPLOMS 🏆" onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, customTitle: e.target.value } })} />
+
+                      <label style={labelStyle}>Apakšvirsraksts (godalga / vieta):</label>
+                      <input style={inputStyle} value={diplomaCfg.customSubtitle || ''} placeholder="Par iegūto 1. vietu spēlē" onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, customSubtitle: e.target.value } })} />
+
+                      <label style={labelStyle}>Kājenes teksts (organizators, autortiesības):</label>
+                      <input style={inputStyle} value={diplomaCfg.footerText || ''} placeholder="Event Studio" onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, footerText: e.target.value } })} />
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px', background: '#1c1c1c', padding: '8px', borderRadius: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Virsraksts:</span>
+                          <input type="color" value={diplomaCfg.titleColor || '#ffffff'} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, titleColor: e.target.value } })} style={colorPicker} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Uzvarētājs:</span>
+                          <input type="color" value={diplomaCfg.winnerColor || '#ffd700'} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, winnerColor: e.target.value } })} style={colorPicker} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Rāmis:</span>
+                          <input type="color" value={diplomaCfg.borderColor || '#ffc107'} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, borderColor: e.target.value } })} style={colorPicker} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Fons:</span>
+                          <input type="color" value={diplomaCfg.bgColor || '#111111'} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, bgColor: e.target.value } })} style={colorPicker} />
+                        </div>
+                      </div>
+
+                      <div style={{ marginTop: '10px', borderTop: '1px solid #333', paddingTop: '8px' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#00e5ff', fontWeight: 'bold', marginBottom: '6px' }}>
+                          Rādīt / paslēpt blokus diplomā:
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', color: '#ccc', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={diplomaCfg.showLogo !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showLogo: e.target.checked } })} />
+                            🖼️ Logo
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', color: '#ccc', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={diplomaCfg.showTitle !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showTitle: e.target.checked } })} />
+                            👑 Virsraksts
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', color: '#ccc', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={diplomaCfg.showSubtitle !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showSubtitle: e.target.checked } })} />
+                            📜 Godalga
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', color: '#ccc', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={diplomaCfg.showWinner !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showWinner: e.target.checked } })} />
+                            👤 Uzvarētājs
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', color: '#ccc', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={diplomaCfg.showScore !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showScore: e.target.checked } })} />
+                            ⭐ Punkti
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', color: '#ccc', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={diplomaCfg.showFooter !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showFooter: e.target.checked } })} />
+                            📌 Kājene
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // ANKETA
+            if (secKey === 'contacts' && activeSlide.type === 'CONTACTS') {
+              return (
+                <div key="contacts" draggable onDragStart={(e) => handleSectionDragStart(e, 'contacts')} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleSectionDrop(e, 'contacts')} style={accordionCard}>
+                  <div style={accordionHeader} onClick={() => toggleSection('contacts')}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={dragHandleGrip} title="Pārvelc, lai mainītu secību">⋮⋮</span>
+                      📋 ANKETAS LAUKI & IESTATĪJUMI
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <button onClick={(e) => moveSection('contacts', 'UP', e)} style={btnReorderSmall}>▲</button>
+                      <button onClick={(e) => moveSection('contacts', 'DOWN', e)} style={btnReorderSmall}>▼</button>
+                      <span>{sections.contacts ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {sections.contacts && (
+                    <div style={{ marginTop: '10px' }}>
+                      <label style={labelStyle}>Anketas virsraksts:</label>
+                      <input style={inputStyle} value={activeSlide.config.contactsTitle || 'DALĪBNIEKU ANKETA'} onChange={(e) => updateActiveSlide((s) => { s.config.contactsTitle = e.target.value; }, true)} />
+
+                      <label style={labelStyle}>Aicinājuma teksts (Apraksts):</label>
+                      <textarea style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }} value={activeSlide.config.contactsDescription || ''} onChange={(e) => updateActiveSlide((s) => (s.config.contactsDescription = e.target.value), true)} />
+
+                      <div style={{ borderTop: '1px solid #333', marginTop: '10px', paddingTop: '8px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', maxHeight: '180px', overflowY: 'auto' }}>
+                          {((activeSlide.config.contactFields && activeSlide.config.contactFields.length > 0) ? activeSlide.config.contactFields : defaultContactFieldsList).map((f) => (
+                            <div key={f.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1c1c1c', border: '1px solid #333', padding: '5px 8px', borderRadius: '5px' }}>
+                              <div style={{ flex: 1 }}>
+                                <span style={{ fontSize: '0.85rem', color: '#ffc107', fontWeight: 'bold' }}>{f.label}</span>
+                                {f.required && <span style={{ color: '#ff4d4d', marginLeft: '4px', fontWeight: 'bold' }}>* (Obligāts)</span>}
+                                <div style={{ fontSize: '0.72rem', color: '#777' }}>Tips: {f.type || 'text'}</div>
+                              </div>
+                              <button onClick={() => handleRemoveContactField(f.id)} style={{ background: 'transparent', border: 'none', color: '#ff4d4d', cursor: 'pointer', fontSize: '1rem', fontWeight: 'bold' }}>×</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ background: '#111', border: '1px dashed #555', padding: '10px', borderRadius: '8px', marginTop: '10px' }}>
+                        <input style={{ ...inputStyle, marginBottom: '6px', fontSize: '0.85rem' }} placeholder="Lauka nosaukums..." value={newFieldLabel} onChange={(e) => setNewFieldLabel(e.target.value)} />
+                        <input style={{ ...inputStyle, marginBottom: '6px', fontSize: '0.85rem' }} placeholder="Placeholder..." value={newFieldPlaceholder} onChange={(e) => setNewFieldPlaceholder(e.target.value)} />
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                          <select style={{ ...selectStyle, flex: 1, margin: 0, fontSize: '0.8rem' }} value={newFieldType} onChange={(e) => setNewFieldType(e.target.value as any)}>
+                            <option value="text">🔤 Teksts</option>
+                            <option value="email">📧 E-pasts</option>
+                            <option value="tel">📞 Tālrunis</option>
+                          </select>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: '#ffc107', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={newFieldRequired} onChange={(e) => setNewFieldRequired(e.target.checked)} /> Obligāts
+                          </label>
+                        </div>
+                        <button onClick={handleAddContactField} style={{ ...btnSmallAction, background: '#007bff', color: '#fff', fontWeight: 'bold', margin: 0 }}>➕ Pievienot lauku anketai</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // TAIMERIS
+            if (secKey === 'timer' && activeSlide.type === 'TIMER') {
+              return (
+                <div key="timer" draggable onDragStart={(e) => handleSectionDragStart(e, 'timer')} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleSectionDrop(e, 'timer')} style={accordionCard}>
+                  <div style={accordionHeader} onClick={() => toggleSection('timer')}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={dragHandleGrip} title="Pārvelc, lai mainītu secību">⋮⋮</span>
+                      ⏱️ TAIMERA IESTATĪJUMI
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <button onClick={(e) => moveSection('timer', 'UP', e)} style={btnReorderSmall}>▲</button>
+                      <button onClick={(e) => moveSection('timer', 'DOWN', e)} style={btnReorderSmall}>▼</button>
+                      <span>{sections.timer ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {sections.timer && (
+                    <div style={{ marginTop: '10px' }}>
+                      <label style={labelStyle}>Taimera režīms:</label>
+                      <select style={selectStyle} value={activeSlide.config.timerType || 'COUNTDOWN'} onChange={(e) => updateActiveSlide((s) => { s.config.timerType = e.target.value as any; }, true)}>
+                        <option value="COUNTDOWN">⏳ Atpakaļskaitīšana</option>
+                        <option value="CLOCK">🕒 Reālā laika pulkstenis</option>
+                      </select>
+
+                      <label style={labelStyle}>Izvietojums ekrānā:</label>
+                      <select style={selectStyle} value={activeSlide.config.timerPlacement || 'CENTER'} onChange={(e) => updateActiveSlide((s) => (s.config.timerPlacement = e.target.value as any), true)}>
+                        <option value="CENTER">🎯 Liels tieši pa centru</option>
+                        <option value="TOP_RIGHT">↗️ Mazāks augšā labajā stūrī</option>
+                      </select>
+
+                      <label style={labelStyle}>Virsraksts virs laika:</label>
+                      <input style={inputStyle} value={activeSlide.config.timerLabel || ''} onChange={(e) => updateActiveSlide((s) => (s.config.timerLabel = e.target.value), true)} placeholder="Piem., Pārtraukums līdz 15:30" />
+
+                      {activeSlide.config.timerType !== 'CLOCK' && (
+                        <>
+                          <label style={labelStyle}>Ilgums sekundēs (piem., 300 = 5 min):</label>
+                          <input type="number" style={inputStyle} value={activeSlide.config.timerDuration ?? 300} onChange={(e) => updateActiveSlide((s) => (s.config.timerDuration = Number(e.target.value)), true)} />
+                        </>
+                      )}
+
+                      <label style={labelStyle}>Cilpas video fons (Video loop):</label>
+                      <select style={selectStyle} value={activeSlide.config.timerBgVideo || ''} onChange={(e) => updateActiveSlide((s) => (s.config.timerBgVideo = e.target.value), true)}>
+                        <option value="">(Bez video fona)</option>
+                        {mediaList.filter((f) => /\.(mp4|mov|webm)$/i.test(f)).map((f) => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            return null;
+          })}
         </div>
       </div>
 
-      {/* DIPLOMU DIZAINA MODĀLAIS LOGS */}
+      {/* 🌟 3. DIPLOMU DIZAINA & REĀLĀ PREVIEW MODĀLAIS LOGS */}
       {showDiplomaModal && (
         <div style={modalOverlayStyle} onClick={() => setShowDiplomaModal(false)}>
           <div style={diplomaModalCard} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #333', paddingBottom: '10px' }}>
-              <h2 style={{ margin: 0, color: '#d63384' }}>🏆 Diplomi: Dizains & Priekšskatījums</h2>
-              <button
-                onClick={() => setShowDiplomaModal(false)}
-                style={{ background: 'transparent', border: 'none', color: '#ff4d4d', fontSize: '1.5rem', cursor: 'pointer', fontWeight: 'bold' }}
-              >
-                ✕
-              </button>
+              <h2 style={{ margin: 0, color: '#d63384' }}>🏆 Diplomu dizains, lauku slēdži & reālais izskats</h2>
+              <button onClick={() => setShowDiplomaModal(false)} style={{ background: 'transparent', border: 'none', color: '#ff4d4d', fontSize: '1.5rem', cursor: 'pointer', fontWeight: 'bold' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', background: '#1c1c1c', padding: '12px', borderRadius: '8px', margin: '12px 0' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: '#fff', cursor: 'pointer' }}>
+                <input type="checkbox" checked={diplomaCfg.showLogo !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showLogo: e.target.checked } })} />
+                🖼️ Rādīt Logo
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: '#fff', cursor: 'pointer' }}>
+                <input type="checkbox" checked={diplomaCfg.showTitle !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showTitle: e.target.checked } })} />
+                👑 Virsraksts ("DIPLOMS")
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: '#fff', cursor: 'pointer' }}>
+                <input type="checkbox" checked={diplomaCfg.showSubtitle !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showSubtitle: e.target.checked } })} />
+                📜 Apakšvirsraksts
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: '#fff', cursor: 'pointer' }}>
+                <input type="checkbox" checked={diplomaCfg.showWinner !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showWinner: e.target.checked } })} />
+                👤 Uzvarētāja vārds
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: '#fff', cursor: 'pointer' }}>
+                <input type="checkbox" checked={diplomaCfg.showScore !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showScore: e.target.checked } })} />
+                ⭐ Iegūtie punkti
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: '#fff', cursor: 'pointer' }}>
+                <input type="checkbox" checked={diplomaCfg.showFooter !== false} onChange={(e) => setMobileBranding({ ...mobileBranding, diplomaConfig: { ...diplomaCfg, showFooter: e.target.checked } })} />
+                📌 Kājene (Datums & PIN)
+              </label>
             </div>
 
             <div style={{
               margin: '15px auto',
               width: '100%',
-              maxWidth: '550px',
-              height: '350px',
+              maxWidth: '620px',
+              height: '380px',
               background: diplomaCfg.theme === 'GOLD_WHITE_PRINT' ? '#ffffff' : (diplomaCfg.bgColor || '#111111'),
               border: `10px solid ${diplomaCfg.borderColor || '#ffc107'}`,
               borderRadius: '12px',
@@ -3195,19 +3048,43 @@ export default function Studio() {
               padding: '20px',
               boxSizing: 'border-box'
             }}>
-              <h1 style={{ fontSize: '1.8rem', color: diplomaCfg.theme === 'GOLD_WHITE_PRINT' ? '#111' : (diplomaCfg.titleColor || '#fff'), margin: 0 }}>
-                {diplomaCfg.customTitle || '🏆 DIPLOMS 🏆'}
-              </h1>
-              <h3 style={{ fontSize: '1.1rem', color: diplomaCfg.borderColor || '#ffc107', margin: '6px 0' }}>
-                {diplomaCfg.customSubtitle || 'Par iegūto vietu spēlē'}
-              </h3>
-              <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: diplomaCfg.winnerColor || (diplomaCfg.theme === 'GOLD_WHITE_PRINT' ? '#007bff' : '#ffd700'), margin: '12px 0' }}>
-                ČEMPIONU KOMANDA
-              </div>
-              <div style={{ fontSize: '1.1rem' }}>Iegūtie punkti: <strong>150 pt</strong></div>
-              <div style={{ marginTop: '20px', fontSize: '0.8rem', color: '#888' }}>
-                {diplomaCfg.footerText || 'Event Studio'} • Spēles PIN: 1234 • {new Date().toLocaleDateString('lv-LV')}
-              </div>
+              {diplomaCfg.showLogo !== false && mobileBranding.appLogo && (
+                <div style={{ marginBottom: '8px' }}>
+                  <img
+                    src={`${MEDIA_BASE_URL}/${encodeURIComponent(mobileBranding.appLogo).replace(/%2F/g, '/')}`}
+                    alt="Diploma Logo"
+                    style={{ maxHeight: '65px', maxWidth: '240px', objectFit: 'contain' }}
+                  />
+                </div>
+              )}
+
+              {diplomaCfg.showTitle !== false && (
+                <h1 style={{ fontSize: '1.8rem', color: diplomaCfg.theme === 'GOLD_WHITE_PRINT' ? '#111' : (diplomaCfg.titleColor || '#fff'), margin: 0 }}>
+                  {diplomaCfg.customTitle || '🏆 DIPLOMS 🏆'}
+                </h1>
+              )}
+
+              {diplomaCfg.showSubtitle !== false && (
+                <h3 style={{ fontSize: '1.05rem', color: diplomaCfg.borderColor || '#ffc107', margin: '4px 0' }}>
+                  {diplomaCfg.customSubtitle || 'Par iegūto 1. vietu spēlē'}
+                </h3>
+              )}
+
+              {diplomaCfg.showWinner !== false && (
+                <div style={{ fontSize: '1.8rem', fontWeight: '900', color: diplomaCfg.winnerColor || '#ffd700', margin: '8px 0' }}>
+                  ČEMPIONU VĀRDS VAI KOMANDA
+                </div>
+              )}
+
+              {diplomaCfg.showScore !== false && (
+                <div style={{ fontSize: '1.1rem' }}>Iegūtie punkti: <strong>150 pt</strong></div>
+              )}
+
+              {diplomaCfg.showFooter !== false && (
+                <div style={{ marginTop: '16px', fontSize: '0.8rem', color: '#888' }}>
+                  {diplomaCfg.footerText || 'Event Studio'} • Spēles PIN: 1234 • {new Date().toLocaleDateString('lv-LV')}
+                </div>
+              )}
             </div>
 
             <div style={{ textAlign: 'center' }}>
@@ -3246,7 +3123,7 @@ export default function Studio() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '10px' }}>
               <input type="file" accept=".csv,.txt" onChange={handleFileUpload} style={{ color: '#aaa', fontSize: '0.85rem' }} />
               <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.85rem', color: '#ccc' }}>
@@ -3272,7 +3149,8 @@ export default function Studio() {
                 fontFamily: 'monospace',
                 fontSize: '0.85rem',
                 boxSizing: 'border-box',
-                resize: 'vertical'
+                resize: 'vertical',
+                marginTop: '10px'
               }}
               placeholder="Iekopē datus šeit no Excel (ar Tab atdalītājiem)..."
               value={importRawText}
@@ -3280,7 +3158,7 @@ export default function Studio() {
             />
 
             {importedQuestions.length > 0 && (
-              <div style={{ maxHeight: '180px', overflowY: 'auto', background: '#0d0d0d', border: '1px solid #222', borderRadius: '8px', padding: '8px' }}>
+              <div style={{ maxHeight: '180px', overflowY: 'auto', background: '#0d0d0d', border: '1px solid #222', borderRadius: '8px', padding: '8px', marginTop: '10px' }}>
                 <div style={{ fontSize: '0.8rem', color: '#aaa', marginBottom: '6px', fontWeight: 'bold' }}>
                   Atrasti {importedQuestions.length} jautājumi importam:
                 </div>
@@ -3309,7 +3187,7 @@ export default function Studio() {
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #333', paddingTop: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #333', paddingTop: '10px', marginTop: '10px' }}>
               <button
                 onClick={() => setShowImportModal(false)}
                 style={{ padding: '8px 18px', background: '#333', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
@@ -3436,12 +3314,12 @@ const resizeHandleRight: React.CSSProperties = {
   bottom: '-8px',
   width: '18px',
   height: '18px',
-  background: '#007bff',
+  background: '#00ff00',
   border: '2px solid #ffffff',
   cursor: 'nwse-resize',
   borderRadius: '3px',
   zIndex: 100,
-  boxShadow: '0 0 6px rgba(0,0,0,0.9)'
+  boxShadow: '0 0 6px rgba(0,255,0,0.9)'
 };
 
 const resizeHandleLeft: React.CSSProperties = {
@@ -3535,16 +3413,6 @@ const btnSmallAction: React.CSSProperties = {
   marginBottom: '8px'
 };
 
-const btnNumber: React.CSSProperties = {
-  flex: 1,
-  padding: '5px 0',
-  color: '#fff',
-  border: 'none',
-  borderRadius: '4px',
-  cursor: 'pointer',
-  fontWeight: 'bold'
-};
-
 const selectedBoxTop: React.CSSProperties = {
   background: '#1a2215',
   border: '2px solid #00ff00',
@@ -3627,6 +3495,23 @@ const accordionHeader: React.CSSProperties = {
   color: '#00e5ff'
 };
 
+const dragHandleGrip: React.CSSProperties = {
+  cursor: 'grab',
+  color: '#888',
+  fontSize: '0.9rem',
+  marginRight: '2px'
+};
+
+const btnReorderSmall: React.CSSProperties = {
+  background: '#252525',
+  color: '#ccc',
+  border: '1px solid #444',
+  borderRadius: '3px',
+  cursor: 'pointer',
+  padding: '1px 5px',
+  fontSize: '0.7rem'
+};
+
 const modalOverlayStyle: React.CSSProperties = {
   position: 'fixed',
   top: 0,
@@ -3658,4 +3543,3 @@ const diplomaModalCard: React.CSSProperties = {
   flexDirection: 'column',
   gap: '15px'
 };
-

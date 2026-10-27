@@ -83,9 +83,12 @@ export default function Player() {
   const [scene, setScene] = useState<any>(null);
   const [subState, setSubState] = useState<string>('IDLE');
 
+  // 🌟 Paziņojums par veiksmīgu atjaunošanos pēc avārijas vai tīkla maiņas
+  const [reconnectBanner, setReconnectBanner] = useState<string | null>(null);
+
   const [showCaptainQrModal, setShowCaptainQrModal] = useState(false);
 
-  // 🌟 KONTAKTU ANKETAS STĀVOKLIS
+  // KONTAKTU ANKETAS STĀVOKLIS
   const [contactsForm, setContactsForm] = useState<Record<string, string>>({});
   const [isContactsSubmitted, setIsContactsSubmitted] = useState<boolean>(false);
 
@@ -363,8 +366,8 @@ export default function Player() {
         localStorage.setItem('player_saved_score', String(data.score));
         setPersonalStats({
           myRank: data?.myRank ?? null,
-          previousRank: null,
-          rankDelta: 0,
+          previousRank: data?.previousRank ?? null,
+          rankDelta: data?.rankDelta ?? 0,
           totalPlayers: data?.totalPlayers ?? 1,
           score: data.score,
           roundScore: data.roundScore ?? 0,
@@ -376,8 +379,15 @@ export default function Player() {
           teamRankDelta: 0,
           totalTeams: data?.totalTeams ?? 1,
           teamScore: data?.teamScore ?? null,
-          isInitialBaseline: true
+          isInitialBaseline: Boolean(data?.isInitialBaseline)
         });
+
+        // 🌟 JA DALĪBNIEKS IR ATJAUNOJIES AR ESOŠIEM PUNKTIEM — PARĀDĀM IEDROŠINOŠU BANNERI!
+        if (data.score > 0 || (data.deviceNumber && data.deviceNumber > 0)) {
+          setReconnectBanner(`🎉 Profils atjaunots! Pults #${data.deviceNumber} • ${data.score} pt`);
+          triggerHaptic('success');
+          setTimeout(() => setReconnectBanner(null), 4500);
+        }
       }
     });
 
@@ -550,6 +560,7 @@ export default function Player() {
       setPin('');
       setPlayerToken('');
       setPersonalStats(null);
+      setReconnectBanner(null);
       alert('Vadītājs ir beidzis spēles sesiju.');
     });
 
@@ -619,6 +630,11 @@ export default function Player() {
   const isMultiSelectMode = scene?.config?.selectionMode === 'ALL' && requiredCount > 1;
   const maxRequiredChoices = requiredCount > 0 ? requiredCount : 1;
   const submitMode = scene?.config?.submitMode || 'INSTANT';
+
+  // 🌐 TULKOŠANAS KONTROLE: pēc noklusējuma netulkojas (translate="no", class="notranslate")
+  const allowTranslation = Boolean(scene?.config?.allowOptionTranslation);
+  const translateAttr = allowTranslation ? ('yes' as const) : ('no' as const);
+  const notranslateClass = allowTranslation ? '' : 'notranslate';
 
   const playerUIMode: 'AUTO' | 'CLASSIC_GRID' | 'TEXT_CARDS' | 'MUSIC_DUAL' =
     scene?.config?.playerUIMode || 'AUTO';
@@ -875,7 +891,7 @@ export default function Player() {
     socket.emit('participant:test-buzzer', { pin, playerId });
   };
 
-  // 🌟 KONTAKTU IESNIEGŠANA
+  // KONTAKTU IESNIEGŠANA
   const handleContactsSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!socket || !pin) return;
@@ -891,7 +907,7 @@ export default function Player() {
     setIsContactsSubmitted(true);
   };
 
-  // 🌟 DROŠA IZIEŠANA AR APSTIPRINĀJUMA JAUTĀJUMU
+  // DROŠA IZIEŠANA AR APSTIPRINĀJUMA JAUTĀJUMU
   const handleLeaveOrNewGame = () => {
     const isConfirmed = window.confirm('⚠️ Vai tiešām vēlies pamest spēli?\nTev būs atkārtoti jāievada PIN kods un vārds, lai atgrieztos.');
     if (!isConfirmed) return;
@@ -924,6 +940,7 @@ export default function Player() {
     setPin('');
     setPlayerToken('');
     setPersonalStats(null);
+    setReconnectBanner(null);
   };
 
   const isRoundLb = (scene?.config?.lbType || personalStats?.lbType || leaderboardType || '').toUpperCase() === 'ROUND';
@@ -964,7 +981,6 @@ export default function Player() {
   const isMusicMode = playerUIMode === 'MUSIC_DUAL';
   const isContactsScene = scene?.type === 'CONTACTS';
 
-  // 🌟 2. PUNKTS: VISMAZ 2X LIELĀKS LOGO EKRĀNĀ PIE JAUTĀJUMIEM (maxHeight: 88px)
   const renderGameLogo = () => {
     if (!branding.appLogo || branding.gameLogoPosition === 'NONE') return null;
     return (
@@ -983,6 +999,7 @@ export default function Player() {
     );
   };
 
+  // 1. PIEVIENOŠANĀS EKRĀNS
   if (!isJoined) {
     return (
       <div style={appBgStyle}>
@@ -1071,6 +1088,7 @@ export default function Player() {
     );
   }
 
+  // 2. ATSLĒGTS AFK DĒĻ
   if (isDisabledAfk) {
     return (
       <div style={appBgStyle}>
@@ -1088,12 +1106,18 @@ export default function Player() {
     );
   }
 
+  // 3. SĀKUMA GAIDĪŠANAS EKRĀNS (LOBBY - PIRMS SPĒLES SĀKUMA)
   if (!scene) {
     return (
       <div style={{ ...fullScreenMobile, backgroundColor: '#000', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
         <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
 
-        {/* 🌟 AUGŠĒJĀ JOSLA AR DROŠU POGU IZVIETOJUMU */}
+        {reconnectBanner && (
+          <div style={reconnectBannerStyle}>
+            {reconnectBanner}
+          </div>
+        )}
+
         <div style={mobileHeader}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
@@ -1174,6 +1198,7 @@ export default function Player() {
     );
   }
 
+  // 4. SPĒLES BEIGU EKRĀNS (GAME OVER)
   if (isGameOver) {
     return (
       <div style={appBgStyle}>
@@ -1220,7 +1245,7 @@ export default function Player() {
     );
   }
 
-  // Noklusētie kontaktu lauki, ja studijā nav definēti
+  // 5. GALVENAIS AKTĪVĀS SPĒLES EKRĀNS
   const defaultContactFields = [
     { id: 'fullname', label: 'Vārds, Uzvārds', placeholder: 'Jānis Bērziņš', required: true, type: 'text' },
     { id: 'email', label: 'E-pasta adrese', placeholder: 'janis@piemers.lv', required: true, type: 'email' },
@@ -1236,7 +1261,13 @@ export default function Player() {
     <div style={appBgStyle}>
       <video ref={noSleepVideoRef} playsInline muted loop style={{ display: 'none' }} />
 
-      {/* 🌟 1. PUNKTS: PĀRDOMĀTA, DROŠA AUGŠĒJĀ JOSLA (IZIET POGA SKAIDRI NODALĪTA AR APSTIPRINĀJUMU) */}
+      {/* 🌟 RE-ATTACHMENT PAZIŅOJUMS PĒC AVĀRIJAS VAI TĪKLA MAIŅAS */}
+      {reconnectBanner && (
+        <div style={reconnectBannerStyle}>
+          {reconnectBanner}
+        </div>
+      )}
+
       <div style={mobileHeader}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <div style={keypadBadge}>📟 #{deviceNumber || 1}</div>
@@ -1271,11 +1302,10 @@ export default function Player() {
             </button>
           )}
 
-          {/* Nodalīta, droša pamest poga ar apstiprinājumu */}
           <button
             onClick={handleLeaveOrNewGame}
             style={btnExitSafe}
-            title="Pamest spēli (Ar apstiprinājumu)"
+            title="Pamest spēli"
           >
             🚪 Iziet
           </button>
@@ -1355,7 +1385,6 @@ export default function Player() {
       )}
 
       <div style={mobileBody}>
-        {/* 🌟 2. PUNKTS: VISMAZ 2X LIELĀKS LOGO AUGŠĀ */}
         {branding.gameLogoPosition === 'TOP' && renderGameLogo()}
 
         {subState === 'PAUSED' && (
@@ -1535,6 +1564,8 @@ export default function Player() {
                     <button
                       key={i}
                       disabled={!!myChoice}
+                      translate={translateAttr}
+                      className={notranslateClass}
                       onClick={() => handleSingleVoteClick(opt, String.fromCharCode(65 + i))}
                       style={{
                         ...btnVerticalCard,
@@ -1542,7 +1573,7 @@ export default function Player() {
                       }}
                     >
                       <div style={letterBadgeSquare}>{String.fromCharCode(65 + i)}</div>
-                      <div style={textOptionFull}>{opt}</div>
+                      <div style={textOptionFull} translate={translateAttr} className={notranslateClass}>{opt}</div>
                     </button>
                   ))}
                 </div>
@@ -1612,10 +1643,15 @@ export default function Player() {
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '10px 0', flex: 1, overflowY: 'auto' }}>
                   {orderedItems.map((item, idx) => (
-                    <div key={`order-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1c2833', border: '2px solid #00e5ff', borderRadius: '10px', padding: '12px 14px', color: '#fff', fontWeight: 'bold' }}>
+                    <div
+                      key={`order-${idx}`}
+                      translate={translateAttr}
+                      className={notranslateClass}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1c2833', border: '2px solid #00e5ff', borderRadius: '10px', padding: '12px 14px', color: '#fff', fontWeight: 'bold' }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <span style={{ color: '#00e5ff', fontSize: '1.2rem', fontWeight: '900' }}>#{idx + 1}</span>
-                        <span>{item}</span>
+                        <span translate={translateAttr} className={notranslateClass}>{item}</span>
                       </div>
                       {!myChoice && (
                         <div style={{ display: 'flex', gap: '6px' }}>
@@ -1634,7 +1670,7 @@ export default function Player() {
                 )}
 
                 {myChoice && (
-                  <div style={voteConfirmedBadge}>
+                  <div style={voteConfirmedBadge} translate={translateAttr} className={notranslateClass}>
                     ✅ Mana secība: {myChoice}
                   </div>
                 )}
@@ -1653,7 +1689,7 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🎵 2. MUZIKĀLĀ SPĒLE */}
+        {/* 🎵 MUZIKĀLĀ SPĒLE */}
         {isMusicMode && !isBuzzerRace && !isOrdering && !isContactsScene && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '4px 0', overflowY: 'auto' }}>
             {subState === 'READY' && (
@@ -1687,6 +1723,8 @@ export default function Player() {
                         <button
                           key={i}
                           disabled={submitMode === 'INSTANT' && !!musicTopChoice}
+                          translate={translateAttr}
+                          className={notranslateClass}
                           onClick={() => handleMusicOptionClick(opt, letter, true)}
                           style={{
                             ...btnVerticalCard,
@@ -1699,7 +1737,7 @@ export default function Player() {
                           <div style={{ ...letterBadgeSquare, background: isChosen ? '#000' : '#00e5ff', color: isChosen ? '#00e5ff' : '#000' }}>
                             {letter}
                           </div>
-                          <div style={{ ...textOptionFull, color: isChosen ? '#000' : '#fff' }}>
+                          <div style={{ ...textOptionFull, color: isChosen ? '#000' : '#fff' }} translate={translateAttr} className={notranslateClass}>
                             {opt || `Variants ${letter}`}
                           </div>
                         </button>
@@ -1726,6 +1764,8 @@ export default function Player() {
                         <button
                           key={i + 3}
                           disabled={submitMode === 'INSTANT' && !!musicBottomChoice}
+                          translate={translateAttr}
+                          className={notranslateClass}
                           onClick={() => handleMusicOptionClick(opt, letter, false)}
                           style={{
                             ...btnVerticalCard,
@@ -1738,7 +1778,7 @@ export default function Player() {
                           <div style={{ ...letterBadgeSquare, background: isChosen ? '#000' : '#ff007f', color: isChosen ? '#ff007f' : '#fff' }}>
                             {letter}
                           </div>
-                          <div style={{ ...textOptionFull, color: isChosen ? '#000' : '#fff' }}>
+                          <div style={{ ...textOptionFull, color: isChosen ? '#000' : '#fff' }} translate={translateAttr} className={notranslateClass}>
                             {opt || `Variants ${letter}`}
                           </div>
                         </button>
@@ -1764,7 +1804,7 @@ export default function Player() {
                 )}
 
                 {myChoice && (
-                  <div style={voteConfirmedBadge}>
+                  <div style={voteConfirmedBadge} translate={translateAttr} className={notranslateClass}>
                     ✅ Atbilde pieņemta: {myChoice}
                   </div>
                 )}
@@ -1793,7 +1833,7 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🅰️ 3. STANDARTA JAUTĀJUMI */}
+        {/* 🅰️ STANDARTA JAUTĀJUMI */}
         {!isMusicMode && !isBuzzerRace && !isOrdering && !isContactsScene && scene?.type !== 'LEADERBOARD' && scene?.type !== 'BILLBOARD' && scene?.type !== 'TIMER' && subState !== 'PAUSED' && (
           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' }}>
             {subState === 'READY' && (
@@ -1843,6 +1883,8 @@ export default function Player() {
                         <button
                           key={i}
                           disabled={!!myChoice}
+                          translate={translateAttr}
+                          className={notranslateClass}
                           onClick={() => {
                             if (isMultiSelectMode) toggleMultiSelectOption(itemKey);
                             else handleSingleVoteClick(opt, letter);
@@ -1856,7 +1898,7 @@ export default function Player() {
                           }}
                         >
                           <div style={letterBadgeSquare}>{letter}</div>
-                          <div style={textOptionFull}>{opt}</div>
+                          <div style={textOptionFull} translate={translateAttr} className={notranslateClass}>{opt}</div>
                         </button>
                       );
                     })}
@@ -1882,6 +1924,8 @@ export default function Player() {
                         <button
                           key={i}
                           disabled={!!myChoice}
+                          translate={translateAttr}
+                          className={notranslateClass}
                           onClick={() => handleSingleVoteClick(opt, letter)}
                           style={{
                             ...buzzerBtnHorizontal,
@@ -1910,7 +1954,7 @@ export default function Player() {
                 )}
 
                 {myChoice && (
-                  <div style={voteConfirmedBadge}>✅ Atbilde ({myChoice}) pieņemta!</div>
+                  <div style={voteConfirmedBadge} translate={translateAttr} className={notranslateClass}>✅ Atbilde ({myChoice}) pieņemta!</div>
                 )}
               </div>
             )}
@@ -1949,7 +1993,6 @@ export default function Player() {
           </div>
         )}
 
-        {/* 🌟 2. PUNKTS: VISMAZ 2X LIELĀKS LOGO APAKŠĀ */}
         {branding.gameLogoPosition === 'BOTTOM' && renderGameLogo()}
       </div>
     </div>
@@ -1974,6 +2017,24 @@ const fullScreenMobile: React.CSSProperties = {
   boxSizing: 'border-box',
   overscrollBehaviorY: 'contain',
   touchAction: 'manipulation'
+};
+
+const reconnectBannerStyle: React.CSSProperties = {
+  position: 'fixed',
+  top: '52px',
+  left: '50%',
+  transform: 'translateX(-50%)',
+  background: 'linear-gradient(135deg, #28a745, #20c997)',
+  color: '#fff',
+  padding: '8px 16px',
+  borderRadius: '20px',
+  fontWeight: 'bold',
+  fontSize: '0.85rem',
+  zIndex: 1000000,
+  boxShadow: '0 4px 20px rgba(40, 167, 69, 0.6)',
+  textAlign: 'center',
+  maxWidth: '90%',
+  animation: 'pulse 1s infinite'
 };
 
 const mobileHeader: React.CSSProperties = {
@@ -2021,7 +2082,6 @@ const btnFullscreenBadge: React.CSSProperties = {
   touchAction: 'manipulation'
 };
 
-// 🌟 1. PUNKTS: PĀRDOMĀTA, DROŠA PAMEST POGA
 const btnExitSafe: React.CSSProperties = {
   background: 'rgba(220, 53, 69, 0.2)',
   border: '1px solid rgba(220, 53, 69, 0.5)',

@@ -106,6 +106,9 @@ export interface Slide {
     contactFields?: ContactField[];
     contactsTitle?: string;
     contactsDescription?: string;
+
+    // 🌐 TULKOŠANAS IESTATĪJUMS: ja true, atļauj tulkot; ja false/nav, bloķē tulkošanu
+    allowOptionTranslation?: boolean;
   };
 }
 
@@ -146,7 +149,6 @@ export interface VoteAnswerDetail {
   category?: 'TOP' | 'BOTTOM' | 'SINGLE';
 }
 
-// 🌟 Spēlētāja stāvoklis ar vietu dinamiku, atmiņu un kontaktiem
 export interface PlayerState {
   id: string;
   token?: string;
@@ -166,10 +168,9 @@ export interface PlayerState {
   teamName?: string;
   isCaptain?: boolean;
   missedQuestionsCount: number;
-  contacts?: Record<string, string>; // 🌟 Saglabātie kontakti CSV eksportam
+  contacts?: Record<string, string>;
 }
 
-// 🌟 Komandas līderu tabulas elements ar dinamiku
 export interface TeamLeaderboardItem {
   name: string;
   score: number;
@@ -182,7 +183,6 @@ export interface TeamLeaderboardItem {
   rankDelta?: number;
 }
 
-// 🌟 Personīgās statistikas atskaite spēlētāja tālrunim
 export interface PersonalStatsPayload {
   myRank: number | null;
   previousRank?: number | null;
@@ -202,7 +202,6 @@ export interface PersonalStatsPayload {
   teamName?: string;
 }
 
-// 🌟 Zibenīgās sinhronizācijas atbilde (atbloķējot tālruni)
 export interface ClientSyncResponse {
   currentScene: any;
   subState: string;
@@ -220,5 +219,5 @@ export interface ClientSyncResponse {
   myOptionIds: string[];
   topAnswer?: string | null;
   bottomAnswer?: string | null;
-  myContacts?: Record<string, string>; // 🌟 Atjaunotie kontakti
+  myContacts?: Record<string, string>;
 }

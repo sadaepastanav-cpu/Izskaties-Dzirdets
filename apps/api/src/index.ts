@@ -47,6 +47,15 @@ const logEvent = (level: 'INFO' | 'WARN' | 'ERROR', message: string, meta?: any)
   });
 };
 
+// 🌟 GLOBĀLA AIZSARDZĪBA PRET SERVERA AVĀRIJĀM (SERVERIS NEKAD NENOKRĪT!)
+process.on('uncaughtException', (err) => {
+  logEvent('ERROR', `Nepārtverta sistēmas kļūda (uncaughtException): ${err.message}`, { stack: err.stack });
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  logEvent('ERROR', `Nepārtverts solījums (unhandledRejection): ${reason?.message || reason}`);
+});
+
 const atomicWriteJson = (filePath: string, data: any) => {
   const tempPath = `${filePath}.${Date.now()}.${Math.random().toString(36).substring(7)}.tmp`;
   try {
@@ -238,6 +247,9 @@ const isAnswerMatch = (userAns: string, correctAns: string, options: string[] = 
   return false;
 };
 
+// PUNKTIEM DERĪGIE JAUTĀJUMU TIPI
+const SCORABLE_TYPES = ['QUESTION', 'QUIZ', 'MAJORITY', 'VOTE', 'ORDERING', 'BUZZER_RACE'];
+
 // ==========================================
 // SPĒLĒTĀJA UN SESIJAS STRUKTŪRA
 // ==========================================
@@ -260,7 +272,7 @@ interface PlayerState {
   teamName?: string;
   isCaptain?: boolean;
   missedQuestionsCount: number;
-  contacts?: Record<string, string>; // 🌟 KONTAKTI
+  contacts?: Record<string, string>;
 }
 
 const sessions = new Map<string, any>();
@@ -309,20 +321,37 @@ const sanitizeSceneForPlayer = (scene: any, subState: string) => {
   return cleanScene;
 };
 
-// 🌟 STĀVOKĻA IZPLATĪŠANA
+// 🌟 STĀVOKĻA IZPLATĪŠANA (Ar atbalstu iesaldētajam laikam & pauzei)
 const emitStateUpdate = (pin: string, scene: any, subState: string, extra: any = {}) => {
   const sanitized = sanitizeSceneForPlayer(scene, subState);
   const s = sessions.get(pin);
   const isBlackout = !!s?.isBlackout;
 
-  io.to(pin).emit('state-update', {
+  const scenesList = s?.scenes || [];
+  const currentIdx = s ? s.currentSceneIdx : 0;
+
+  const totalQuestions = scenesList.filter((sc: any) => SCORABLE_TYPES.includes(sc?.type)).length;
+  const isScorable = scene ? SCORABLE_TYPES.includes(scene.type) : false;
+  const currentQuestionNum = scenesList
+    .slice(0, currentIdx + 1)
+    .filter((sc: any) => SCORABLE_TYPES.includes(sc?.type)).length;
+
+  const payload = {
     ...sanitized,
     subState,
     isBlackout,
-    currentSceneIdx: s ? s.currentSceneIdx : 0,
-    totalScenes: s?.scenes ? s.scenes.length : 0,
+    isPaused: !!s?.isPaused,
+    frozenRemainingMs: s?.frozenRemainingMs ?? (extra?.frozenRemainingMs !== undefined ? extra.frozenRemainingMs : null),
+    pausedRemainingMs: s?.pausedRemainingMs ?? (extra?.pausedRemainingMs !== undefined ? extra.pausedRemainingMs : null),
+    currentSceneIdx: currentIdx,
+    totalScenes: scenesList.length,
+    currentQuestionNum,
+    totalQuestions,
+    isScorable,
     ...extra
-  });
+  };
+
+  io.to(pin).emit('state-update', payload);
 
   const playersMap = sessionScores.get(pin);
   if (s) {
@@ -333,8 +362,14 @@ const emitStateUpdate = (pin: string, scene: any, subState: string, extra: any =
       currentScene: scene,
       subState,
       isBlackout,
+      isPaused: !!s?.isPaused,
+      frozenRemainingMs: s?.frozenRemainingMs ?? (extra?.frozenRemainingMs !== undefined ? extra.frozenRemainingMs : null),
+      pausedRemainingMs: s?.pausedRemainingMs ?? (extra?.pausedRemainingMs !== undefined ? extra.pausedRemainingMs : null),
       currentSceneIdx: s.currentSceneIdx,
       totalScenes: s.scenes.length,
+      currentQuestionNum,
+      totalQuestions,
+      isScorable,
       nextSceneTitle: nextScene?.title || 'Spēles beigas',
       votedCount: s.votes?.length || 0,
       totalParticipantsCount: activeParticipants.length,
@@ -826,13 +861,15 @@ const handleVote = (
 
       triggerVotesUpdatedThrottled(pin);
 
+      // 🌟 JA VISI NOBALSOJUŠI ĀTRĀK — IESALDĒJAM ATLIKUŠO LAIKU!
       const completeVotesCount = s.votes.filter((v: any) => v.isComplete).length;
       const isFullTimeMode = s.branding?.timerMode === 'FULL_TIME';
       if (!isFullTimeMode && activeParticipantsCount > 0 && completeVotesCount >= activeParticipantsCount) {
         clearSessionTimer(pin);
+        const remainingTimeMs = Math.max(0, (s.currentScene?.endTime || 0) - Date.now());
+        s.frozenRemainingMs = remainingTimeMs;
         s.subState = 'STATS';
-        if (s.currentScene) s.currentScene.endTime = Date.now();
-        emitStateUpdate(pin, s.currentScene, 'STATS');
+        emitStateUpdate(pin, s.currentScene, 'STATS', { frozenRemainingMs: remainingTimeMs });
         io.to(pin).emit('video-command', 'pause');
         saveSnapshot(pin, true);
       }
@@ -860,17 +897,69 @@ const handleVote = (
 
     triggerVotesUpdatedThrottled(pin);
 
+    // 🌟 JA VISI NOBALSOJUŠI ĀTRĀK — IESALDĒJAM ATLIKUŠO LAIKU!
     const completeVotesCount = s.votes.filter((v: any) => v.isComplete).length;
     const isFullTimeMode = s.branding?.timerMode === 'FULL_TIME';
     if (!isFullTimeMode && activeParticipantsCount > 0 && completeVotesCount >= activeParticipantsCount) {
       clearSessionTimer(pin);
+      const remainingTimeMs = Math.max(0, (s.currentScene?.endTime || 0) - Date.now());
+      s.frozenRemainingMs = remainingTimeMs;
       s.subState = 'STATS';
-      if (s.currentScene) s.currentScene.endTime = Date.now();
-      emitStateUpdate(pin, s.currentScene, 'STATS');
+      emitStateUpdate(pin, s.currentScene, 'STATS', { frozenRemainingMs: remainingTimeMs });
       io.to(pin).emit('video-command', 'pause');
       saveSnapshot(pin, true);
     }
   }
+};
+
+// ==========================================
+// 🌟 UNIVERSIĀLAIS BOTU BALSOŠANAS DZINĒJS
+// ==========================================
+const triggerBotVotes = (pin: string) => {
+  const s = sessions.get(pin);
+  const playersMap = sessionScores.get(pin);
+  if (!s || !playersMap || s.subState !== 'ACTIVE') return;
+
+  const currentScene = s.currentScene;
+  if (!currentScene) return;
+
+  if (!SCORABLE_TYPES.includes(currentScene.type)) return;
+
+  const dur = currentScene.config?.duration || currentScene.config?.timeLimit || 30;
+  const rawOptions = currentScene.config?.options || [];
+  const optCount = currentScene.config?.optionsCount || (rawOptions.length > 0 ? rawOptions.length : 4);
+  const letterList = ['A', 'B', 'C', 'D', 'E', 'F'].slice(0, optCount);
+  const validChoicePool = letterList.map((letter, idx) => {
+    const optText = rawOptions[idx];
+    return (optText && typeof optText === 'string' && optText.trim() !== '') ? optText : letter;
+  });
+
+  const isMusicMode = currentScene.config?.playerUIMode === 'MUSIC_DUAL';
+  const isOrdering = currentScene.type === 'ORDERING';
+
+  playersMap.forEach((p, id) => {
+    if (p.isBot && !p.isDisabled) {
+      const delay = Math.random() * Math.max(0.8, dur - 1.5) * 1000;
+      setTimeout(() => {
+        const currentSession = sessions.get(pin);
+        if (currentSession?.subState === 'ACTIVE') {
+          if (isOrdering) {
+            const shuffled = [...validChoicePool].sort(() => Math.random() - 0.5);
+            handleVote(pin, shuffled, id);
+          } else if (isMusicMode) {
+            const topPool = validChoicePool.slice(0, 3);
+            const bottomPool = validChoicePool.slice(3, 6);
+            const topChoice = topPool[Math.floor(Math.random() * topPool.length)] || 'A';
+            const bottomChoice = bottomPool[Math.floor(Math.random() * bottomPool.length)] || 'D';
+            handleVote(pin, [topChoice, bottomChoice], id);
+          } else {
+            const selectedOption = [validChoicePool[Math.floor(Math.random() * validChoicePool.length)]];
+            handleVote(pin, selectedOption, id);
+          }
+        }
+      }, delay);
+    }
+  });
 };
 
 // ==========================================
@@ -1028,7 +1117,6 @@ app.post('/api/recover-session', requireAdminAuth, (_req, res) => {
   }
 });
 
-// 🌟 PAPILDINĀTS CSV EKP在这个TS AR KONTAKTU KOLONNĀM!
 app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
   const { pin } = req.params;
   const playersMap = sessionScores.get(pin);
@@ -1040,7 +1128,6 @@ app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
     return res.status(404).json({ error: 'Šai sesijai nav atrasti spēlētāju dati.' });
   }
 
-  // Atrodam visus definētos kontaktu laukus
   const contactScenes = (session?.scenes || []).filter((sc: any) => sc.type === 'CONTACTS');
   const contactFieldDefs: { id: string; label: string }[] = [];
   const seenContactIds = new Set<string>();
@@ -1054,7 +1141,6 @@ app.get('/api/export-csv/:pin', requireAdminAuth, (req, res) => {
     });
   });
 
-  // Ja spēlētājam ir lauki, kas nebija slaidā, pievienojam arī tos
   playersMap.forEach((p) => {
     if (p.contacts) {
       Object.keys(p.contacts).forEach((k) => {
@@ -1130,40 +1216,46 @@ io.on('connection', (socket: Socket) => {
   }
 
   socket.on('host:toggle-blackout', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s) {
       s.isBlackout = !s.isBlackout;
-      io.to(data.pin).emit('blackout-toggled', s.isBlackout);
-      io.to(`${data.pin}_host`).emit('blackout-toggled', s.isBlackout);
-      saveSnapshot(data.pin, true);
-      logEvent('INFO', `Skatuves Blackout režīms: ${s.isBlackout ? 'IESLĒGTS' : 'IZSLĒGTS'} (PIN ${data.pin})`);
+      io.to(pin).emit('blackout-toggled', s.isBlackout);
+      io.to(`${pin}_host`).emit('blackout-toggled', s.isBlackout);
+      saveSnapshot(pin, true);
+      logEvent('INFO', `Skatuves Blackout režīms: ${s.isBlackout ? 'IESLĒGTS' : 'IZSLĒGTS'} (PIN ${pin})`);
     }
   });
 
   socket.on('host:set-theme', (data: { pin: string; hostToken: string; theme: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s) {
       if (!s.branding) s.branding = {};
       s.branding.presentationTheme = data.theme;
-      io.to(data.pin).emit('theme-changed', data.theme);
-      io.to(data.pin).emit('session-branding', s.branding);
-      saveSnapshot(data.pin, true);
+      io.to(pin).emit('theme-changed', data.theme);
+      io.to(pin).emit('session-branding', s.branding);
+      saveSnapshot(pin, true);
     }
   });
 
   socket.on('host:join-remote', (data: { pin: string; hostToken: string; hostName?: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) {
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) {
       return socket.emit('error-message', 'Neautorizēta vadītāja piekļuve!');
     }
 
-    socket.join(data.pin);
-    socket.join(`${data.pin}_host`);
-    socket.join(`${data.pin}_screens`);
+    socket.join(pin);
+    socket.join(`${pin}_host`);
+    socket.join(`${pin}_screens`);
 
-    const s = sessions.get(data.pin);
-    const playersMap = sessionScores.get(data.pin);
+    const s = sessions.get(pin);
+    const playersMap = sessionScores.get(pin);
     if (!s) return;
 
     if (data.hostName && data.hostName.trim()) {
@@ -1173,12 +1265,26 @@ io.on('connection', (socket: Socket) => {
     const nextScene = s.scenes[s.currentSceneIdx + 1];
     const activeParticipants = Array.from(playersMap?.values() || []).filter((p) => !p.isDisabled);
 
+    const scList = s.scenes || [];
+    const curIdx = s.currentSceneIdx;
+    const totalQuestions = scList.filter((sc: any) => SCORABLE_TYPES.includes(sc?.type)).length;
+    const isScorable = s.currentScene ? SCORABLE_TYPES.includes(s.currentScene.type) : false;
+    const currentQuestionNum = scList
+      .slice(0, curIdx + 1)
+      .filter((sc: any) => SCORABLE_TYPES.includes(sc?.type)).length;
+
     socket.emit('host-state-update', {
       currentScene: s.currentScene,
       subState: s.subState,
       isBlackout: !!s.isBlackout,
+      isPaused: !!s.isPaused,
+      frozenRemainingMs: s.frozenRemainingMs ?? null,
+      pausedRemainingMs: s.pausedRemainingMs ?? null,
       currentSceneIdx: s.currentSceneIdx,
       totalScenes: s.scenes.length,
+      currentQuestionNum,
+      totalQuestions,
+      isScorable,
       nextSceneTitle: nextScene?.title || 'Spēles beigas',
       votedCount: s.votes?.length || 0,
       totalParticipantsCount: activeParticipants.length,
@@ -1193,25 +1299,29 @@ io.on('connection', (socket: Socket) => {
       }))
     });
 
-    io.to(data.pin).emit('host-remote-connected', { success: true });
+    io.to(pin).emit('host-remote-connected', { success: true });
   });
 
   socket.on('host:set-name', (data: { pin: string; hostToken: string; hostName: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s && data.hostName) {
       s.hostName = data.hostName.trim();
-      saveSnapshot(data.pin);
+      saveSnapshot(pin);
     }
   });
 
   socket.on('host:jump-to-scene', (data: { pin: string; hostToken: string; sceneIndex: number }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (!s || !s.scenes || data.sceneIndex < 0 || data.sceneIndex >= s.scenes.length) return;
 
-    clearSessionTimer(data.pin);
-    if (s.currentScene?.type === 'LEADERBOARD') resetRoundScores(data.pin);
+    clearSessionTimer(pin);
+    if (s.currentScene?.type === 'LEADERBOARD') resetRoundScores(pin);
 
     s.currentSceneIdx = data.sceneIndex;
     s.currentScene = s.scenes[s.currentSceneIdx];
@@ -1219,12 +1329,14 @@ io.on('connection', (socket: Socket) => {
     s.votes = [];
     s.buzzerRaceWinners = [];
     s.isPaused = false;
+    s.pausedRemainingMs = 0;
+    s.frozenRemainingMs = null;
     s.isRevealed = false;
     s.slideLoadedTime = Date.now();
     delete s.summaryStats;
 
-    emitStateUpdate(data.pin, s.currentScene, 'READY');
-    saveSnapshot(data.pin, true);
+    emitStateUpdate(pin, s.currentScene, 'READY');
+    saveSnapshot(pin, true);
   });
 
   socket.on('host:start-tunnel', (_data?: { pin?: string; hostToken?: string; adminKey?: string }) => {
@@ -1234,14 +1346,18 @@ io.on('connection', (socket: Socket) => {
   });
 
   socket.on('host:play-sfx', (data: { pin: string; hostToken: string; sfx: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    io.to(data.pin).emit('play-sfx', { sfx: data.sfx });
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    io.to(pin).emit('play-sfx', { sfx: data.sfx });
   });
 
   socket.on('host:award-buzzer-points', (data: { pin: string; hostToken: string; playerId: string; points: number }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const players = sessionScores.get(data.pin);
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const players = sessionScores.get(pin);
+    const s = sessions.get(pin);
     if (players && players.has(data.playerId)) {
       const questionsScored = s?.questionsScored || 0;
       if (questionsScored >= 1) {
@@ -1259,15 +1375,17 @@ io.on('connection', (socket: Socket) => {
 
       if (s) s.questionsScored = (s.questionsScored || 0) + 1;
 
-      io.to(data.pin).emit('play-sfx', { sfx: data.points > 0 ? 'correct' : 'wrong' });
-      broadcastLeaderboardAndPersonalStats(data.pin, false);
-      saveSnapshot(data.pin, true);
+      io.to(pin).emit('play-sfx', { sfx: data.points > 0 ? 'correct' : 'wrong' });
+      broadcastLeaderboardAndPersonalStats(pin, false);
+      saveSnapshot(pin, true);
     }
   });
 
   socket.on('host:buzzer-pass-next', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s && s.buzzerRaceWinners && s.buzzerRaceWinners.length > 0) {
       const currentWinner = s.buzzerRaceWinners.find((w: any) => w.status === 'ACTIVE');
       if (currentWinner) currentWinner.status = 'PASSED';
@@ -1275,29 +1393,33 @@ io.on('connection', (socket: Socket) => {
       const nextWinner = s.buzzerRaceWinners.find((w: any) => w.status === 'QUEUED');
       if (nextWinner) {
         nextWinner.status = 'ACTIVE';
-        io.to(data.pin).emit('buzzer-race-press', { winner: nextWinner, allWinners: s.buzzerRaceWinners });
-        io.to(data.pin).emit('play-sfx', { sfx: 'buzzer_hit' });
+        io.to(pin).emit('buzzer-race-press', { winner: nextWinner, allWinners: s.buzzerRaceWinners });
+        io.to(pin).emit('play-sfx', { sfx: 'buzzer_hit' });
       } else {
-        io.to(data.pin).emit('buzzer-race-press', { winner: null, allWinners: s.buzzerRaceWinners });
+        io.to(pin).emit('buzzer-race-press', { winner: null, allWinners: s.buzzerRaceWinners });
       }
-      saveSnapshot(data.pin, true);
+      saveSnapshot(pin, true);
     }
   });
 
   socket.on('host:buzzer-reopen', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s && s.currentScene?.type === 'BUZZER_RACE') {
       s.buzzerRaceWinners = [];
       s.subState = 'ACTIVE';
       s.questionStartTime = Date.now();
       const dur = s.currentScene?.config?.duration || 30;
       s.currentScene.endTime = Date.now() + dur * 1000;
+      s.frozenRemainingMs = null;
+      s.isPaused = false;
 
-      emitStateUpdate(data.pin, s.currentScene, 'ACTIVE');
-      io.to(data.pin).emit('buzzer-race-press', { winner: null, allWinners: [] });
-      io.to(data.pin).emit('play-sfx', { sfx: 'suspense' });
-      saveSnapshot(data.pin, true);
+      emitStateUpdate(pin, s.currentScene, 'ACTIVE');
+      io.to(pin).emit('buzzer-race-press', { winner: null, allWinners: [] });
+      io.to(pin).emit('play-sfx', { sfx: 'suspense' });
+      saveSnapshot(pin, true);
     }
   });
 
@@ -1332,6 +1454,7 @@ io.on('connection', (socket: Socket) => {
       questionStartTime: 0,
       isPaused: false,
       pausedRemainingMs: 0,
+      frozenRemainingMs: null,
       hostName: ''
     };
 
@@ -1349,81 +1472,102 @@ io.on('connection', (socket: Socket) => {
     saveSnapshot(pin, true);
   });
 
+  // 🌟 PAUZE: Nofiksējam atlikušo laiku un nosūtam visiem
   socket.on('host:pause-session', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s && s.subState === 'ACTIVE') {
-      clearSessionTimer(data.pin);
+      clearSessionTimer(pin);
       s.isPaused = true;
       s.pausedRemainingMs = Math.max(0, (s.currentScene?.endTime || 0) - Date.now());
       s.subState = 'PAUSED';
 
-      emitStateUpdate(data.pin, s.currentScene, 'PAUSED', { pausedRemainingMs: s.pausedRemainingMs });
-      io.to(data.pin).emit('video-command', 'pause');
-      saveSnapshot(data.pin, true);
+      emitStateUpdate(pin, s.currentScene, 'PAUSED', {
+        pausedRemainingMs: s.pausedRemainingMs,
+        isPaused: true
+      });
+      io.to(pin).emit('session-paused');
+      io.to(pin).emit('video-command', 'pause');
+      saveSnapshot(pin, true);
     }
   });
 
+  // 🌟 ATSĀKT: Turpinām no precīzām nopauzētajām milisekundēm
   socket.on('host:resume-session', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s && s.subState === 'PAUSED') {
       s.isPaused = false;
       s.subState = 'ACTIVE';
       const remainingMs = s.pausedRemainingMs || 10000;
       s.currentScene.endTime = Date.now() + remainingMs;
 
-      emitStateUpdate(data.pin, s.currentScene, 'ACTIVE', { endTime: s.currentScene.endTime });
-      io.to(data.pin).emit('video-command', 'play');
+      emitStateUpdate(pin, s.currentScene, 'ACTIVE', {
+        endTime: s.currentScene.endTime,
+        isPaused: false
+      });
+      io.to(pin).emit('session-resumed');
+      io.to(pin).emit('video-command', 'play');
 
-      clearSessionTimer(data.pin);
+      clearSessionTimer(pin);
       const timer = setTimeout(() => {
-        const currentSession = sessions.get(data.pin);
+        const currentSession = sessions.get(pin);
         if (currentSession?.subState === 'ACTIVE') {
           currentSession.subState = 'STATS';
+          currentSession.frozenRemainingMs = 0;
           if (currentSession.currentScene) currentSession.currentScene.endTime = Date.now();
-          emitStateUpdate(data.pin, currentSession.currentScene, 'STATS');
-          io.to(data.pin).emit('video-command', 'pause');
-          saveSnapshot(data.pin, true);
+          emitStateUpdate(pin, currentSession.currentScene, 'STATS', { frozenRemainingMs: 0 });
+          io.to(pin).emit('video-command', 'pause');
+          saveSnapshot(pin, true);
         }
       }, remainingMs);
-      sessionTimers.set(data.pin, timer);
-      saveSnapshot(data.pin, true);
+      sessionTimers.set(pin, timer);
+      saveSnapshot(pin, true);
     }
   });
 
   socket.on('host:restart-scene', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s && s.currentScene) {
-      clearSessionTimer(data.pin);
+      clearSessionTimer(pin);
       s.votes = [];
       s.buzzerRaceWinners = [];
       s.isPaused = false;
+      s.pausedRemainingMs = 0;
+      s.frozenRemainingMs = null;
       s.isRevealed = false;
       s.revealReadyToAdvance = false;
       s.subState = 'READY';
       s.slideLoadedTime = Date.now();
 
-      emitStateUpdate(data.pin, s.currentScene, 'READY');
-      triggerVotesUpdatedThrottled(data.pin);
-      logEvent('INFO', `Restartēts jautājums sesijā: PIN ${data.pin}`);
-      saveSnapshot(data.pin, true);
+      emitStateUpdate(pin, s.currentScene, 'READY');
+      triggerVotesUpdatedThrottled(pin);
+      logEvent('INFO', `Restartēts jautājums sesijā: PIN ${pin}`);
+      saveSnapshot(pin, true);
     }
   });
 
   socket.on('host:end-session', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
 
-    clearSessionTimer(data.pin);
-    io.to(data.pin).emit('session-ended');
-    clearSnapshot(data.pin);
-    sessions.delete(data.pin);
-    sessionScores.delete(data.pin);
-    participants.delete(data.pin);
-    sessionHostTokens.delete(data.pin);
-    sessionTeamPreviousRanks.delete(data.pin);
-    logEvent('INFO', `Sesija pabeigta un slēgta: PIN ${data.pin}`);
+    clearSessionTimer(pin);
+    io.to(pin).emit('session-ended');
+    clearSnapshot(pin);
+    sessions.delete(pin);
+    sessionScores.delete(pin);
+    participants.delete(pin);
+    sessionHostTokens.delete(pin);
+    sessionTeamPreviousRanks.delete(pin);
+    logEvent('INFO', `Sesija pabeigta un slēgta: PIN ${pin}`);
   });
 
   socket.on('get-branding', (data: { pin: string }) => {
@@ -1439,8 +1583,10 @@ io.on('connection', (socket: Socket) => {
   });
 
   socket.on('host:toggle-team-view', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (!s) return;
 
     if (!s.finalLeaderboardView) {
@@ -1449,18 +1595,22 @@ io.on('connection', (socket: Socket) => {
     s.finalLeaderboardView = s.finalLeaderboardView === 'TEAMS' ? 'INDIVIDUAL' : 'TEAMS';
     s.currentPaging = 0;
 
-    io.to(data.pin).emit('toggle-team-leaderboard', { view: s.finalLeaderboardView, page: 0 });
-    saveSnapshot(data.pin, true);
+    io.to(pin).emit('toggle-team-leaderboard', { view: s.finalLeaderboardView, page: 0 });
+    saveSnapshot(pin, true);
   });
 
   socket.on('host:toggle-qr-zoom', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    io.to(data.pin).emit('toggle-large-qr');
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    io.to(pin).emit('toggle-large-qr');
   });
 
   socket.on('host:update-player', (data: any) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const players = sessionScores.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const players = sessionScores.get(pin);
     if (players && players.has(data.playerId)) {
       const p = players.get(data.playerId)!;
       if (data.name !== undefined) p.name = data.name;
@@ -1469,19 +1619,21 @@ io.on('connection', (socket: Socket) => {
       if (data.totalTimeMs !== undefined) p.totalTimeMs = Number(data.totalTimeMs);
       if (data.isDisabled !== undefined) p.isDisabled = data.isDisabled;
 
-      io.to(`${data.pin}_screens`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
-      io.to(`${data.pin}_host`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
-      io.to(`${data.pin}_players`).emit('presence-update', { count: players.size });
+      io.to(`${pin}_screens`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+      io.to(`${pin}_host`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+      io.to(`${pin}_players`).emit('presence-update', { count: players.size });
 
-      broadcastLeaderboardAndPersonalStats(data.pin, false);
-      saveSnapshot(data.pin);
+      broadcastLeaderboardAndPersonalStats(pin, false);
+      saveSnapshot(pin);
     }
   });
 
   socket.on('host:simulate-players', (data: { pin: string; hostToken: string; count: number }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const players = sessionScores.get(data.pin);
-    const session = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const players = sessionScores.get(pin);
+    const session = sessions.get(pin);
     if (!players) return;
 
     const isTeamMode = !!session?.branding?.teamModeEnabled;
@@ -1514,60 +1666,72 @@ io.on('connection', (socket: Socket) => {
       }
     }
 
-    io.to(`${data.pin}_screens`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
-    io.to(`${data.pin}_host`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
-    io.to(`${data.pin}_players`).emit('presence-update', { count: players.size });
+    io.to(`${pin}_screens`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+    io.to(`${pin}_host`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+    io.to(`${pin}_players`).emit('presence-update', { count: players.size });
 
-    broadcastLeaderboardAndPersonalStats(data.pin, false);
-    logEvent('INFO', `Simulēti ${targetCount} boti sesijai: PIN ${data.pin}`);
-    saveSnapshot(data.pin, true);
+    broadcastLeaderboardAndPersonalStats(pin, false);
+    logEvent('INFO', `Simulēti ${targetCount} boti sesijai: PIN ${pin}`);
+    saveSnapshot(pin, true);
+
+    if (session?.subState === 'ACTIVE') {
+      triggerBotVotes(pin);
+    }
   });
 
   socket.on('host:clear-bots', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const players = sessionScores.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const players = sessionScores.get(pin);
     if (!players) return;
 
     players.forEach((p, id) => {
       if (p.isBot) players.delete(id);
     });
 
-    io.to(`${data.pin}_screens`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
-    io.to(`${data.pin}_host`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
-    io.to(`${data.pin}_players`).emit('presence-update', { count: players.size });
+    io.to(`${pin}_screens`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+    io.to(`${pin}_host`).emit('presence-update', { count: players.size, players: Array.from(players.values()) });
+    io.to(`${pin}_players`).emit('presence-update', { count: players.size });
 
-    broadcastLeaderboardAndPersonalStats(data.pin, false);
-    logEvent('INFO', `Dzēsti visi boti sesijai: PIN ${data.pin}`);
-    saveSnapshot(data.pin, true);
+    broadcastLeaderboardAndPersonalStats(pin, false);
+    logEvent('INFO', `Dzēsti visi boti sesijai: PIN ${pin}`);
+    saveSnapshot(pin, true);
   });
 
   socket.on('host:toggle-chart', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    io.to(data.pin).emit('toggle-audience-chart');
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    io.to(pin).emit('toggle-audience-chart');
   });
 
   socket.on('host:change-leaderboard-page', (data: { pin: string; hostToken: string; page: number }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s && s.currentScene?.type === 'LEADERBOARD') {
       s.currentPaging = data.page;
-      io.to(data.pin).emit('leaderboard-page-change', data.page);
+      io.to(pin).emit('leaderboard-page-change', data.page);
     }
   });
 
   socket.on('host:backtrack', (data: { pin: string; hostToken: string }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
-    const playersMap = sessionScores.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
+    const playersMap = sessionScores.get(pin);
     if (!s) return;
 
-    clearSessionTimer(data.pin);
+    clearSessionTimer(pin);
 
     if (s.currentScene?.type === 'LEADERBOARD' && s.currentScene?.config?.lbType === 'FINAL') {
       if (s.finalPodiumStage > 0) {
         s.finalPodiumStage--;
-        io.to(data.pin).emit('podium-stage-change', s.finalPodiumStage);
-        saveSnapshot(data.pin, true);
+        io.to(pin).emit('podium-stage-change', s.finalPodiumStage);
+        saveSnapshot(pin, true);
         return;
       }
     }
@@ -1596,25 +1760,27 @@ io.on('connection', (socket: Socket) => {
         s.questionsScored--;
       }
 
-      emitStateUpdate(data.pin, s.currentScene, 'SUMMARY', { summaryStats: s.summaryStats });
-      broadcastLeaderboardAndPersonalStats(data.pin, false);
-      logEvent('INFO', `Backtrack uz SUMMARY sesijā: PIN ${data.pin}`);
-      saveSnapshot(data.pin, true);
+      emitStateUpdate(pin, s.currentScene, 'SUMMARY', { summaryStats: s.summaryStats });
+      broadcastLeaderboardAndPersonalStats(pin, false);
+      logEvent('INFO', `Backtrack uz SUMMARY sesijā: PIN ${pin}`);
+      saveSnapshot(pin, true);
       return;
     }
 
     if (s.subState === 'SUMMARY') {
       s.subState = 'STATS';
-      emitStateUpdate(data.pin, s.currentScene, 'STATS');
-      saveSnapshot(data.pin, true);
+      emitStateUpdate(pin, s.currentScene, 'STATS');
+      saveSnapshot(pin, true);
       return;
     }
 
     if (s.subState === 'STATS' || s.subState === 'ACTIVE' || s.subState === 'PAUSED') {
       s.subState = 'READY';
       s.isPaused = false;
-      emitStateUpdate(data.pin, s.currentScene, 'READY');
-      saveSnapshot(data.pin, true);
+      s.pausedRemainingMs = 0;
+      s.frozenRemainingMs = null;
+      emitStateUpdate(pin, s.currentScene, 'READY');
+      saveSnapshot(pin, true);
       return;
     }
 
@@ -1625,6 +1791,8 @@ io.on('connection', (socket: Socket) => {
         s.votes = [];
         s.buzzerRaceWinners = [];
         s.isPaused = false;
+        s.pausedRemainingMs = 0;
+        s.frozenRemainingMs = null;
         s.isRevealed = false;
         s.revealReadyToAdvance = false;
         s.currentPaging = 0;
@@ -1632,9 +1800,9 @@ io.on('connection', (socket: Socket) => {
         s.subState = 'READY';
         s.slideLoadedTime = Date.now();
 
-        emitStateUpdate(data.pin, s.currentScene, 'READY');
-        logEvent('INFO', `Backtrack uz slaidu #${s.currentSceneIdx + 1} sesijā: PIN ${data.pin}`);
-        saveSnapshot(data.pin, true);
+        emitStateUpdate(pin, s.currentScene, 'READY');
+        logEvent('INFO', `Backtrack uz slaidu #${s.currentSceneIdx + 1} sesijā: PIN ${pin}`);
+        saveSnapshot(pin, true);
       }
     }
   });
@@ -1702,7 +1870,7 @@ io.on('connection', (socket: Socket) => {
         }
       } else if (s.finalPodiumStage === 4) {
         const remainingCount = Math.max(0, totalItems - 3);
-        const maxPages = Math.ceil(remainingCount / 10);
+        const maxPages = Math.ceil(remainingCount / 12);
 
         if (s.currentPaging < maxPages - 1) {
           s.currentPaging++;
@@ -1747,6 +1915,8 @@ io.on('connection', (socket: Socket) => {
       s.votes = [];
       s.buzzerRaceWinners = [];
       s.isPaused = false;
+      s.pausedRemainingMs = 0;
+      s.frozenRemainingMs = null;
       s.isRevealed = false;
       s.revealReadyToAdvance = false;
       s.currentPaging = 0;
@@ -1769,13 +1939,16 @@ io.on('connection', (socket: Socket) => {
           const currentSession = sessions.get(pin);
           if (currentSession?.subState === 'ACTIVE') {
             currentSession.subState = 'STATS';
+            currentSession.frozenRemainingMs = 0;
             if (currentSession.currentScene) currentSession.currentScene.endTime = Date.now();
-            emitStateUpdate(pin, currentSession.currentScene, 'STATS');
+            emitStateUpdate(pin, currentSession.currentScene, 'STATS', { frozenRemainingMs: 0 });
             io.to(pin).emit('video-command', 'pause');
             saveSnapshot(pin, true);
           }
         }, dur * 1000);
         sessionTimers.set(pin, timer);
+
+        triggerBotVotes(pin);
       } else {
         s.subState = 'READY';
         emitStateUpdate(pin, s.currentScene, 'READY');
@@ -1791,6 +1964,8 @@ io.on('connection', (socket: Socket) => {
     else if (s.subState === 'READY') {
       s.subState = 'ACTIVE';
       s.isPaused = false;
+      s.pausedRemainingMs = 0;
+      s.frozenRemainingMs = null;
       s.questionStartTime = Date.now();
       const dur = s.currentScene?.config?.duration || s.currentScene?.config?.timeLimit || 30;
       s.currentScene.endTime = Date.now() + dur * 1000;
@@ -1802,25 +1977,32 @@ io.on('connection', (socket: Socket) => {
         const currentSession = sessions.get(pin);
         if (currentSession?.subState === 'ACTIVE') {
           currentSession.subState = 'STATS';
+          currentSession.frozenRemainingMs = 0;
           if (currentSession.currentScene) currentSession.currentScene.endTime = Date.now();
-          emitStateUpdate(pin, currentSession.currentScene, 'STATS');
+          emitStateUpdate(pin, currentSession.currentScene, 'STATS', { frozenRemainingMs: 0 });
           io.to(pin).emit('video-command', 'pause');
           saveSnapshot(pin, true);
         }
       }, dur * 1000);
       sessionTimers.set(pin, timer);
+
+      triggerBotVotes(pin);
       saveSnapshot(pin, true);
     }
-    // 3. ACTIVE / PAUSED -> STATS
+    // 3. ACTIVE / PAUSED -> STATS (Ar atlikušā laika iesaldēšanu!)
     else if (s.subState === 'ACTIVE' || s.subState === 'PAUSED') {
+      const remainingTimeMs = s.isPaused
+        ? (s.pausedRemainingMs || 0)
+        : Math.max(0, (s.currentScene?.endTime || 0) - Date.now());
+
       s.subState = 'STATS';
       s.isPaused = false;
-      s.currentScene.endTime = Date.now();
-      emitStateUpdate(pin, s.currentScene, 'STATS');
+      s.frozenRemainingMs = remainingTimeMs;
+      emitStateUpdate(pin, s.currentScene, 'STATS', { frozenRemainingMs: remainingTimeMs });
       io.to(pin).emit('video-command', 'pause');
       saveSnapshot(pin, true);
     }
-    // 4. STATS -> SUMMARY
+    // 4. STATS -> SUMMARY (Saglabājot iesaldēto laiku)
     else if (s.subState === 'STATS') {
       s.subState = 'SUMMARY';
       s.isPaused = false;
@@ -1908,10 +2090,13 @@ io.on('connection', (socket: Socket) => {
         correctPct: fullCorrectPct
       };
 
-      emitStateUpdate(pin, s.currentScene, 'SUMMARY', { summaryStats: s.summaryStats });
+      emitStateUpdate(pin, s.currentScene, 'SUMMARY', {
+        summaryStats: s.summaryStats,
+        frozenRemainingMs: s.frozenRemainingMs
+      });
       saveSnapshot(pin, true);
     }
-    // 5. SUMMARY -> REVEAL
+    // 5. SUMMARY -> REVEAL (Saglabājot iesaldēto laiku)
     else if (s.subState === 'SUMMARY') {
       s.subState = 'REVEAL';
       s.isRevealed = true;
@@ -1997,7 +2182,6 @@ io.on('connection', (socket: Socket) => {
         const p = playersMap?.get(v.playerId);
         if (!p || p.isDisabled) return;
 
-        // 🎵 MUZIKĀLĀS SPĒLES VĒRTĒŠANA
         if (isMusicMode) {
           const isTopCorrect = v.topAnswer && correct.some((c: string) => isAnswerMatch(v.topAnswer, c, opts.slice(0, 3)));
           const isBottomCorrect = v.bottomAnswer && correct.some((c: string) => isAnswerMatch(v.bottomAnswer, c, opts.slice(3, 6)));
@@ -2026,7 +2210,6 @@ io.on('connection', (socket: Socket) => {
           return;
         }
 
-        // 🅰️ STANDARTA JAUTĀJUMU VĒRTĒŠANA
         let earnedPercentage = 0;
         if (s.currentScene?.type === 'ORDERING') {
           const userOrder = v.optionIds || [];
@@ -2081,7 +2264,11 @@ io.on('connection', (socket: Socket) => {
 
       s.questionsScored = (s.questionsScored || 0) + 1;
 
-      emitStateUpdate(pin, s.currentScene, 'REVEAL', { isRevealed: true, summaryStats: s.summaryStats });
+      emitStateUpdate(pin, s.currentScene, 'REVEAL', {
+        isRevealed: true,
+        summaryStats: s.summaryStats,
+        frozenRemainingMs: s.frozenRemainingMs
+      });
       io.to(pin).emit('results-revealed', { correctAnswers: correct, correctnessMap });
 
       const nextScene = s.scenes[s.currentSceneIdx + 1];
@@ -2092,17 +2279,21 @@ io.on('connection', (socket: Socket) => {
   });
 
   socket.on('host:next-scene', (data: { pin: string; hostToken: string; scene: any }) => {
-    if (!isHostAuthorized(data.pin, data.hostToken)) return;
-    const s = sessions.get(data.pin);
+    const pin = data?.pin;
+    const hostToken = data?.hostToken;
+    if (!isHostAuthorized(pin, hostToken)) return;
+    const s = sessions.get(pin);
     if (s) {
-      clearSessionTimer(data.pin);
-      if (s.currentScene?.type === 'LEADERBOARD') resetRoundScores(data.pin);
+      clearSessionTimer(pin);
+      if (s.currentScene?.type === 'LEADERBOARD') resetRoundScores(pin);
 
       s.currentScene = { ...data.scene, endTime: null };
       s.subState = 'IDLE';
       s.votes = [];
       s.buzzerRaceWinners = [];
       s.isPaused = false;
+      s.pausedRemainingMs = 0;
+      s.frozenRemainingMs = null;
       s.isRevealed = false;
       s.revealReadyToAdvance = false;
       s.currentPaging = 0;
@@ -2111,8 +2302,8 @@ io.on('connection', (socket: Socket) => {
       s.finalLeaderboardView = s.branding?.teamModeEnabled ? 'TEAMS' : 'INDIVIDUAL';
       delete s.summaryStats;
 
-      emitStateUpdate(data.pin, s.currentScene, 'IDLE');
-      saveSnapshot(data.pin, true);
+      emitStateUpdate(pin, s.currentScene, 'IDLE');
+      saveSnapshot(pin, true);
     }
   });
 
@@ -2140,12 +2331,15 @@ io.on('connection', (socket: Socket) => {
         myOptionIds: existingVote?.optionIds || [],
         topAnswer: existingVote?.topAnswer || null,
         bottomAnswer: existingVote?.bottomAnswer || null,
-        myContacts: player.contacts || {}, // 🌟 KONTAKTU ATJAUNOŠANA
+        myContacts: player.contacts || {},
         isInitialBaseline
       });
     }
   });
 
+  // =========================================================================
+  // 🌟 VIEDĀ DALĪBNIEKU PIEVIENOŠANĀS UN ATJAUNOŠANA (SMART RE-ATTACHMENT)
+  // =========================================================================
   socket.on('join-session', (data: { pin: string; name: string; playerId: string; playerToken?: string; teamName?: string; isCaptain?: boolean }) => {
     if (sessions.has(data.pin)) {
       const session = sessions.get(data.pin);
@@ -2153,18 +2347,45 @@ io.on('connection', (socket: Socket) => {
       const isTeamMode = !!session?.branding?.teamModeEnabled;
 
       let playerObj = players.get(data.playerId);
+      const cleanName = data.name.trim();
+      const cleanNameLower = cleanName.toLowerCase();
       const sanitizedTeam = isTeamMode && data.teamName ? data.teamName.trim() : '';
 
+      // 🌟 JA PĒC ID NEATROD (piem., jauns tunelis, pāreja uz LAN Wi-Fi vai telefons notīrījis sīkfailus):
+      // Meklējam esošo dalībnieku pēc VĀRDA!
+      if (!playerObj && cleanName && data.name !== 'EKRĀNS') {
+        for (const [existingId, p] of players.entries()) {
+          if (p.name.trim().toLowerCase() === cleanNameLower && !p.isBot) {
+            logEvent('INFO', `♻️ Atpazīts atgriezies spēlētājs "${p.name}" (#${p.deviceNumber}) no jaunas adreses. Atjaunojam datus!`);
+            
+            // Pārnesam datus uz jauno tālruņa ID
+            players.delete(existingId);
+            p.id = data.playerId;
+            if (data.playerToken) p.token = data.playerToken;
+            playerObj = p;
+            players.set(data.playerId, playerObj);
+
+            // Atjaunojam balsojumu piesaisti
+            session.votes?.forEach((v: any) => {
+              if (v.playerId === existingId) v.playerId = data.playerId;
+            });
+            break;
+          }
+        }
+      }
+
+      // Komandu pārbaude kapteiņiem un biedriem
       if (isTeamMode && sanitizedTeam) {
         const teamLower = sanitizedTeam.toLowerCase();
         let teamCaptainExists: PlayerState | null = null;
 
         players.forEach((p) => {
-          if (p.teamName?.toLowerCase() === teamLower && p.isCaptain && p.id !== data.playerId) {
+          if (p.teamName?.toLowerCase() === teamLower && p.isCaptain && p.id !== data.playerId && p.id !== playerObj?.id) {
             teamCaptainExists = p;
           }
         });
 
+        // Bloķē tikai tad, ja tas ir PAVISAM CITS kapteinis, nevis tas pats atgriezušais
         if (data.isCaptain && teamCaptainExists) {
           return socket.emit(
             'error-message',
@@ -2172,7 +2393,7 @@ io.on('connection', (socket: Socket) => {
           );
         }
 
-        if (!data.isCaptain && !teamCaptainExists) {
+        if (!data.isCaptain && !teamCaptainExists && !playerObj) {
           const teamMemberExists = Array.from(players.values()).some(
             (p) => p.teamName?.toLowerCase() === teamLower && p.id !== data.playerId
           );
@@ -2203,11 +2424,12 @@ io.on('connection', (socket: Socket) => {
           : (data.playerToken || crypto.randomBytes(16).toString('hex'));
 
         if (!playerObj) {
+          // Jauns dalībnieks pirmo reizi
           playerObj = {
             id: data.playerId,
             token: sessionToken,
             socketId: socket.id,
-            name: data.name.trim(),
+            name: cleanName,
             teamName: sanitizedTeam,
             isCaptain: isTeamMode ? !!data.isCaptain : false,
             deviceNumber: players.size + 1,
@@ -2226,11 +2448,12 @@ io.on('connection', (socket: Socket) => {
           };
           players.set(data.playerId, playerObj);
         } else {
+          // Atgriezies dalībnieks (saglabā punktus, vietu un pults numuru!)
           playerObj.socketId = socket.id;
           playerObj.isBot = false;
           if (!playerObj.token) playerObj.token = sessionToken;
-          if (data.name) playerObj.name = data.name.trim();
-          playerObj.teamName = sanitizedTeam;
+          if (cleanName) playerObj.name = cleanName;
+          if (sanitizedTeam) playerObj.teamName = sanitizedTeam;
           if (isTeamMode && data.isCaptain !== undefined) playerObj.isCaptain = !!data.isCaptain;
         }
       }
@@ -2253,6 +2476,14 @@ io.on('connection', (socket: Socket) => {
       const myRankIdx = sortedLb.findIndex((p) => p.id === data.playerId);
       const myTeamRankIdx = sanitizedTeam ? sortedTeams.findIndex((t) => t.name.toLowerCase() === sanitizedTeam.toLowerCase()) : -1;
 
+      const scList = session?.scenes || [];
+      const curIdx = session?.currentSceneIdx ?? 0;
+      const totalQuestions = scList.filter((sc: any) => SCORABLE_TYPES.includes(sc?.type)).length;
+      const isScorable = session?.currentScene ? SCORABLE_TYPES.includes(session.currentScene.type) : false;
+      const currentQuestionNum = scList
+        .slice(0, curIdx + 1)
+        .filter((sc: any) => SCORABLE_TYPES.includes(sc?.type)).length;
+
       socket.emit('join-success', {
         pin: data.pin,
         playerId: data.playerId,
@@ -2263,16 +2494,22 @@ io.on('connection', (socket: Socket) => {
         currentScene: sanitizedScene,
         subState: session?.subState,
         isBlackout: !!session?.isBlackout,
-        currentSceneIdx: session?.currentSceneIdx ?? 0,
-        totalScenes: session?.scenes?.length ?? 0,
+        isPaused: !!session?.isPaused,
+        frozenRemainingMs: session?.frozenRemainingMs ?? null,
+        pausedRemainingMs: session?.pausedRemainingMs ?? null,
+        currentSceneIdx: curIdx,
+        totalScenes: scList.length,
+        currentQuestionNum,
+        totalQuestions,
+        isScorable,
         teamName: playerObj?.teamName || '',
         isCaptain: !!playerObj?.isCaptain,
         score: playerObj?.score || 0,
         roundScore: playerObj?.roundScore || 0,
         lastQuestionScore: playerObj?.lastQuestionScore || 0,
         myRank: myRankIdx !== -1 ? myRankIdx + 1 : 1,
-        previousRank: null,
-        rankDelta: 0,
+        previousRank: playerObj?.previousRank ?? null,
+        rankDelta: playerObj?.rankDelta ?? 0,
         totalPlayers: sortedLb.length,
         teamRank: myTeamRankIdx !== -1 ? myTeamRankIdx + 1 : null,
         totalTeams: sortedTeams.length,
@@ -2311,7 +2548,6 @@ io.on('connection', (socket: Socket) => {
     handleVote(data.pin, answerList, data.playerId, data.category);
   });
 
-  // 🌟 JAUNS NOTIKUMS: KONTAKTINFORMĀCIJAS IESNIEGŠANA
   socket.on('participant:submit-contacts', (data: {
     pin: string;
     playerId: string;
@@ -2325,10 +2561,8 @@ io.on('connection', (socket: Socket) => {
     const player = players.get(data.playerId)!;
     if (player.token && data.playerToken && player.token !== data.playerToken) return;
 
-    // Saglabājam datus spēlētāja objektā
     player.contacts = { ...(player.contacts || {}), ...(data.contacts || {}) };
 
-    // Fiksējam balsojumu kā pabeigtu skaitītājam
     const existingIndex = session.votes.findIndex((v: any) => v.playerId === data.playerId);
     if (existingIndex !== -1) {
       session.votes[existingIndex].isComplete = true;

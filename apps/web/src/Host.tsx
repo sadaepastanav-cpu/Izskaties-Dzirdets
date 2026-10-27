@@ -8,6 +8,8 @@ export default function Host() {
   const [hostToken, setHostToken] = useState<string | null>(localStorage.getItem('active_host_token'));
   const [scenes, setScenes] = useState<any[]>([]);
   const [currentScene, setCurrentScene] = useState<any>(null);
+  const [subState, setSubState] = useState<string>('IDLE');
+  const [frozenRemainingMs, setFrozenRemainingMs] = useState<number | null>(null);
   const [branding, setBranding] = useState<any>({});
   const [folder, setFolder] = useState<string>(
     localStorage.getItem('event_studio_folder') || ''
@@ -86,6 +88,22 @@ export default function Host() {
       ? (customTunnelUrl.trim().startsWith('http') ? customTunnelUrl.trim() : `https://${customTunnelUrl.trim()}`).replace(/\/$/, '')
       : `http://${localIp}:5173`;
 
+  // 🌟 PĀRSLĒGT TĪKLA REŽĪMU SPĒLES LAIKĀ (FAILOVER)
+  const handleToggleConnectionModeLive = () => {
+    const newMode = connectionMode === 'TUNNEL' ? 'LAN' : 'TUNNEL';
+    setConnectionMode(newMode);
+    localStorage.setItem('event_conn_mode', newMode);
+
+    const newBaseUrl =
+      newMode === 'TUNNEL' && customTunnelUrl.trim() !== ''
+        ? (customTunnelUrl.trim().startsWith('http') ? customTunnelUrl.trim() : `https://${customTunnelUrl.trim()}`).replace(/\/$/, '')
+        : `http://${localIp}:5173`;
+
+    if (pin) {
+      socket.emit('host:change-connection-url', { pin, hostToken, connectionUrl: newBaseUrl });
+    }
+  };
+
   const handleStartTunnel = () => {
     setIsStartingTunnel(true);
     socket.emit('host:start-tunnel', { adminKey: getAdminKey() });
@@ -159,6 +177,8 @@ export default function Host() {
                   setHostToken(rec.hostToken);
                   setCurrentScene(rec.state?.currentScene);
                   setScenes(rec.state?.scenes || []);
+                  if (rec.state?.subState) setSubState(String(rec.state.subState).toUpperCase());
+                  if (rec.state?.frozenRemainingMs !== undefined) setFrozenRemainingMs(rec.state.frozenRemainingMs);
                   if (rec.state?.isBlackout !== undefined) setIsBlackout(rec.state.isBlackout);
                   if (rec.state?.branding) setBranding(rec.state.branding);
                   localStorage.setItem('active_pin', rec.pin);
@@ -202,6 +222,8 @@ export default function Host() {
     setPin(null);
     setHostToken(null);
     setCurrentScene(null);
+    setSubState('IDLE');
+    setFrozenRemainingMs(null);
     setScenes([]);
     setLeaderboardPage(0);
     setPodiumStage(0);
@@ -215,12 +237,16 @@ export default function Host() {
     localStorage.removeItem('active_host_token');
   };
 
+  // 🌟 UZTICAMĀ PAUZES / ATSĀKŠANAS KONTROLE
   const handlePauseResume = () => {
     if (!pin || !hostToken) return;
-    if (currentScene?.subState === 'ACTIVE') {
+    const current = (subState || currentScene?.subState || '').toUpperCase();
+    if (current === 'ACTIVE') {
       socket.emit('host:pause-session', { pin, hostToken });
-    } else if (currentScene?.subState === 'PAUSED') {
+      setSubState('PAUSED');
+    } else if (current === 'PAUSED') {
       socket.emit('host:resume-session', { pin, hostToken });
+      setSubState('ACTIVE');
     }
   };
 
@@ -280,7 +306,7 @@ export default function Host() {
     }
   };
 
-  // 🌟 5. PUNKTS: DIPLOMU DRUKA AR AUTOMĀTISKU SPĒLES LOGO
+  // 🌟 DIPLOMU DRUKA AR LOGO UN LIELĀKO KĀPĒJU
   const handlePrintDiplomas = () => {
     const isTeam = !!branding?.teamModeEnabled;
     const sorted = isTeam
@@ -290,6 +316,9 @@ export default function Host() {
     const top3 = sorted.slice(0, 3);
     if (top3.length === 0) return alert('Nav dalībnieku diplomu ģenerēšanai!');
 
+    const maxDelta = Math.max(0, ...sorted.map((x) => (x.previousRank ? (x.rankDelta || 0) : 0)));
+    const biggestClimber = maxDelta > 1 ? sorted.find((x) => x.rankDelta === maxDelta && x.previousRank) : null;
+
     const dCfg = branding?.diplomaConfig || {};
     const isInkSaver = dCfg.theme === 'GOLD_WHITE_PRINT' || !!dCfg.inkSaverMode;
 
@@ -298,7 +327,6 @@ export default function Host() {
     const borderCss = dCfg.borderColor || '#ffc107';
     const winnerCss = dCfg.winnerColor || (isInkSaver ? '#007bff' : '#ffd700');
 
-    // Ja ir iestatīts logo, ģenerējam HTML attēlu
     const logoUrl = branding?.appLogo
       ? `${BACKEND_URL}/project-media/${encodeURIComponent(branding.appLogo).replace(/%2F/g, '/')}`
       : null;
@@ -307,23 +335,30 @@ export default function Host() {
       ? `<div class="logo-container"><img src="${logoUrl}" alt="Logo" class="diploma-logo" /></div>`
       : '';
 
+    const getPlaceTitle = (idx: number) => {
+      if (idx === 0) return '🏆 PAR IEGŪTO 1. VIETU (Absolūtais čempions)';
+      if (idx === 1) return '🥈 PAR IEGŪTO 2. VIETU (Vicečempions)';
+      return '🥉 PAR IEGŪTO 3. VIETU (Bronzas goda vieta)';
+    };
+
     const printWin = window.open('', '_blank');
     if (!printWin) return;
 
     printWin.document.write(`
       <html>
         <head>
-          <title>Top 3 Diplomi - PIN ${escapeHtml(pin || '')}</title>
+          <title>Diplomi - PIN ${escapeHtml(pin || '')}</title>
           <style>
             body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: ${bgCss}; color: ${textCss}; text-align: center; }
             .diploma { page-break-after: always; height: 95vh; display: flex; flex-direction: column; justify-content: center; align-items: center; border: 15px solid ${borderCss}; margin: 20px; box-sizing: border-box; background: ${bgCss}; padding: 30px; position: relative; }
-            .logo-container { margin-bottom: 15px; }
-            .diploma-logo { max-height: 110px; max-width: 320px; object-fit: contain; }
+            .logo-container { margin-bottom: 12px; }
+            .diploma-logo { max-height: 105px; max-width: 320px; object-fit: contain; }
             h1 { font-size: 3.2rem; color: ${textCss}; margin: 0; text-transform: uppercase; letter-spacing: 2px; }
-            h2 { font-size: 2rem; color: ${borderCss}; margin: 12px 0; }
-            .winner { font-size: 3.6rem; font-weight: 900; color: ${winnerCss}; margin: 20px 0; }
-            .score { font-size: 2rem; color: ${textCss}; }
-            .footer { margin-top: 40px; font-size: 1.1rem; color: ${isInkSaver ? '#666' : '#aaa'}; }
+            h2 { font-size: 2.1rem; color: ${borderCss}; margin: 10px 0 16px 0; font-weight: 900; }
+            .custom-sub { font-size: 1.2rem; color: ${isInkSaver ? '#555' : '#aaa'}; margin: 0 0 10px 0; font-style: italic; }
+            .winner { font-size: 3.6rem; font-weight: 900; color: ${winnerCss}; margin: 18px 0; }
+            .score { font-size: 2.1rem; color: ${textCss}; margin: 8px 0; }
+            .footer { margin-top: 35px; font-size: 1.1rem; color: ${isInkSaver ? '#666' : '#aaa'}; }
           </style>
         </head>
         <body>
@@ -331,13 +366,34 @@ export default function Host() {
             <div class="diploma">
               ${logoHtml}
               <h1>${escapeHtml(dCfg.customTitle || '🏆 DIPLOMS 🏆')}</h1>
-              <h2>${escapeHtml(dCfg.customSubtitle || (idx === 0 ? 'Par iegūto 1. vietu (Absolūtais čempions)' : idx === 1 ? 'Par iegūto 2. vietu (Vicečempions)' : 'Par iegūto 3. vietu (Bronzas goda vieta)'))}</h2>
+              <h2>${getPlaceTitle(idx)}</h2>
+              ${dCfg.customSubtitle ? `<div class="custom-sub">${escapeHtml(dCfg.customSubtitle)}</div>` : ''}
               <div class="winner">${escapeHtml(p.name)} ${isTeam ? `(${p.memberCount || ''} dalībnieki)` : (p.teamName ? `[${escapeHtml(p.teamName)}]` : '')}</div>
               <div class="score">Iegūtie punkti: <strong>${Number(p.score || 0)} pt</strong></div>
               <div class="footer">${escapeHtml(dCfg.footerText || 'Event Studio')} • Spēles PIN: ${escapeHtml(pin || '')} • ${new Date().toLocaleDateString('lv-LV')}</div>
             </div>
           `).join('')}
-          <script>window.print();</script>
+
+          ${biggestClimber ? `
+            <div class="diploma">
+              ${logoHtml}
+              <h1>${escapeHtml(dCfg.customTitle || '🏆 DIPLOMS 🏆')}</h1>
+              <h2 style="color: #ff9800;">🚀 SPECIĀLBALVA: LIELĀKAIS KĀPUMS</h2>
+              <div class="custom-sub">Par neatlaidību un lielāko izrāvienu turnīrā</div>
+              <div class="winner">${escapeHtml(biggestClimber.name)} ${isTeam ? `(${biggestClimber.memberCount || ''} dalībnieki)` : (biggestClimber.teamName ? `[${escapeHtml(biggestClimber.teamName)}]` : '')}</div>
+              <div class="score" style="color: #00ff66;">Turnīra progress: <strong>+${maxDelta} vietas uz augšu!</strong></div>
+              <div style="font-size: 1.3rem; margin-top: 6px;">Kopējais punktu skaits: <strong>${Number(biggestClimber.score || 0)} pt</strong></div>
+              <div class="footer">${escapeHtml(dCfg.footerText || 'Event Studio')} • Spēles PIN: ${escapeHtml(pin || '')} • ${new Date().toLocaleDateString('lv-LV')}</div>
+            </div>
+          ` : ''}
+
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+              }, 350);
+            };
+          </script>
         </body>
       </html>
     `);
@@ -387,6 +443,9 @@ export default function Host() {
       }
       setScenes(data.state?.scenes || []);
       setCurrentScene(data.state?.currentScene);
+      if (data.state?.subState) setSubState(String(data.state.subState).toUpperCase());
+      else if (data.state?.currentScene?.subState) setSubState(String(data.state.currentScene.subState).toUpperCase());
+      if (data.state?.frozenRemainingMs !== undefined) setFrozenRemainingMs(data.state.frozenRemainingMs);
       if (data.state?.isBlackout !== undefined) setIsBlackout(data.state.isBlackout);
       if (data.state?.branding) setBranding(data.state.branding);
       localStorage.setItem('active_pin', data.pin);
@@ -395,11 +454,21 @@ export default function Host() {
     const handleStateUpdate = (s: any) => {
       setCurrentScene(s);
       setBuzzerRaceWinner(null);
+      if (s?.subState) setSubState(String(s.subState).toUpperCase());
+      if (s?.frozenRemainingMs !== undefined) setFrozenRemainingMs(s.frozenRemainingMs);
       if (s?.isBlackout !== undefined) setIsBlackout(s.isBlackout);
       if (s?.type === 'LEADERBOARD') {
         setLeaderboardPage(0);
         setPodiumStage(0);
       }
+    };
+
+    const handleSessionPaused = () => {
+      setSubState('PAUSED');
+    };
+
+    const handleSessionResumed = () => {
+      setSubState('ACTIVE');
     };
 
     const handleBlackoutToggled = (active: boolean) => {
@@ -432,6 +501,8 @@ export default function Host() {
 
     socket.on('session-info', handleSessionInfo);
     socket.on('state-update', handleStateUpdate);
+    socket.on('session-paused', handleSessionPaused);
+    socket.on('session-resumed', handleSessionResumed);
     socket.on('blackout-toggled', handleBlackoutToggled);
     socket.on('presence-update', handlePresence);
     socket.on('leaderboard-update', handleLeaderboard);
@@ -449,7 +520,8 @@ export default function Host() {
         if (now - lastSpacePress.current < 250) return;
         lastSpacePress.current = now;
 
-        if (currentScene?.subState === 'ACTIVE') return;
+        const cur = (subState || currentScene?.subState || '').toUpperCase();
+        if (cur === 'ACTIVE') return;
         socket.emit('host:advance', { pin, hostToken });
       } else if (e.key === 'Backspace' && pin && hostToken) {
         e.preventDefault();
@@ -477,6 +549,8 @@ export default function Host() {
     return () => {
       socket.off('session-info', handleSessionInfo);
       socket.off('state-update', handleStateUpdate);
+      socket.off('session-paused', handleSessionPaused);
+      socket.off('session-resumed', handleSessionResumed);
       socket.off('blackout-toggled', handleBlackoutToggled);
       socket.off('presence-update', handlePresence);
       socket.off('leaderboard-update', handleLeaderboard);
@@ -486,7 +560,7 @@ export default function Host() {
       socket.off('host-remote-connected', handleRemoteConnected);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [pin, hostToken, currentScene?.subState]);
+  }, [pin, hostToken, currentScene?.subState, subState]);
 
   const isTeamMode = !!branding?.teamModeEnabled;
   const isFinalLb = currentScene?.type === 'LEADERBOARD' && currentScene?.config?.lbType === 'FINAL';
@@ -511,8 +585,9 @@ export default function Host() {
   const currentIdx = scenes.findIndex((s) => s.id === currentScene?.id);
   const nextScene = currentIdx !== -1 && currentIdx < scenes.length - 1 ? scenes[currentIdx + 1] : null;
 
-  const isCurrentActive = currentScene?.subState === 'ACTIVE';
-  const isCurrentPaused = currentScene?.subState === 'PAUSED';
+  const curSub = (subState || currentScene?.subState || 'IDLE').toUpperCase();
+  const isCurrentActive = curSub === 'ACTIVE';
+  const isCurrentPaused = curSub === 'PAUSED';
 
   const renderHostDeltaBadge = (delta?: number) => {
     if (delta === undefined || delta === null || delta === 0) {
@@ -666,9 +741,28 @@ export default function Host() {
             <span style={{ color: '#aaa', fontSize: '1.1rem' }}>Aktīvā sesija: </span>
             <span style={{ color: '#28a745', fontSize: '1.8rem', fontWeight: 'bold' }}>PIN: {pin}</span>
           </div>
-          <div style={{ fontSize: '0.85rem', color: '#00e5ff', background: 'rgba(0,229,255,0.15)', padding: '4px 10px', borderRadius: '6px', border: '1px solid #00e5ff' }}>
-            🔗 {activeBaseUrl}
-          </div>
+
+          {/* 🌟 ĀTRĀ TĪKLA PĀRSLĒGŠANAS POGA SPĒLES LAIKĀ (FAILOVER) */}
+          <button
+            onClick={handleToggleConnectionModeLive}
+            style={{
+              fontSize: '0.85rem',
+              color: connectionMode === 'TUNNEL' ? '#00e5ff' : '#00ff66',
+              background: connectionMode === 'TUNNEL' ? 'rgba(0,229,255,0.15)' : 'rgba(0,255,102,0.15)',
+              padding: '6px 12px',
+              borderRadius: '8px',
+              border: connectionMode === 'TUNNEL' ? '1.5px solid #00e5ff' : '1.5px solid #00ff66',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+            title="Klikšķini, lai zibenīgi pārslēgtu starp Tuneli un Lokālo Wi-Fi"
+          >
+            {connectionMode === 'TUNNEL' ? '🌐 Tunelis (Cloudflare)' : '📶 Wi-Fi (Lokālais LAN)'}
+            <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>[Pārslēgt]</span>
+          </button>
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -700,13 +794,35 @@ export default function Host() {
             ⬅️ Atpakaļ [Backspace]
           </button>
 
-          {(isCurrentActive || isCurrentPaused) && (
+          {/* 🌟 PAUZES POGA — VIENMĒR REDZAMA UN UZTICAMA */}
+          {(isCurrentActive || isCurrentPaused) ? (
             <button
               onClick={handlePauseResume}
-              style={{ ...btnPurple, background: isCurrentPaused ? '#28a745' : '#ff9800', color: '#000', fontWeight: 'bold' }}
-              title="Pauze / Turpināt [P]"
+              style={{
+                ...btnPurple,
+                background: isCurrentPaused ? '#28a745' : '#ff9800',
+                color: isCurrentPaused ? '#fff' : '#000',
+                fontWeight: 'bold',
+                border: isCurrentPaused ? '2px solid #00ff00' : 'none',
+                boxShadow: isCurrentPaused ? '0 0 15px rgba(40, 167, 69, 0.8)' : 'none'
+              }}
+              title="Pauze / Turpināt laiku [P]"
             >
               {isCurrentPaused ? '▶️ Turpināt laiku [P]' : '⏸️ Iepauzēt [P]'}
+            </button>
+          ) : (
+            <button
+              disabled
+              style={{
+                ...btnPurple,
+                background: '#222',
+                color: '#555',
+                border: '1px solid #333',
+                cursor: 'not-allowed'
+              }}
+              title="Pauze ir pieejama, kad rit jautājuma laiks"
+            >
+              ⏸️ Pauze [P]
             </button>
           )}
 
@@ -724,7 +840,7 @@ export default function Host() {
             {isBlackout ? '🔴 Aizsegts [B]' : '⬛ Aizsegs [B]'}
           </button>
 
-          {(isCurrentActive || isCurrentPaused || currentScene?.subState === 'STATS') && (
+          {(isCurrentActive || isCurrentPaused || curSub === 'STATS') && (
             <button onClick={handleRestartQuestion} style={btnGray} title="Sākt šo jautājumu no jauna bez punktiem">
               🔄 No jauna
             </button>
@@ -748,7 +864,7 @@ export default function Host() {
             📥 CSV
           </button>
           
-          <button onClick={handlePrintDiplomas} style={{ ...btnGray, background: '#d63384' }} title="Ģenerēt diplomus Top 3">
+          <button onClick={handlePrintDiplomas} style={{ ...btnGray, background: '#d63384' }} title="Ģenerēt diplomus Top 3 + Lielākais kāpums">
             🏆 Diplomi
           </button>
 
@@ -839,19 +955,28 @@ export default function Host() {
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '15px', marginBottom: '15px' }}>
         <div style={instructionBox}>
           <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>
-            {isCurrentActive
+            {isCurrentPaused
+              ? '⏸️ SPĒLE IEPAUZĒTA (Spied [P] vai zaļo pogu, lai atsāktu)'
+              : isCurrentActive
               ? '⏳ LAIKA ATSKAITE RIT (Space nobloķēts. Spied [P], lai pauzētu)'
-              : currentScene?.subState === 'STATS'
-              ? '⌨️ SPIED [ SPACE ], LAI PARĀDĪTU REZULTĀTU KOPSAVILKUMU'
-              : currentScene?.subState === 'SUMMARY'
+              : curSub === 'STATS'
+              ? (frozenRemainingMs && frozenRemainingMs > 0
+                  ? `⏹️ LAIKS IESALDĒTS (${Math.ceil(frozenRemainingMs / 1000)}s palika). Spied [SPACE], lai rādītu kopsavilkumu`
+                  : '⌨️ SPIED [ SPACE ], LAI PARĀDĪTU REZULTĀTU KOPSAVILKUMU')
+              : curSub === 'SUMMARY'
               ? '⌨️ SPIED [ SPACE ], LAI ATKLĀTU PAREIZO ATBILDI'
               : '⌨️ SPIED [ SPACE ] TAUSTIŅU, LAI VADĪTU ŠOVU'}
           </div>
           <div style={{ marginTop: '5px', opacity: 0.9, fontSize: '0.95rem' }}>
             Slaids: <strong>{currentScene?.title || 'Nav sākts'}</strong> | Fāze:{' '}
             <span style={{ color: isCurrentPaused ? '#ff5722' : '#ffc107', fontWeight: 'bold' }}>
-              {currentScene?.subState || 'IDLE'}
+              {curSub}
             </span>
+            {frozenRemainingMs !== null && frozenRemainingMs > 0 && ['STATS', 'SUMMARY', 'REVEAL'].includes(curSub) && (
+              <span style={{ color: '#00e5ff', marginLeft: '10px', fontWeight: 'bold' }}>
+                ⏱️ Iesaldētais laiks: {Math.ceil(frozenRemainingMs / 1000)}s
+              </span>
+            )}
           </div>
         </div>
 
@@ -985,7 +1110,9 @@ export default function Host() {
                 onClick={() => window.open(joinUrl, '_blank')}
               />
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.8rem', color: '#00ff00', fontWeight: 'bold' }}>Spēlētāju QR</div>
+                <div style={{ fontSize: '0.8rem', color: connectionMode === 'TUNNEL' ? '#00e5ff' : '#00ff66', fontWeight: 'bold' }}>
+                  {connectionMode === 'TUNNEL' ? '🌐 Tunelis QR' : '📶 Wi-Fi QR'}
+                </div>
                 <div style={{ fontSize: '0.75rem', color: '#888', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {activeBaseUrl}
                 </div>
@@ -1017,7 +1144,7 @@ export default function Host() {
                       </span>
                     </div>
                   </div>
-                  {isActive && <span style={activeBadge}>{currentScene?.subState || 'IDLE'}</span>}
+                  {isActive && <span style={activeBadge}>{curSub}</span>}
                 </div>
               );
             })}

@@ -72,6 +72,8 @@ export default function HostRemote() {
     currentScene: any;
     subState: string;
     isBlackout?: boolean;
+    isPaused?: boolean;
+    frozenRemainingMs?: number | null;
     currentSceneIdx: number;
     totalScenes: number;
     nextSceneTitle: string;
@@ -171,6 +173,8 @@ export default function HostRemote() {
     if (curSub && curSub !== prevSubStateRef.current) {
       if (curSub === 'ACTIVE') {
         triggerHaptic('tap');
+      } else if (curSub === 'PAUSED') {
+        triggerHaptic('warn');
       } else if (curSub === 'STATS') {
         triggerHaptic('tap');
       } else if (curSub === 'REVEAL') {
@@ -253,8 +257,15 @@ export default function HostRemote() {
     }
   };
 
+  // 🌟 KRITISKS LABOJUMS: Ja spēle ir nopauzēta, lielā poga ATSĀK laiku, nevis pārlec uz nākamo slaidu!
   const handleAdvance = () => {
     if (gameState?.subState === 'ACTIVE') return;
+
+    if (gameState?.subState === 'PAUSED') {
+      triggerHaptic('tap');
+      socket?.emit('host:resume-session', { pin, hostToken });
+      return;
+    }
 
     const now = Date.now();
     if (now - lastAdvanceTap.current < 500) return;
@@ -274,7 +285,7 @@ export default function HostRemote() {
     triggerHaptic('tap');
     if (gameState?.subState === 'PAUSED') {
       socket?.emit('host:resume-session', { pin, hostToken });
-    } else {
+    } else if (gameState?.subState === 'ACTIVE') {
       socket?.emit('host:pause-session', { pin, hostToken });
     }
   };
@@ -527,6 +538,15 @@ export default function HostRemote() {
             </div>
           )}
 
+          {/* Iesaldētā laika paziņojums */}
+          {gameState?.frozenRemainingMs !== null && gameState?.frozenRemainingMs !== undefined && gameState.frozenRemainingMs > 0 && ['STATS', 'SUMMARY', 'REVEAL'].includes(subState) && (
+            <div style={{ ...sectionBox, border: '1.5px solid #00e5ff', background: 'rgba(0, 229, 255, 0.12)', textAlign: 'center' }}>
+              <span style={{ fontSize: '0.85rem', color: '#00e5ff', fontWeight: 'bold' }}>
+                ⏱️ Atbildes iesniegtas ātrāk! Palika: <strong>{Math.ceil(gameState.frozenRemainingMs / 1000)}s</strong>
+              </span>
+            </div>
+          )}
+
           <div style={{ fontSize: '0.75rem', color: '#888', textAlign: 'center' }}>
             🔜 Nākamais: <strong style={{ color: '#aaa' }}>{gameState?.nextSceneTitle}</strong>
           </div>
@@ -566,7 +586,14 @@ export default function HostRemote() {
       {activeTab === 'REMOTE' && (
         <div style={{ padding: '8px 12px', background: '#161616', borderTop: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
-            <button onClick={handleTogglePause} style={{ ...btnTile, color: subState === 'PAUSED' ? '#00ff00' : '#ff9800' }}>
+            <button 
+              onClick={handleTogglePause} 
+              style={{ 
+                ...btnTile, 
+                color: subState === 'PAUSED' ? '#00ff00' : '#ff9800',
+                border: subState === 'PAUSED' ? '1.5px solid #00ff00' : '1px solid #333'
+              }}
+            >
               {subState === 'PAUSED' ? '▶️ Turpināt' : '⏸️ Pauze'}
             </button>
             <button onClick={handleToggleChart} style={{ ...btnTile, color: '#00e5ff' }}>
@@ -599,7 +626,7 @@ export default function HostRemote() {
         </div>
       )}
 
-      {/* 🚀 ADVANCE POGA */}
+      {/* 🚀 ADVANCE POGA (Ar drošu atsākšanu pie pauzes) */}
       <div style={{ padding: '10px 12px 14px 12px', background: '#181818', borderTop: '1px solid #333', flexShrink: 0 }}>
         <button
           onClick={handleAdvance}
@@ -610,9 +637,10 @@ export default function HostRemote() {
             background: isTimeActive
               ? '#444'
               : subState === 'PAUSED'
-              ? '#ff9800'
-              : 'linear-gradient(135deg, #28a745, #20c997)',
-            cursor: isTimeActive ? 'not-allowed' : 'pointer'
+              ? 'linear-gradient(135deg, #28a745, #20c997)'
+              : 'linear-gradient(135deg, #007bff, #0056b3)',
+            cursor: isTimeActive ? 'not-allowed' : 'pointer',
+            boxShadow: subState === 'PAUSED' ? '0 0 20px rgba(40,167,69,0.7)' : '0 4px 15px rgba(0,0,0,0.4)'
           }}
         >
           {isTimeActive ? (
